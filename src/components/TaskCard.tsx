@@ -18,7 +18,7 @@ export function TaskCard({ assignment, group, onComplete, compact = false }: { a
   const elapsed = active ? timer.accumulatedSeconds + (timer.running && timer.startedAt ? Math.floor((Date.now() - timer.startedAt) / 1000) : 0) : 0
 
   const toggle = () => {
-    if (assignment.status === 'done') updateAssignment(assignment.id, { status: 'todo', progress: 0, completedAt: undefined })
+    if (assignment.status === 'done') updateAssignment(assignment.id, { status: 'todo', progress: 0, completedAt: undefined, remainingMinutes: undefined })
     else onComplete(assignment)
   }
 
@@ -38,11 +38,12 @@ export function TaskCard({ assignment, group, onComplete, compact = false }: { a
         {assignment.status === 'done' ? <Check size={18} /> : null}
       </button>
       <div className="task-main">
-        <div className="task-title-row"><span className={`subject-pill subject-${group.subject}`}>{group.subject}</span><strong>{assignment.title}</strong></div>
+        <div className="task-title-row"><span className={`subject-pill subject-${group.subject}`}>{group.subject}</span><strong>{assignment.title}</strong>{assignment.intentStrength==='manual'&&!assignment.locked&&<span className="task-intent-badge">手动优先</span>}{assignment.locked&&<span className="task-lock-badge">已锁定</span>}</div>
         <div className="task-meta">
-          <span>预计 {minutesText(assignment.estimatedMinutes)}</span>
+          <span>{group.flexibleDuration && assignment.actualMinutes===0 ? `参考 ${minutesText(assignment.estimatedMinutes)}` : `预计 ${minutesText(assignment.estimatedMinutes)}`}</span>
           {assignment.actualMinutes > 0 && <span>实际 {minutesText(assignment.actualMinutes)}</span>}
           {assignment.status === 'partial' && <span>已完成 {assignment.progress}%</span>}
+          {assignment.status === 'partial' && assignment.remainingMinutes !== undefined && <span>剩余参考 {minutesText(assignment.remainingMinutes)}</span>}
           {assignment.actualMinutes > 0 && assignment.status === 'done' && <span className={assignment.actualMinutes > assignment.estimatedMinutes ? 'diff-over' : 'diff-under'}>{assignment.actualMinutes - assignment.estimatedMinutes > 0 ? '+' : ''}{assignment.actualMinutes - assignment.estimatedMinutes} 分钟</span>}
         </div>
         {active && <div className="timer-strip"><Clock3 size={15}/><span>{String(Math.floor(elapsed / 3600)).padStart(2,'0')}:{String(Math.floor(elapsed % 3600 / 60)).padStart(2,'0')}:{String(elapsed % 60).padStart(2,'0')}</span></div>}

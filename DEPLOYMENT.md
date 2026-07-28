@@ -1,53 +1,52 @@
-# 部署说明
+# 部署说明（GitHub + Vercel）
 
-## 最快方式：直接部署 `standalone/`
+## 1. 推送到 GitHub
 
-把 `standalone` 内全部文件上传到域名根目录。不要只上传 `index.html`，否则样式、脚本、PWA 图标和离线缓存无法工作。
-
-Nginx 示例：
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name plan.example.com;
-
-    root /var/www/study-planner/standalone;
-    index index.html;
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    location = /sw.js {
-        add_header Cache-Control "no-cache";
-    }
-}
-```
-
-Cloudflare Pages、Vercel 或 Netlify 可以直接把 `standalone` 设为发布目录，无需构建命令。
-
-## React 版
-
-构建命令：
-
-```bash
-npm install
-npm run build
-```
-
-发布目录：
+确保仓库根目录直接包含：
 
 ```text
-dist
+src/
+public/
+package.json
+vite.config.ts
+supabase-schema.sql
 ```
+
+## 2. Vercel 导入
+
+- Framework Preset：Vite
+- Install Command：`npm install`
+- Build Command：`npm run build`
+- Output Directory：`dist`
+- Root Directory：仓库根目录
 
 环境变量：
 
 ```text
-VITE_SUPABASE_URL
-VITE_SUPABASE_ANON_KEY
+VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+VITE_SUPABASE_ANON_KEY=sb_publishable_xxx
 ```
 
-## Supabase
+修改环境变量后需要重新部署。
 
-运行 `supabase-schema.sql` 后再开启同步。表采用 `user_id` 主键，每个登录用户只有一个 JSON 快照，并通过 RLS 限制为仅能读写自己的数据。
+## 3. Supabase
+
+在 SQL Editor 执行 `supabase-schema.sql`。该表按 `user_id` 保存一个 JSON 快照，并启用 RLS，仅允许用户访问自己的数据。
+
+Authentication → URL Configuration：
+
+```text
+Site URL: https://你的正式域名
+Redirect URLs:
+https://你的正式域名/**
+https://你的项目.vercel.app/**
+http://localhost:5173/**
+```
+
+## 4. 自定义域名
+
+在 Vercel 项目 Settings → Domains 中添加域名，并按 Vercel 给出的 DNS 记录配置。
+
+## 5. 隐私注意
+
+不要把个人任务种子、导出的 JSON 备份、`.env` 或任何 secret/service_role key 提交到公开 GitHub 仓库。个人计划应只保存在 Supabase 账号快照或私有备份中。

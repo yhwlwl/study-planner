@@ -2,6 +2,11 @@ export type Priority = 0 | 1 | 2 | 3 | 5
 export type DayType = 'regular' | 'study' | 'travel' | 'custom'
 export type TaskStatus = 'todo' | 'partial' | 'done'
 export type Subject = '语文' | '数学' | '英语' | '物理' | '化学' | '生物' | '其他'
+export type PlanningMode = 'sprint' | 'balanced' | 'relaxed'
+export type ScheduleSource = 'system' | 'manual' | 'carryover' | 'replan' | 'import' | 'recurring'
+export type IntentStrength = 'normal' | 'manual' | 'locked'
+export type ReplanMode = 'repair' | 'full'
+export type ReplanStrategy = 'preserve' | 'balanced' | 'goal'
 
 export interface AppSettings {
   planName: string
@@ -17,6 +22,16 @@ export interface AppSettings {
   showWarnings: boolean
   optionalReview: boolean
   sidebarCollapsed: boolean
+  planningMode: PlanningMode
+  freezeDays: number
+  regularOverbookMinutes: number
+  studyOverbookMinutes: number
+  regularMaxTasks: number
+  studyMaxTasks: number
+  subjectShareLimit: number
+  highLoadThreshold: number
+  highLoadStreak: number
+  keepOfflineOnLogout: boolean
 }
 
 export interface DayConfig {
@@ -24,6 +39,7 @@ export interface DayConfig {
   type: DayType
   customMinutes?: number
   note?: string
+  userSet?: boolean
 }
 
 export interface TaskGroup {
@@ -42,6 +58,8 @@ export interface TaskGroup {
   countInStats: boolean
   hidden?: boolean
   flexibleDuration?: boolean
+  allowSplit?: boolean
+  memoryTask?: boolean
   notes?: string
   sourceLabel?: string
 }
@@ -66,6 +84,12 @@ export interface Assignment {
   completedAt?: string
   notes?: string
   timeEntries: TimeEntry[]
+  scheduleSource: ScheduleSource
+  intentStrength: IntentStrength
+  previousDate?: string
+  lastManualMoveAt?: string
+  remainingMinutes?: number
+  manuallyEstimated?: boolean
 }
 
 export interface TimerState {
@@ -73,6 +97,15 @@ export interface TimerState {
   startedAt?: number
   accumulatedSeconds: number
   running: boolean
+}
+
+export interface ReplanHistoryEntry {
+  id: string
+  createdAt: string
+  label: string
+  mode: ReplanMode
+  moveCount: number
+  snapshot: string
 }
 
 export interface AppState {
@@ -84,17 +117,82 @@ export interface AppState {
   assignments: Assignment[]
   timer: TimerState
   lastCloudSyncAt?: string
-  conflictBackups?: AppState[]
+  conflictBackups?: string[]
+  replanHistory: ReplanHistoryEntry[]
+  templateKind?: 'summer' | 'demo' | 'blank'
+}
+
+export interface ReplanRequest {
+  mode: ReplanMode
+  fromDate: string
+  strategy?: ReplanStrategy
+  freezeDays?: number
+}
+
+export interface ReplanAlternative {
+  date: string
+  label: string
+  impact: string
 }
 
 export interface ReplanMove {
   assignmentId: string
+  title: string
+  subject: Subject
   from?: string
   to?: string
+  reason: string
+  impact: string
+  alternatives: ReplanAlternative[]
+  wasManual: boolean
+  hardRequired: boolean
+}
+
+export interface DayTypeSuggestion {
+  date: string
+  from: DayType
+  to: DayType
+  reason: string
+  capacityGain: number
+}
+
+export interface LoadChange {
+  date: string
+  beforeMinutes: number
+  afterMinutes: number
+  capacity: number
+}
+
+export interface ReplanSummary {
+  moved: number
+  preservedManual: number
+  locked: number
+  unresolved: number
+  coreBefore?: string
+  coreAfter?: string
+  chemistryBefore?: string
+  chemistryAfter?: string
+  allBefore?: string
+  allAfter?: string
 }
 
 export interface ReplanResult {
+  id: string
+  strategy: ReplanStrategy
+  title: string
+  description: string
+  request: ReplanRequest
   nextState: AppState
   moves: ReplanMove[]
   warnings: string[]
+  consequences: string[]
+  dayTypeSuggestions: DayTypeSuggestion[]
+  loadChanges: LoadChange[]
+  summary: ReplanSummary
+}
+
+export interface ReplanBundle {
+  request: ReplanRequest
+  issues: string[]
+  scenarios: ReplanResult[]
 }

@@ -1,42 +1,23 @@
-# 学习计划 Web App
+# Study Planner
 
-面向本次 2026.7.28—2026.8.25 暑假作业的个人学习计划系统，同时可以继续用于开学后的长期计划。
+一个可部署到 Vercel 的 React 学习计划管理应用，支持离线使用、Supabase 登录与云同步、可解释自动重排和游客演示数据。
 
-## v0.1.1 更新
+## 主要功能
 
-- 登录 Supabase 后，修改任务、完成状态、实际时间和排期会自动保存到云端。
-- 新设备或浏览器第一次登录同一账号时，会先自动恢复云端快照；云端没有数据时则自动上传本地计划。
-- 后续启动会比较本地与云端更新时间，优先保留较新的数据。
-- 修复月历中“+N 项”和“计划时间 / 容量”文字重叠的问题。
-- 侧边栏会显示“正在恢复、正在保存、已保存或同步失败”。
+- 极简今日任务页：完成、部分完成、计时、暂停、实际用时。
+- 月历：拖拽改期、日期类型、负载提示、批量移动。
+- 自动重排：局部修复、全面重排、三种候选方案、逐项微调。
+- 尊重用户意图：手动移动优先保留，近期不拉回原日期，可锁定。
+- 现实约束：每日容量、任务数量、同科目占比、记忆任务分散、缓冲日提醒。
+- 统计：计划与实际、各科时间、完成进度与完成日期预测。
+- 数据：IndexedDB 离线保存、JSON/CSV 导出、最近 10 次重排历史。
+- 隐私：游客、不同账号数据空间完全隔离；个人计划不内置在公开源码中。
 
-## 两个可用版本
+## 技术栈
 
-### 1. `standalone/`：可直接部署版
+React 18、TypeScript、Vite、PWA、Supabase、IndexedDB、Recharts。
 
-无需构建。将 `standalone` 文件夹内的文件完整上传到网站根目录即可。
-
-已实现：
-
-- 今日任务首页
-- 完成勾选、部分完成、实际时间录入
-- 开始、暂停、继续及记入计时器
-- 月历查看、拖拽改期、日期类型与容量设置
-- 批量移动、锁定任务、一键动态重排和重排预览
-- 任务新增、编辑、复制、删除、筛选
-- 计划与实际时间、科目时间、优先级进度等统计
-- 预计完成日期和风险提醒
-- IndexedDB 本地离线保存
-- JSON/CSV 导入导出、打印/PDF、撤销与重置
-- PWA 离线缓存
-- Supabase 邮箱登录及跨设备同步
-- DeepSeek 服务端接口预留说明
-
-> PWA 与 Service Worker 在正式域名上需要 HTTPS；localhost 可例外。
-
-### 2. 根目录：React + TypeScript + Vite 源码版
-
-这是后续长期维护的目标工程，使用 React、TypeScript、Vite、PWA、IndexedDB、Recharts 和 Supabase。
+## 本地运行
 
 ```bash
 npm install
@@ -44,57 +25,34 @@ cp .env.example .env
 npm run dev
 ```
 
-生产构建：
-
-```bash
-npm run build
-```
-
-将 `dist/` 部署到 Vercel、Cloudflare Pages、Netlify、Nginx 或其他静态托管平台。
-
-## Supabase 配置
-
-1. 在 Supabase 项目 SQL Editor 中运行根目录的 `supabase-schema.sql`。
-2. 在 Authentication 中启用 Email 登录。
-3. React 版：在 `.env` 中填写：
+`.env`：
 
 ```env
-VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-VITE_SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_KEY
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=sb_publishable_xxx
 ```
 
-4. 直接部署版：在网页“设置 → Supabase 云同步”中填写相同信息。
+不要使用 `service_role` 或 `sb_secret_...`。
 
-`anon key` 本来就是前端可公开使用的客户端密钥，安全边界由 RLS 策略保证；不要在前端放 `service_role key`。
+## Vercel 部署
 
-## 初始计划规则
+1. 将项目推送到 GitHub。
+2. 在 Vercel 导入仓库，框架选择 Vite。
+3. Build Command：`npm run build`。
+4. Output Directory：`dist`。
+5. 添加上述两个环境变量。
+6. 在 Supabase SQL Editor 执行 `supabase-schema.sql`。
+7. 在 Supabase Authentication → URL Configuration 中设置正式域名和 Vercel 域名。
 
-- 优先级 5 越早完成越好。
-- 除化学预习、每日单词外，核心必做任务目标为 8 月 8 日。
-- 化学预习共 15 个，每个 60 分钟，每天最多 1 个，目标不晚于 8 月 20 日。
-- 系统会为“每日数量受限”的任务预留必要的前置日期。
-- 单词每日出现，默认不计入每日计划总时间，可在设置中开启统计。
-- 旅游日默认容量为 20 分钟，普通任务不会自动排入旅游日。
-- 日期类型变化、任务未完成或实际时长偏差后，可以先预览再应用重排。
+## 数据安全说明
 
-初始自动排期会根据任务量把前期若干日期设置为学习日；所有日期类型都可手动修改。
+- 未登录时只加载虚构演示计划，不读取任何用户空间。
+- 登录后先从该账号云端恢复，再启用自动保存。
+- 退出登录时立即显示隐私遮罩并切换回游客空间。
+- 默认清理当前设备上的账号离线缓存；可在设置中选择保留。
+- Supabase 表启用了 RLS，每个用户只能访问自己的快照。
+- 个人学习任务应只存在于个人 Supabase 快照或本地备份中，不应写入公开 GitHub 源码。
 
-## 照片任务说明
+## 验证
 
-照片中能够确认的任务已经预置。以下名称因字迹不清，在系统中标有“待确认”，可直接在“全部任务”页面修改：
-
-- 化学两个 75 分钟任务
-- 英语 30 个、每个 20 分钟的任务名称
-- 部分优先级 1、2 的具体名称
-
-优先级 0 默认隐藏，可在筛选中显示。
-
-## DeepSeek
-
-第一版不把 AI 作为排期核心依赖。若后续接入，应采用：
-
-```text
-浏览器 → 自己的服务端/Serverless Function → DeepSeek API
-```
-
-不要把 DeepSeek API Key 写入前端文件。
+当前代码通过严格 TypeScript 静态检查；排期核心另有运行时回归测试，覆盖手动延期不回退、每日上限、记忆任务分散和游客数据隔离。

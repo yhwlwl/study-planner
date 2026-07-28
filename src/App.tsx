@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import {
   BarChart3, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Cloud, CloudOff,
-  Download, FileDown, Filter, LayoutDashboard, ListTodo, Menu, Plus, RefreshCw,
+  Download, FileDown, Filter, LayoutDashboard, ListTodo, Lock, Menu, Plus, RefreshCw,
   RotateCcw, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X
 } from 'lucide-react'
 import {
@@ -11,10 +11,12 @@ import {
 } from 'recharts'
 import { addMonths, endOfMonth, format, getDay, isWithinInterval, parseISO, startOfMonth } from 'date-fns'
 import { useApp } from './AppContext'
-import type { AppState, Assignment, DayType, Priority, ReplanResult, Subject, TaskGroup } from './types'
+import type { AppState, Assignment, DayType, Priority, ReplanBundle, ReplanRequest, Subject, TaskGroup } from './types'
 import { clampDate, dateRange, dayTypeLabel, fmtDate, fmtWeekday, getCapacity, getDayConfig, minutesText, todayISO } from './lib/date'
-import { predictCompletion } from './lib/planner'
+import { effectiveMinutes, getDurationSuggestion, predictCompletion, suggestMoveDates } from './lib/planner'
 import { uid } from './lib/id'
+import { buildBlankState, buildGuestDemoState, normalizeState } from './lib/seed'
+import { loadLocalState } from './lib/db'
 import { Modal } from './components/Modal'
 import { TaskCard } from './components/TaskCard'
 import { ReplanDialog } from './components/ReplanDialog'
@@ -34,79 +36,135 @@ const navItems: { id: Page; label: string; icon: typeof LayoutDashboard }[] = [
 ]
 
 export default function App() {
-  const { state, ready, loadedFromStorage, updateSettings, previewReplan, applyReplan, replaceState } = useApp()
+  const {
+    state, namespace, ready, updateSettings, previewReplan, applyReplan,
+    replaceState, loadDataSpace, setDataSpace, clearDataSpace
+  } = useApp()
   const [page, setPage] = useState<Page>('today')
   const [mobileNav, setMobileNav] = useState(false)
-  const [replan, setReplan] = useState<ReplanResult>()
+  const [replan, setReplan] = useState<ReplanBundle>()
   const [replanOpen, setReplanOpen] = useState(false)
+  const [replanRequest, setReplanRequest] = useState<ReplanRequest>({ mode: 'repair', fromDate: todayISO(), freezeDays: 2 })
+  const [replanBaseState, setReplanBaseState] = useState<AppState>()
   const [sessionUser, setSessionUser] = useState<{ id: string; email?: string }>()
   const [cloudReady, setCloudReady] = useState(false)
   const [syncStatus, setSyncStatus] = useState<CloudSyncStatus>('local')
+  const [firstLoginOpen, setFirstLoginOpen] = useState(false)
+  const [cloudMessage, setCloudMessage] = useState('')
+  const [dataSwitching, setDataSwitching] = useState(false)
+  const previousUserId = useRef<string>()
   const stateRef = useRef(state)
   stateRef.current = state
 
   useEffect(() => {
     if (!supabase) return
-    const applySession = (session: Session | null) => {
+    const applySession = async (session: Session | null) => {
       const user = session ? { id: session.user.id, email: session.user.email } : undefined
-      setSessionUser(user)
       if (!user) {
+        setDataSwitching(true)
+        const oldUser = previousUserId.current
+        previousUserId.current = undefined
+        setSessionUser(undefined)
         setCloudReady(false)
         setSyncStatus('local')
+        setFirstLoginOpen(false)
+        const keepOffline = stateRef.current.settings.keepOfflineOnLogout
+        await loadDataSpace('guest', buildGuestDemoState())
+        if (oldUser && !keepOffline) await clearDataSpace(`user:${oldUser}`)
+        setDataSwitching(false)
+        return
       }
+      previousUserId.current = user.id
+      setDataSwitching(true)
+      setSessionUser(user)
     }
-    getSession().then(applySession)
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => applySession(session))
+    getSession().then(session => void applySession(session))
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => { void applySession(session) })
     return () => data.subscription.unsubscribe()
-  }, [])
+  }, [clearDataSpace, loadDataSpace])
 
   useEffect(() => {
     if (!ready || !sessionUser?.id) return
     let cancelled = false
     setCloudReady(false)
     setSyncStatus('restoring')
-
     const bootstrapCloud = async () => {
       try {
-        const local = structuredClone(stateRef.current)
+        const userNamespace = `user:${sessionUser.id}`
+        const localUser = await loadLocalState(userNamespace)
         const cloud = await downloadSnapshot()
         if (cancelled) return
-        const deviceUserKey = 'study-planner-cloud-user'
-        const firstLoginOnDevice = window.localStorage.getItem(deviceUserKey) !== sessionUser.id
-
         if (cloud) {
-          const cloudUpdatedAt = Date.parse(cloud.updatedAt) || 0
-          const localUpdatedAt = Date.parse(local.updatedAt) || 0
-          const restoreCloud = firstLoginOnDevice || !loadedFromStorage || cloudUpdatedAt >= localUpdatedAt
-          if (restoreCloud) {
-            cloud.conflictBackups = [...(cloud.conflictBackups ?? []).slice(-2), local]
-            replaceState(cloud, false)
-          } else {
-            await uploadSnapshot(local)
-          }
-        } else {
-          await uploadSnapshot(local)
-        }
+          const normalizedCloud = normalizeState(cloud)
+          const normalizedLocal = localUser ? normalizeState(localUser) : undefined
+          const localNewer = normalizedLocal && Date.parse(normalizedLocal.updatedAt) > Date.parse(normalizedCloud.updatedAt)
+          if (localNewer) {
+            const useLocal = window.confirm(`检测到此设备的个人计划比云端更新。
 
-        window.localStorage.setItem(deviceUserKey, sessionUser.id)
-        if (!cancelled) {
-          setCloudReady(true)
-          setSyncStatus('saved')
+确定：使用本机版本并上传云端。
+取消：恢复云端版本，并把本机版本保存为冲突备份。`)
+            if (useLocal) {
+              await setDataSpace(userNamespace, normalizedLocal, false)
+              await uploadSnapshot(normalizedLocal)
+              setCloudMessage('已使用较新的本机版本并同步到云端。')
+            } else {
+              normalizedCloud.conflictBackups = [...(normalizedCloud.conflictBackups ?? []).slice(-4), JSON.stringify(normalizedLocal)]
+              await setDataSpace(userNamespace, normalizedCloud, false)
+              setCloudMessage('已恢复云端版本，本机版本已保留为冲突备份。')
+            }
+          } else {
+            if (normalizedLocal && normalizedLocal.updatedAt !== normalizedCloud.updatedAt) {
+              normalizedCloud.conflictBackups = [...(normalizedCloud.conflictBackups ?? []).slice(-4), JSON.stringify(normalizedLocal)]
+            }
+            await setDataSpace(userNamespace, normalizedCloud, false)
+            setCloudMessage('已从云端恢复个人计划。')
+          }
+          if (!cancelled) {
+            setCloudReady(true)
+            setSyncStatus('saved')
+            setDataSwitching(false)
+          }
+          return
         }
-      } catch {
+        if (localUser && localUser.taskGroups.length > 0) {
+          const normalizedLocal = normalizeState(localUser)
+          await setDataSpace(userNamespace, normalizedLocal, false)
+          const uploadLocal = window.confirm('云端没有计划，但此设备保存了一份个人计划。是否把它作为云端初始版本？')
+          if (uploadLocal) {
+            await uploadSnapshot(normalizedLocal)
+            setCloudReady(true)
+            setSyncStatus('saved')
+            setCloudMessage('已把本机个人计划设为云端初始版本。')
+            setDataSwitching(false)
+          } else {
+            setSyncStatus('local')
+            setFirstLoginOpen(true)
+            setDataSwitching(false)
+          }
+          return
+        }
+        // 云端为空时绝不上传游客数据，先让用户选择模板。
+        await loadDataSpace(userNamespace, buildBlankState())
+        if (!cancelled) {
+          setSyncStatus('local')
+          setFirstLoginOpen(true)
+          setDataSwitching(false)
+        }
+      } catch (error) {
         if (!cancelled) {
           setCloudReady(false)
           setSyncStatus('error')
+          setCloudMessage(error instanceof Error ? error.message : '云端恢复失败')
+          setDataSwitching(false)
         }
       }
     }
-
     void bootstrapCloud()
     return () => { cancelled = true }
-  }, [ready, sessionUser?.id, loadedFromStorage, replaceState])
+  }, [ready, sessionUser?.id, loadDataSpace, setDataSpace])
 
   useEffect(() => {
-    if (!ready || !sessionUser?.id || !cloudReady) return
+    if (!ready || !sessionUser?.id || !cloudReady || namespace !== `user:${sessionUser.id}`) return
     setSyncStatus('saving')
     let cancelled = false
     const id = window.setTimeout(async () => {
@@ -121,14 +179,44 @@ export default function App() {
       cancelled = true
       window.clearTimeout(id)
     }
-  }, [state, ready, sessionUser?.id, cloudReady])
+  }, [state, ready, sessionUser?.id, cloudReady, namespace])
 
-  const openReplan = () => {
-    setReplan(previewReplan())
+  useEffect(() => {
+    const retry = async () => {
+      if (!sessionUser?.id || !cloudReady || namespace !== `user:${sessionUser.id}`) return
+      setSyncStatus('saving')
+      try {
+        await uploadSnapshot(stateRef.current)
+        setSyncStatus('saved')
+      } catch {
+        setSyncStatus('error')
+      }
+    }
+    window.addEventListener('online', retry)
+    return () => window.removeEventListener('online', retry)
+  }, [sessionUser?.id, cloudReady, namespace])
+
+  const openReplan = (patch?: Partial<ReplanRequest>, baseState?: AppState) => {
+    const source = baseState ?? state
+    const request = { ...replanRequest, freezeDays: source.settings.freezeDays, ...patch }
+    setReplanRequest(request)
+    setReplanBaseState(baseState)
+    setReplan(previewReplan(request, baseState))
     setReplanOpen(true)
   }
 
-  if (!ready) return <div className="loading-screen"><div className="spinner"/><p>正在载入学习计划……</p></div>
+  const initializeAccount = async (kind: 'blank' | 'demo') => {
+    if (!sessionUser?.id) return
+    const initial = kind === 'demo' ? buildGuestDemoState() : buildBlankState()
+    await setDataSpace(`user:${sessionUser.id}`, initial, false)
+    await uploadSnapshot(initial)
+    setCloudReady(true)
+    setSyncStatus('saved')
+    setFirstLoginOpen(false)
+    setDataSwitching(false)
+  }
+
+  if (!ready || dataSwitching) return <div className="loading-screen"><div className="spinner"/><p>{dataSwitching ? '正在安全切换数据空间……' : '正在载入学习计划……'}</p></div>
 
   return (
     <div className={`app-shell ${state.settings.sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
@@ -141,7 +229,7 @@ export default function App() {
           })}
         </nav>
         <div className="sidebar-bottom">
-          <div className={`sync-status ${sessionUser ? 'online' : ''} ${syncStatus === 'error' ? 'sync-error' : ''}`}>{sessionUser ? <Cloud size={16}/> : <CloudOff size={16}/>}<span>{!sessionUser ? '当前仅本地保存' : syncStatus === 'restoring' ? '正在从云端恢复' : syncStatus === 'saving' ? '正在自动保存' : syncStatus === 'error' ? '云同步失败' : '已自动保存到云端'}</span></div>
+          <div className={`sync-status ${sessionUser ? 'online' : ''} ${syncStatus === 'error' ? 'sync-error' : ''}`}>{sessionUser ? <Cloud size={16}/> : <CloudOff size={16}/>}<span>{!sessionUser ? '游客演示 · 仅本地保存' : syncStatus === 'restoring' ? '正在从云端恢复' : syncStatus === 'saving' ? '正在自动保存' : syncStatus === 'error' ? '云同步失败' : cloudReady ? '已自动保存到云端' : '等待初始化个人计划'}</span></div>
           <button className="collapse-button" onClick={() => updateSettings({ sidebarCollapsed: !state.settings.sidebarCollapsed })}><ChevronLeft size={18}/><span>收起侧边栏</span></button>
         </div>
       </aside>
@@ -150,33 +238,51 @@ export default function App() {
         <header className="topbar">
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)}><Menu size={21}/></button>
           <div className="page-heading"><h1>{navItems.find(n => n.id === page)?.label}</h1><span>{format(new Date(), 'yyyy年M月d日')}</span></div>
-          <div className="topbar-actions"><button className="secondary-button" onClick={openReplan}><RefreshCw size={16}/>重新排期</button></div>
+          <div className="topbar-actions"><button className="secondary-button" onClick={() => openReplan()}><RefreshCw size={16}/>重排中心</button></div>
         </header>
         <div className="page-content">
-          {page === 'today' && <TodayPage onNavigate={setPage}/>} 
-          {page === 'calendar' && <CalendarPage/>}
+          {page === 'today' && <TodayPage onNavigate={setPage} onReplan={date => openReplan({ mode: 'repair', fromDate: date })}/>} 
+          {page === 'calendar' && <CalendarPage onReplan={(date, baseState) => openReplan({ mode: 'repair', fromDate: date }, baseState)}/>} 
           {page === 'tasks' && <TasksPage/>}
           {page === 'stats' && <StatsPage/>}
-          {page === 'settings' && <SettingsPage sessionEmail={sessionUser?.email}/>} 
+          {page === 'settings' && <SettingsPage sessionEmail={sessionUser?.email} cloudMessage={cloudMessage}/>} 
         </div>
       </main>
-      <ReplanDialog result={replan} open={replanOpen} onClose={() => setReplanOpen(false)} onApply={() => { if (replan) applyReplan(replan); setReplanOpen(false) }}/>
+      <ReplanDialog
+        bundle={replan}
+        currentState={replanBaseState ?? state}
+        open={replanOpen}
+        request={replanRequest}
+        onRequestChange={setReplanRequest}
+        onRegenerate={() => setReplan(previewReplan(replanRequest, replanBaseState))}
+        onClose={() => { setReplanOpen(false); setReplanBaseState(undefined) }}
+        onApply={(result, editedState) => { applyReplan(result, editedState); setReplanOpen(false); setReplanBaseState(undefined) }}
+      />
+      <Modal open={firstLoginOpen} title="欢迎使用 · 选择个人计划起点" onClose={() => {}}>
+        <p className="onboarding-copy">云端还没有你的计划。游客演示数据不会上传，也不会包含其他账号的计划。请选择一个独立的个人空间起点。</p>
+        <div className="template-options">
+          <button onClick={() => void initializeAccount('blank')}><strong>从空白开始</strong><span>创建一个长期使用的新计划。</span></button>
+          <button onClick={() => void initializeAccount('demo')}><strong>使用功能演示模板</strong><span>先体验任务、月历、计时和重排。</span></button>
+        </div>
+      </Modal>
     </div>
   )
 }
 
-function TodayPage({ onNavigate }: { onNavigate: (page: Page) => void }) {
-  const { state, commit } = useApp()
+function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void; onReplan: (date: string) => void }) {
+  const { state, namespace, commit, moveAssignments } = useApp()
   const rawToday = todayISO()
   const defaultDate = clampDate(rawToday, state.settings.startDate, state.settings.endDate)
   const [date, setDate] = useState(defaultDate)
   const [completeTarget, setCompleteTarget] = useState<Assignment>()
   const [actual, setActual] = useState('')
   const [progress, setProgress] = useState(100)
+  const [endTodayOpen, setEndTodayOpen] = useState(false)
+  const [carryDates, setCarryDates] = useState<Record<string,string>>({})
   const groups = useMemo(() => new Map(state.taskGroups.map(g => [g.id, g])), [state.taskGroups])
   const tasks = state.assignments.filter(a => a.scheduledDate === date).sort((a,b) => (groups.get(b.groupId)?.priority ?? 0) - (groups.get(a.groupId)?.priority ?? 0) || a.status.localeCompare(b.status))
   const counted = tasks.filter(a => groups.get(a.groupId)?.countInStats || state.settings.countWordsTime)
-  const planned = counted.reduce((sum,a) => sum + Math.round(a.estimatedMinutes * Math.max(0,1-a.progress/100)), 0)
+  const planned = counted.reduce((sum,a) => sum + effectiveMinutes(a), 0)
   const actualTotal = counted.reduce((sum,a) => sum + a.actualMinutes, 0)
   const done = tasks.filter(a => a.status === 'done').length
   const capacity = getCapacity(state, date)
@@ -184,6 +290,45 @@ function TodayPage({ onNavigate }: { onNavigate: (page: Page) => void }) {
   const corePrediction = predictCompletion(state, g => g.priority === 5 && !g.recurring && g.targetDate <= state.settings.coreTargetDate)
   const chemistryPrediction = predictCompletion(state, g => g.title === '预习' && g.subject === '化学')
   const risk = planned > capacity ? `今日计划超过容量 ${minutesText(planned - capacity)}` : corePrediction && corePrediction !== '已完成' && corePrediction > state.settings.coreTargetDate ? `核心任务预计 ${fmtDate(corePrediction)} 完成，晚于目标` : undefined
+
+  const moveImpactLabel = (assignment: Assignment, targetDate: string) => {
+    const targetLoad = state.assignments
+      .filter(item => item.id !== assignment.id && item.scheduledDate === targetDate && item.status !== 'done')
+      .reduce((sum, item) => {
+        const group = groups.get(item.groupId)
+        return sum + ((group?.countInStats || state.settings.countWordsTime) ? effectiveMinutes(item) : 0)
+      }, 0)
+    const group = groups.get(assignment.groupId)
+    const own = group && (group.countInStats || state.settings.countWordsTime) ? effectiveMinutes(assignment) : 0
+    const projected = targetLoad + own
+    const targetCapacity = getCapacity(state, targetDate)
+    return `${targetDate} · ${minutesText(projected)} / ${minutesText(targetCapacity)}${projected > targetCapacity ? '（超载）' : ''}`
+  }
+
+  const prepareCarryover = (sourceDate: string) => {
+    const sourceTasks = state.assignments.filter(a => a.scheduledDate === sourceDate && a.status !== 'done' && !groups.get(a.groupId)?.recurring)
+    const initial: Record<string,string> = {}
+    for (const assignment of sourceTasks) initial[assignment.id] = suggestMoveDates(state, assignment.id, 8).find(candidate => candidate > sourceDate) ?? assignment.scheduledDate ?? sourceDate
+    setDate(sourceDate)
+    setCarryDates(initial)
+    setEndTodayOpen(true)
+  }
+
+  useEffect(() => {
+    const current = todayISO()
+    if (current <= state.settings.startDate) return
+    const previousDate = state.assignments
+      .filter(a => a.status !== 'done' && a.scheduledDate && a.scheduledDate < current && !groups.get(a.groupId)?.recurring)
+      .map(a => a.scheduledDate!)
+      .sort()
+      .at(-1)
+    if (!previousDate) return
+    const promptKey = `study-planner:carryover-prompt:${namespace}:${current}`
+    if (window.sessionStorage.getItem(promptKey)) return
+    window.sessionStorage.setItem(promptKey, '1')
+    const id = window.setTimeout(() => prepareCarryover(previousDate), 350)
+    return () => window.clearTimeout(id)
+  }, [namespace, state.settings.startDate, state.assignments, groups])
 
   const openComplete = (a: Assignment) => { setCompleteTarget(a); setActual(''); setProgress(100) }
   const saveCompletion = (finish: boolean) => {
@@ -197,6 +342,7 @@ function TodayPage({ onNavigate }: { onNavigate: (page: Page) => void }) {
         item.timeEntries.push({ id: uid('time'), minutes, createdAt: new Date().toISOString() })
       }
       item.progress = finish ? 100 : Math.min(99, Math.max(1, progress))
+      item.remainingMinutes = finish ? 0 : effectiveMinutes(item)
       item.status = finish ? 'done' : 'partial'
       item.completedAt = finish ? new Date().toISOString() : undefined
       if (draft.timer.assignmentId === item.id) draft.timer = { accumulatedSeconds: 0, running: false }
@@ -210,7 +356,7 @@ function TodayPage({ onNavigate }: { onNavigate: (page: Page) => void }) {
         <div className="date-switcher"><button className="icon-button" onClick={() => setDate(clampDate(format(new Date(parseISO(date).getTime()-86400000),'yyyy-MM-dd'), state.settings.startDate,state.settings.endDate))}><ChevronLeft size={19}/></button><div><h2>{fmtDate(date, 'M月d日')} · {fmtWeekday(date)}</h2><span className={`day-badge day-${config.type}`}>{dayTypeLabel[config.type]}</span></div><button className="icon-button" onClick={() => setDate(clampDate(format(new Date(parseISO(date).getTime()+86400000),'yyyy-MM-dd'), state.settings.startDate,state.settings.endDate))}><ChevronRight size={19}/></button></div>
         <p>{tasks.length ? `今天有 ${tasks.length} 项任务，预计 ${minutesText(planned)}。` : '今天暂时没有安排任务。'}</p>
       </div>
-      <button className="secondary-button" onClick={() => onNavigate('calendar')}><CalendarDays size={16}/>打开月历</button>
+      <div className="button-wrap"><button className="secondary-button" onClick={() => onNavigate('calendar')}><CalendarDays size={16}/>打开月历</button>{tasks.some(t=>t.status!=='done'&&!groups.get(t.groupId)?.recurring)&&<button className="secondary-button" onClick={()=>prepareCarryover(date)}>结束今天</button>}</div>
     </section>
     <section className="compact-metrics">
       <div><span>预计时间</span><strong>{minutesText(planned)}</strong></div>
@@ -231,14 +377,22 @@ function TodayPage({ onNavigate }: { onNavigate: (page: Page) => void }) {
       </div>
       <div className="modal-actions"><button className="secondary-button" onClick={() => saveCompletion(false)}>保存为部分完成</button><button className="primary-button" onClick={() => saveCompletion(true)}>标记完成</button></div>
     </Modal>
+    <Modal open={endTodayOpen} title="结束今天 · 处理未完成任务" onClose={()=>setEndTodayOpen(false)} wide>
+      <p className="muted-text">系统给出推荐日期，你可以逐项修改、保留为逾期，或进入重排中心比较完整方案。</p>
+      <div className="carryover-list">{tasks.filter(t=>t.status!== 'done'&&!groups.get(t.groupId)?.recurring).map(a=><div key={a.id} className="carryover-row"><div><strong>{a.title}</strong><span>{groups.get(a.groupId)?.subject} · 当前安排 {a.scheduledDate}</span></div><select value={carryDates[a.id]??''} onChange={e=>setCarryDates(prev=>({...prev,[a.id]:e.target.value}))}><option value="">保留在原日并标记逾期</option>{suggestMoveDates(state,a.id,8).filter(d=>d>date).slice(0,5).map(d=><option key={d} value={d}>{moveImpactLabel(a,d)}</option>)}</select></div>)}</div>
+      <div className="modal-actions"><button className="secondary-button" onClick={()=>{setEndTodayOpen(false);onReplan(date)}}>比较完整方案</button><button className="primary-button" onClick={()=>{for(const [id,target] of Object.entries(carryDates))if(target)moveAssignments([id],target,'carryover');setEndTodayOpen(false)}}>应用这些选择</button></div>
+    </Modal>
   </>
 }
 
-function CalendarPage() {
-  const { state, updateAssignment, updateDayConfig, commit } = useApp()
+function CalendarPage({ onReplan }: { onReplan: (date: string, baseState?: AppState) => void }) {
+  const { state, updateAssignment, updateDayConfig, moveAssignments } = useApp()
   const [month, setMonth] = useState(startOfMonth(parseISO(state.settings.startDate)))
   const [dayOpen, setDayOpen] = useState<string>()
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [moveNotice, setMoveNotice] = useState<{ id: string; title: string; date: string }>()
+  const [pendingDayType, setPendingDayType] = useState<DayType>()
+  const [pendingCustomMinutes, setPendingCustomMinutes] = useState<number>()
   const groups = useMemo(() => new Map(state.taskGroups.map(g => [g.id, g])), [state.taskGroups])
   const monthStart = startOfMonth(month)
   const monthEnd = endOfMonth(month)
@@ -248,7 +402,7 @@ function CalendarPage() {
 
   const tasksFor = (date: string) => state.assignments.filter(a => a.scheduledDate === date)
   const loadFor = (date: string) => tasksFor(date).reduce((sum,a) => {
-    const g = groups.get(a.groupId); return sum + ((g?.countInStats || state.settings.countWordsTime) ? Math.round(a.estimatedMinutes * (1-a.progress/100)) : 0)
+    const g = groups.get(a.groupId); return sum + ((g?.countInStats || state.settings.countWordsTime) ? effectiveMinutes(a) : 0)
   },0)
   const drop = (date: string, e: React.DragEvent) => {
     e.preventDefault()
@@ -260,6 +414,7 @@ function CalendarPage() {
       window.alert(`“${g.title}”每天最多安排 ${g.dailyMax} 个。`); return
     }
     updateAssignment(id, { scheduledDate: date })
+    setMoveNotice({ id, title: a.title, date })
   }
 
   const dayTasks = dayOpen ? tasksFor(dayOpen) : []
@@ -267,12 +422,13 @@ function CalendarPage() {
   const bulkMove = () => {
     const target = window.prompt('输入目标日期（YYYY-MM-DD）')
     if (!target || !selectedIds.length) return
-    commit(draft => { for (const a of draft.assignments) if (selectedIds.includes(a.id) && !a.locked) a.scheduledDate = target })
+    moveAssignments(selectedIds, target)
     setSelectedIds([])
   }
 
   return <>
     <section className="calendar-toolbar"><div><h2>{format(month,'yyyy年M月')}</h2><p>拖拽任务可改期；点击日期可调整日类型与批量移动。</p></div><div><button className="icon-button" onClick={() => setMonth(addMonths(month,-1))}><ChevronLeft size={19}/></button><button className="secondary-button" onClick={() => setMonth(startOfMonth(parseISO(state.settings.startDate)))}>计划开始</button><button className="icon-button" onClick={() => setMonth(addMonths(month,1))}><ChevronRight size={19}/></button></div></section>
+    {moveNotice && <div className="manual-move-notice"><div><strong>已记录你的手动安排</strong><span>「{moveNotice.title}」已移到 {moveNotice.date}，自动重排会优先保留，也不会近期拉回原日期。</span></div><div className="button-wrap"><button className="secondary-button" onClick={()=>{updateAssignment(moveNotice.id,{locked:true});setMoveNotice(undefined)}}><Lock size={15}/>同时锁定</button><button className="text-button" onClick={()=>setMoveNotice(undefined)}>知道了</button></div></div>}
     <section className="calendar-card">
       <div className="weekday-row">{['日','一','二','三','四','五','六'].map(x => <div key={x}>周{x}</div>)}</div>
       <div className="calendar-grid">
@@ -284,7 +440,7 @@ function CalendarPage() {
           const cap = inPlan ? getCapacity(state,date) : 0
           const ratio = cap ? load/cap : 0
           const cfg = inPlan ? getDayConfig(state,date) : undefined
-          return <div key={date} className={`calendar-cell ${!inPlan?'outside':''} ${cfg?`day-${cfg.type}`:''} ${ratio>1?'load-over':ratio>.8?'load-near':''}`} onDragOver={e=>e.preventDefault()} onDrop={e=>drop(date,e)} onClick={() => inPlan && setDayOpen(date)}>
+          return <div key={date} className={`calendar-cell ${!inPlan?'outside':''} ${cfg?`day-${cfg.type}`:''} ${ratio>1?'load-over':ratio>.8?'load-near':''}`} onDragOver={e=>e.preventDefault()} onDrop={e=>drop(date,e)} onClick={() => { if (!inPlan) return; setDayOpen(date); const current=getDayConfig(state,date); setPendingDayType(current.type); setPendingCustomMinutes(current.customMinutes) }}>
             <div className="calendar-date"><span>{Number(date.slice(-2))}</span>{cfg && <small>{dayTypeLabel[cfg.type]}</small>}</div>
             {inPlan && <div className="load-line"><i style={{width:`${Math.min(100,ratio*100)}%`}}/></div>}
             <div className="calendar-tasks">{tasks.slice(0,3).map(a => <div key={a.id} draggable={!a.locked} onDragStart={e=>{e.stopPropagation();e.dataTransfer.setData('text/assignment-id',a.id)}} onClick={e=>e.stopPropagation()} className={a.status==='done'?'mini-done':''}><span className={`subject-dot subject-${groups.get(a.groupId)?.subject}`}/>{a.title}</div>)}{tasks.length>3&&<small>+{tasks.length-3} 项</small>}</div>
@@ -293,15 +449,26 @@ function CalendarPage() {
         })}
       </div>
     </section>
-    <Modal open={Boolean(dayOpen)} title={dayOpen ? `${fmtDate(dayOpen)} · ${fmtWeekday(dayOpen)}` : '日期'} onClose={() => {setDayOpen(undefined);setSelectedIds([])}} wide>
+    <Modal open={Boolean(dayOpen)} title={dayOpen ? `${fmtDate(dayOpen)} · ${fmtWeekday(dayOpen)}` : '日期'} onClose={() => {setDayOpen(undefined);setSelectedIds([]);setPendingDayType(undefined);setPendingCustomMinutes(undefined)}} wide>
       {dayOpen && dayCfg && <>
         <div className="day-settings-row">
-          <label className="field"><span>日期类型</span><select value={dayCfg.type} onChange={e => updateDayConfig(dayOpen,{type:e.target.value as DayType})}>{(['regular','study','travel','custom'] as DayType[]).map(t=><option key={t} value={t}>{dayTypeLabel[t]}</option>)}</select></label>
-          {dayCfg.type==='custom'&&<label className="field"><span>可用分钟</span><input type="number" value={dayCfg.customMinutes??210} onChange={e=>updateDayConfig(dayOpen,{customMinutes:Number(e.target.value)})}/></label>}
+          <label className="field"><span>日期类型</span><select value={pendingDayType ?? dayCfg.type} onChange={e => setPendingDayType(e.target.value as DayType)}>{(['regular','study','travel','custom'] as DayType[]).map(t=><option key={t} value={t}>{dayTypeLabel[t]}</option>)}</select></label>
+          {(pendingDayType ?? dayCfg.type)==='custom'&&<label className="field"><span>可用分钟</span><input type="number" value={pendingCustomMinutes??dayCfg.customMinutes??210} onChange={e=>setPendingCustomMinutes(Number(e.target.value))}/></label>}
           <label className="field grow"><span>备注</span><input value={dayCfg.note??''} onChange={e=>updateDayConfig(dayOpen,{note:e.target.value})} placeholder="例如：外出、下午补课"/></label>
         </div>
         <div className="day-load-summary"><span>预计 {minutesText(loadFor(dayOpen))}</span><span>容量 {minutesText(getCapacity(state,dayOpen))}</span><span>{dayTasks.filter(t=>t.status==='done').length}/{dayTasks.length} 已完成</span></div>
-        <div className="bulk-row"><span>已选择 {selectedIds.length} 项</span><button className="secondary-button" disabled={!selectedIds.length} onClick={bulkMove}>批量移动</button></div>
+        <div className="bulk-row"><span>已选择 {selectedIds.length} 项</span><div className="button-wrap">
+          {(pendingDayType??dayCfg.type)!==dayCfg.type || ((pendingDayType??dayCfg.type)==='custom' && pendingCustomMinutes!==dayCfg.customMinutes) ? <button className="primary-button" onClick={()=>{
+            const next=structuredClone(state)
+            next.dayConfigs[dayOpen]={...dayCfg,date:dayOpen,type:pendingDayType??dayCfg.type,customMinutes:(pendingDayType??dayCfg.type)==='custom'?(pendingCustomMinutes??dayCfg.customMinutes??state.settings.regularMinutes):undefined,userSet:true}
+            const ordinary=next.assignments.filter(a=>a.scheduledDate===dayOpen&&a.status!=='done'&&!groups.get(a.groupId)?.recurring)
+            const newCapacity=getCapacity(next,dayOpen)
+            const newLoad=ordinary.reduce((sum,a)=>sum+((groups.get(a.groupId)?.countInStats||next.settings.countWordsTime)?effectiveMinutes(a):0),0)
+            if(ordinary.length && ((pendingDayType??dayCfg.type)==='travel' || newLoad>newCapacity)) onReplan(dayOpen,next)
+            else updateDayConfig(dayOpen,next.dayConfigs[dayOpen])
+          }}>预览并应用日期类型</button> : <button className="secondary-button" onClick={()=>onReplan(dayOpen)}>预览局部修复</button>}
+          <button className="secondary-button" disabled={!selectedIds.length} onClick={bulkMove}>批量移动</button>
+        </div></div>
         <div className="day-task-list">{dayTasks.map(a => <label key={a.id} className="select-task-row"><input type="checkbox" checked={selectedIds.includes(a.id)} onChange={e=>setSelectedIds(prev=>e.target.checked?[...prev,a.id]:prev.filter(x=>x!==a.id))}/><div><strong>{a.title}</strong><span>{groups.get(a.groupId)?.subject} · {minutesText(a.estimatedMinutes)}</span></div>{a.locked&&<small>已锁定</small>}</label>)}</div>
       </>}
     </Modal>
@@ -309,7 +476,7 @@ function CalendarPage() {
 }
 
 function TasksPage() {
-  const { state, addTaskGroup, editTaskGroup, deleteTaskGroup, commit } = useApp()
+  const { state, addTaskGroup, editTaskGroup, deleteTaskGroup, moveAssignments } = useApp()
   const [search, setSearch] = useState('')
   const [priority, setPriority] = useState<'all'|Priority>('all')
   const [subject, setSubject] = useState<'all'|Subject>('all')
@@ -323,7 +490,7 @@ function TasksPage() {
   const bulkMoveGroup = (g: TaskGroup) => {
     const date = window.prompt(`把“${g.title}”未完成任务移动到哪一天？（YYYY-MM-DD）`)
     if (!date) return
-    commit(draft => { for (const a of draft.assignments) if (a.groupId===g.id&&a.status!=='done'&&!a.locked) a.scheduledDate=date })
+    moveAssignments(state.assignments.filter(a=>a.groupId===g.id&&a.status!=='done'&&!a.locked).map(a=>a.id), date)
   }
 
   return <>
@@ -340,11 +507,13 @@ function TasksPage() {
         const done=items.filter(a=>a.status==='done').length
         const actual=items.reduce((s,a)=>s+a.actualMinutes,0)
         const planned=items.reduce((s,a)=>s+a.estimatedMinutes,0)
+        const durationSuggestion=getDurationSuggestion(state,g.id)
         return <article className="group-card" key={g.id}>
           <div className="group-card-head"><div><span className={`subject-pill subject-${g.subject}`}>{g.subject}</span><span className={`priority-badge priority-${g.priority}`}>P{g.priority}</span><h3>{g.title}</h3></div><div className="group-actions"><button className="text-button" onClick={()=>bulkMoveGroup(g)}>移动未完成</button><button className="text-button" onClick={()=>duplicate(g)}>复制</button><button className="text-button" onClick={()=>{setEditing(g);setDialog(true)}}>编辑</button><button className="icon-button danger-icon" onClick={()=>window.confirm('删除该任务及其所有子任务？')&&deleteTaskGroup(g.id)}><Trash2 size={17}/></button></div></div>
           <div className="group-stats"><span>{done}/{items.length} 已完成</span><span>预计 {minutesText(planned)}</span><span>实际 {minutesText(actual)}</span><span>目标 {fmtDate(g.targetDate)}</span>{g.dailyMax&&<span>每天最多 {g.dailyMax} 个</span>}</div>
           <div className="progress-track"><i style={{width:`${items.length?done/items.length*100:0}%`}}/></div>
           {(g.notes||g.sourceLabel)&&<p className="group-note">{g.notes||g.sourceLabel}</p>}
+          {durationSuggestion&&<div className="duration-suggestion"><div><strong>用时校准建议</strong><span>最近 {durationSuggestion.sampleSize} 次记录建议把单次预计从 {durationSuggestion.currentMinutes} 分钟调整为 {durationSuggestion.minutes} 分钟。</span></div><button className="secondary-button" onClick={()=>editTaskGroup({...g,unitMinutes:durationSuggestion.minutes})}>接受建议</button></div>}
         </article>
       })}
       {!groups.length&&<EmptyState title="没有符合条件的任务" text="调整筛选条件，或新增一项任务。"/>}
@@ -374,7 +543,7 @@ function StatsPage() {
   const totalActual = state.assignments.reduce((s,a)=>s+a.actualMinutes,0)
   const corePrediction = predictCompletion(state,g=>g.priority===5&&!g.recurring&&g.targetDate<=state.settings.coreTargetDate)
   const chemPrediction = predictCompletion(state,g=>g.subject==='化学'&&g.title==='预习')
-  const remaining = state.assignments.filter(a=>a.status!=='done'&&(groups.get(a.groupId)?.priority??0)>0).reduce((s,a)=>s+Math.round(a.estimatedMinutes*(1-a.progress/100)),0)
+  const remaining = state.assignments.filter(a=>a.status!=='done'&&(groups.get(a.groupId)?.priority??0)>0).reduce((s,a)=>s+effectiveMinutes(a),0)
 
   return <>
     <section className="summary-grid stats-summary">
@@ -392,8 +561,8 @@ function StatsPage() {
   </>
 }
 
-function SettingsPage({ sessionEmail }: { sessionEmail?: string }) {
-  const { state, updateSettings, undo, canUndo, replaceState, resetAll } = useApp()
+function SettingsPage({ sessionEmail, cloudMessage }: { sessionEmail?: string; cloudMessage?: string }) {
+  const { state, namespace, updateSettings, undo, canUndo, replaceState, resetAll, restoreReplanHistory } = useApp()
   const [email,setEmail]=useState('')
   const [password,setPassword]=useState('')
   const [authMessage,setAuthMessage]=useState('')
@@ -401,14 +570,15 @@ function SettingsPage({ sessionEmail }: { sessionEmail?: string }) {
 
   const exportJson=()=>downloadBlob(JSON.stringify(state,null,2),`study-plan-${todayISO()}.json`,'application/json')
   const exportCsv=()=>{
-    const groups=new Map(state.taskGroups.map(g=>[g.id,g])); const rows=[['科目','任务','计划日期','状态','预计分钟','实际分钟','进度','优先级']]
-    for(const a of state.assignments){const g=groups.get(a.groupId);if(g)rows.push([g.subject,a.title,a.scheduledDate??'',a.status,String(a.estimatedMinutes),String(a.actualMinutes),String(a.progress),String(g.priority)])}
+    const groups=new Map(state.taskGroups.map(g=>[g.id,g])); const rows=[['科目','任务','计划日期','状态','预计分钟','实际分钟','进度','优先级','排期来源','用户意图']]
+    for(const a of state.assignments){const g=groups.get(a.groupId);if(g)rows.push([g.subject,a.title,a.scheduledDate??'',a.status,String(a.estimatedMinutes),String(a.actualMinutes),String(a.progress),String(g.priority),a.scheduleSource,a.intentStrength])}
     downloadBlob('\ufeff'+rows.map(r=>r.map(csvEscape).join(',')).join('\n'),`study-plan-${todayISO()}.csv`,'text/csv;charset=utf-8')
   }
   const importJson=(file:File)=>{const reader=new FileReader();reader.onload=()=>{try{const parsed=JSON.parse(String(reader.result)) as AppState;if(!parsed.version||!parsed.taskGroups)throw new Error();if(window.confirm('导入会覆盖当前数据，是否继续？'))replaceState(parsed,true)}catch{window.alert('无法识别这个备份文件。')}};reader.readAsText(file)}
-  const login=async(kind:'in'|'up')=>{try{setAuthMessage('处理中……');await(kind==='in'?signIn(email,password):signUp(email,password));setAuthMessage(kind==='in'?'登录成功':'注册请求已提交，请检查邮箱设置。')}catch(e){setAuthMessage(e instanceof Error?e.message:'操作失败')}}
+  const login=async(kind:'in'|'up')=>{try{setAuthMessage('处理中……');await(kind==='in'?signIn(email,password):signUp(email,password));setAuthMessage(kind==='in'?'登录成功，正在恢复云端计划':'注册请求已提交，请检查邮箱。')}catch(e){setAuthMessage(e instanceof Error?e.message:'操作失败')}}
   const cloudUpload=async()=>{try{const t=await uploadSnapshot(state);setAuthMessage(`已同步：${new Date(t).toLocaleString()}`)}catch(e){setAuthMessage(e instanceof Error?e.message:'同步失败')}}
   const cloudDownload=async()=>{try{const cloud=await downloadSnapshot();if(!cloud){setAuthMessage('云端尚无数据');return}if(window.confirm('用云端数据覆盖当前数据？当前状态会保留在撤销历史中。'))replaceState(cloud,true);setAuthMessage('已从云端恢复')}catch(e){setAuthMessage(e instanceof Error?e.message:'下载失败')}}
+  const restoreConflict=(raw:string)=>{try{const parsed=JSON.parse(raw) as AppState;if(window.confirm('恢复这份冲突备份？当前状态会保留在撤销历史中。'))replaceState(parsed,true)}catch{window.alert('冲突备份已损坏，无法恢复。')}}
 
   return <div className="settings-stack">
     <SettingsSection title="计划设置" description="这些参数会参与容量计算、完成日期预测与重新排期。">
@@ -419,25 +589,40 @@ function SettingsPage({ sessionEmail }: { sessionEmail?: string }) {
         <label className="field"><span>核心任务目标</span><input type="date" value={state.settings.coreTargetDate} onChange={e=>updateSettings({coreTargetDate:e.target.value})}/></label>
         <label className="field"><span>化学预习目标</span><input type="date" value={state.settings.chemistryTargetDate} onChange={e=>updateSettings({chemistryTargetDate:e.target.value})}/></label>
         <label className="field"><span>检查缓冲天数</span><input type="number" min="0" value={state.settings.bufferDays} onChange={e=>updateSettings({bufferDays:Number(e.target.value)})}/></label>
+        <label className="field"><span>默认排期风格</span><select value={state.settings.planningMode} onChange={e=>updateSettings({planningMode:e.target.value as AppState['settings']['planningMode']})}><option value="sprint">冲刺</option><option value="balanced">平衡</option><option value="relaxed">轻松</option></select></label>
       </div>
     </SettingsSection>
-    <SettingsSection title="每日容量" description="学习日没有硬性熬夜上限，但超过容量会显示红色预警。">
+    <SettingsSection title="自动重排偏好" description="这些是软约束。系统会说明突破它们的原因，不会把建议伪装成强制决定。">
+      <div className="form-grid three">
+        <label className="field"><span>冻结近期天数</span><input type="number" min="0" max="7" value={state.settings.freezeDays} onChange={e=>updateSettings({freezeDays:Number(e.target.value)})}/></label>
+        <label className="field"><span>常规日最多任务</span><input type="number" min="1" value={state.settings.regularMaxTasks} onChange={e=>updateSettings({regularMaxTasks:Number(e.target.value)})}/></label>
+        <label className="field"><span>学习日最多任务</span><input type="number" min="1" value={state.settings.studyMaxTasks} onChange={e=>updateSettings({studyMaxTasks:Number(e.target.value)})}/></label>
+        <label className="field"><span>常规日允许软超载（分钟）</span><input type="number" min="0" value={state.settings.regularOverbookMinutes} onChange={e=>updateSettings({regularOverbookMinutes:Number(e.target.value)})}/></label>
+        <label className="field"><span>学习日允许软超载（分钟）</span><input type="number" min="0" value={state.settings.studyOverbookMinutes} onChange={e=>updateSettings({studyOverbookMinutes:Number(e.target.value)})}/></label>
+        <label className="field"><span>单科建议占比上限（%）</span><input type="number" min="30" max="100" value={Math.round(state.settings.subjectShareLimit*100)} onChange={e=>updateSettings({subjectShareLimit:Number(e.target.value)/100})}/></label>
+      </div>
+    </SettingsSection>
+    <SettingsSection title="每日容量" description="容量是软上限；明显超载只会进入预览，不会被静默应用。">
       <div className="form-grid three">
         <label className="field"><span>常规日（分钟）</span><input type="number" value={state.settings.regularMinutes} onChange={e=>updateSettings({regularMinutes:Number(e.target.value)})}/></label>
         <label className="field"><span>学习日（分钟）</span><input type="number" value={state.settings.studyMinutes} onChange={e=>updateSettings({studyMinutes:Number(e.target.value)})}/></label>
         <label className="field"><span>旅游日（分钟）</span><input type="number" value={state.settings.travelMinutes} onChange={e=>updateSettings({travelMinutes:Number(e.target.value)})}/></label>
       </div>
-      <div className="toggle-grid"><Toggle checked={state.settings.countWordsTime} onChange={v=>updateSettings({countWordsTime:v})} label="把每日单词计入计划与统计时间"/><Toggle checked={state.settings.showWarnings} onChange={v=>updateSettings({showWarnings:v})} label="显示黄色和红色进度提醒"/><Toggle checked={state.settings.optionalReview} onChange={v=>updateSettings({optionalReview:v})} label="显示可选每日复盘入口"/></div>
+      <div className="toggle-grid"><Toggle checked={state.settings.countWordsTime} onChange={v=>updateSettings({countWordsTime:v})} label="把每日单词计入计划与统计时间"/><Toggle checked={state.settings.showWarnings} onChange={v=>updateSettings({showWarnings:v})} label="显示黄色和红色进度提醒"/><Toggle checked={state.settings.optionalReview} onChange={v=>updateSettings({optionalReview:v})} label="显示可选每日复盘入口"/><Toggle checked={state.settings.keepOfflineOnLogout} onChange={v=>updateSettings({keepOfflineOnLogout:v})} label="退出登录后在此设备保留个人离线缓存"/></div>
     </SettingsSection>
-    <SettingsSection title="数据与恢复" description="本地数据保存在浏览器 IndexedDB；建议定期导出 JSON 完整备份。">
-      <div className="button-wrap"><button className="secondary-button" onClick={exportJson}><Download size={16}/>导出 JSON</button><button className="secondary-button" onClick={exportCsv}><FileDown size={16}/>导出 CSV</button><button className="secondary-button" onClick={()=>window.print()}><FileDown size={16}/>打印 / 导出 PDF</button><button className="secondary-button" onClick={()=>fileRef.current?.click()}><Upload size={16}/>导入 JSON</button><input ref={fileRef} type="file" accept="application/json" hidden onChange={e=>e.target.files?.[0]&&importJson(e.target.files[0])}/><button className="secondary-button" disabled={!canUndo} onClick={undo}><RotateCcw size={16}/>恢复上一步</button><button className="danger-button" onClick={()=>window.confirm('确认重置全部数据？请先导出备份。')&&resetAll()}><Trash2 size={16}/>重置计划</button></div>
+    <SettingsSection title="重排历史" description="每次应用重排都会保存一个快照，最多保留最近 10 次。恢复旧版本本身仍可撤销。">
+      <div className="history-list">{state.replanHistory.length? [...state.replanHistory].reverse().map(entry=><div className="history-row" key={entry.id}><div><strong>{entry.label}</strong><span>{new Date(entry.createdAt).toLocaleString()} · 移动 {entry.moveCount} 项</span></div><button className="secondary-button" onClick={()=>window.confirm('恢复到这个重排前版本？')&&restoreReplanHistory(entry.id)}>恢复</button></div>):<p className="muted-text">还没有重排历史。</p>}</div>
     </SettingsSection>
-    <SettingsSection title="Supabase 云同步" description={supabaseConfigured?'登录后会先自动恢复云端数据，之后每次修改都会自动保存；手动上传和恢复仍可作为补充。':'尚未配置。复制 .env.example 为 .env，并填写项目 URL 与 publishable / anon key。'}>
+    <SettingsSection title="数据与恢复" description={`当前数据空间：${namespace==='guest'?'游客演示':sessionEmail??'个人账号'}。JSON 备份可能包含个人计划，请妥善保管。`}>
+      <div className="button-wrap"><button className="secondary-button" onClick={exportJson}><Download size={16}/>导出 JSON</button><button className="secondary-button" onClick={exportCsv}><FileDown size={16}/>导出 CSV</button><button className="secondary-button" onClick={()=>window.print()}><FileDown size={16}/>打印 / 导出 PDF</button><button className="secondary-button" onClick={()=>fileRef.current?.click()}><Upload size={16}/>导入 JSON</button><input ref={fileRef} type="file" accept="application/json" hidden onChange={e=>e.target.files?.[0]&&importJson(e.target.files[0])}/><button className="secondary-button" disabled={!canUndo} onClick={undo}><RotateCcw size={16}/>恢复上一步</button>{namespace==='guest'&&<button className="secondary-button" onClick={()=>window.confirm('恢复默认演示数据？')&&resetAll('demo')}>恢复演示数据</button>}<button className="danger-button" onClick={()=>window.confirm('确认重置当前数据空间？请先导出备份。')&&resetAll(namespace==='guest'?'demo':'blank')}><Trash2 size={16}/>重置计划</button></div>
+      {(state.conflictBackups?.length??0)>0&&<div className="conflict-backups"><strong>同步冲突备份</strong><p>检测到不同设备版本时会保留副本，不会静默覆盖。</p>{state.conflictBackups!.slice(-5).reverse().map((raw,i)=><div key={i}><span>备份 {state.conflictBackups!.length-i}</span><div className="button-wrap"><button className="text-button" onClick={()=>restoreConflict(raw)}>恢复</button><button className="text-button" onClick={()=>downloadBlob(raw,`study-plan-conflict-${i+1}.json`,'application/json')}>下载</button></div></div>)}</div>}
+    </SettingsSection>
+    <SettingsSection title="Supabase 云同步" description={supabaseConfigured?'登录后自动恢复当前账号数据，之后修改自动保存。游客数据永远不会上传。':'尚未配置。复制 .env.example 为 .env，并填写项目 URL 与 publishable / anon key。'}>
       {!supabaseConfigured?<div className="code-note">VITE_SUPABASE_URL<br/>VITE_SUPABASE_ANON_KEY</div>:sessionEmail?<div className="cloud-panel"><div><Cloud size={20}/><span>已登录：{sessionEmail}</span></div><div className="button-wrap"><button className="secondary-button" onClick={cloudUpload}>立即上传</button><button className="secondary-button" onClick={cloudDownload}>从云端恢复</button><button className="secondary-button" onClick={()=>signOut()}>退出登录</button></div></div>:<div className="auth-form"><input type="email" placeholder="邮箱" value={email} onChange={e=>setEmail(e.target.value)}/><input type="password" placeholder="密码" value={password} onChange={e=>setPassword(e.target.value)}/><button className="primary-button" onClick={()=>login('in')}>登录</button><button className="secondary-button" onClick={()=>login('up')}>注册</button></div>}
-      {authMessage&&<p className="settings-message">{authMessage}</p>}
+      {(authMessage||cloudMessage)&&<p className="settings-message">{authMessage||cloudMessage}</p>}
     </SettingsSection>
-    <SettingsSection title="DeepSeek API" description="第一版只预留扩展位置，不把 AI 作为排期核心依赖。">
-      <div className="reserved-card"><Sparkles size={21}/><div><strong>AI 功能暂未启用</strong><p>后续可通过服务端代理加入自然语言录入、周总结与复杂重排解释。API Key 不应写入前端。</p></div></div>
+    <SettingsSection title="DeepSeek API" description="当前仍只预留扩展位置，不把 AI 作为排期核心依赖。">
+      <div className="reserved-card"><Sparkles size={21}/><div><strong>AI 功能暂未启用</strong><p>后续可通过服务端代理加入自然语言录入、周总结与复杂解释。核心排期保持离线可用和可解释。</p></div></div>
     </SettingsSection>
   </div>
 }

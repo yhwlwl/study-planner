@@ -36,6 +36,8 @@ export function TaskGroupDialog({ open, onClose, initial, defaults, onSave }: {
       <label className="field checkbox-field"><input type="checkbox" checked={form.countInStats} onChange={e => patch('countInStats', e.target.checked)} /><span>计入计划与统计时间</span></label>
       <label className="field checkbox-field"><input type="checkbox" checked={Boolean(form.hidden)} onChange={e => patch('hidden', e.target.checked)} /><span>默认隐藏</span></label>
       <label className="field checkbox-field"><input type="checkbox" checked={Boolean(form.flexibleDuration)} onChange={e => patch('flexibleDuration', e.target.checked)} /><span>实际时长灵活</span></label>
+      <label className="field checkbox-field"><input type="checkbox" checked={Boolean(form.allowSplit)} onChange={e => patch('allowSplit', e.target.checked)} /><span>允许跨天拆分</span></label>
+      <label className="field checkbox-field"><input type="checkbox" checked={Boolean(form.memoryTask)} onChange={e => patch('memoryTask', e.target.checked)} /><span>属于记忆类任务</span></label>
       <label className="field span-2"><span>备注</span><textarea rows={3} value={form.notes ?? ''} onChange={e => patch('notes', e.target.value)} /></label>
     </div>
     <div className="modal-actions"><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" onClick={submit}>保存</button></div>
@@ -46,6 +48,6 @@ function emptyGroup(defaults: { targetDate: string; dueDate: string }): TaskGrou
   return {
     id: uid('group'), subject: '其他', title: '', priority: 3, quantity: 1,
     unitMinutes: 30, targetDate: defaults.targetDate, dueDate: defaults.dueDate,
-    countInStats: true
+    countInStats: true, allowSplit: false, memoryTask: false
   }
 }
