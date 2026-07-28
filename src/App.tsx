@@ -12,8 +12,8 @@ import {
 import { addMonths, endOfMonth, format, getDay, isWithinInterval, parseISO, startOfMonth } from 'date-fns'
 import { useApp } from './AppContext'
 import type { AppState, Assignment, DayType, Priority, ReplanBundle, ReplanRequest, Subject, TaskGroup } from './types'
-import { clampDate, dateRange, dayTypeLabel, fmtDate, fmtWeekday, getCapacity, getDayConfig, minutesText, todayISO } from './lib/date'
-import { effectiveMinutes, getDurationSuggestion, predictCompletion, suggestMoveDates } from './lib/planner'
+import { clampDate, dateRange, dayTypeLabel, fmtDate, fmtWeekday, getCapacity, getDayConfig, minutesText, shiftDate, todayISO } from './lib/date'
+import { analyzePlan, effectiveMinutes, getDurationSuggestion, predictCompletion, suggestMoveDates } from './lib/planner'
 import { uid } from './lib/id'
 import { buildBlankState, buildGuestDemoState, normalizeState } from './lib/seed'
 import { loadLocalState } from './lib/db'
@@ -25,6 +25,7 @@ import { downloadSnapshot, getSession, signIn, signOut, signUp, supabase, supaba
 import './styles.css'
 
 type Page = 'today' | 'calendar' | 'tasks' | 'stats' | 'settings'
+type ShiftScope = 'today' | 'future'
 type CloudSyncStatus = 'local' | 'restoring' | 'saving' | 'saved' | 'error'
 
 const navItems: { id: Page; label: string; icon: typeof LayoutDashboard }[] = [
@@ -279,6 +280,10 @@ function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void;
   const [progress, setProgress] = useState(100)
   const [endTodayOpen, setEndTodayOpen] = useState(false)
   const [carryDates, setCarryDates] = useState<Record<string,string>>({})
+  const [shiftOpen, setShiftOpen] = useState(false)
+  const [shiftScope, setShiftScope] = useState<ShiftScope>('future')
+  const [shiftDays, setShiftDays] = useState(1)
+  const [shiftLocked, setShiftLocked] = useState(false)
   const groups = useMemo(() => new Map(state.taskGroups.map(g => [g.id, g])), [state.taskGroups])
   const tasks = state.assignments.filter(a => a.scheduledDate === date).sort((a,b) => (groups.get(b.groupId)?.priority ?? 0) - (groups.get(a.groupId)?.priority ?? 0) || a.status.localeCompare(b.status))
   const counted = tasks.filter(a => groups.get(a.groupId)?.countInStats || state.settings.countWordsTime)
@@ -290,6 +295,63 @@ function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void;
   const corePrediction = predictCompletion(state, g => g.priority === 5 && !g.recurring && g.targetDate <= state.settings.coreTargetDate)
   const chemistryPrediction = predictCompletion(state, g => g.title === '预习' && g.subject === '化学')
   const risk = planned > capacity ? `今日计划超过容量 ${minutesText(planned - capacity)}` : corePrediction && corePrediction !== '已完成' && corePrediction > state.settings.coreTargetDate ? `核心任务预计 ${fmtDate(corePrediction)} 完成，晚于目标` : undefined
+
+  const shiftPreview = useMemo(() => {
+    const next = structuredClone(state)
+    const changes: Array<{ id: string; title: string; from: string; to: string }> = []
+    let ignoredLocked = 0
+    let stayedAtEnd = 0
+    const days = Math.max(1, Math.min(14, Math.round(shiftDays || 1)))
+    const movedAt = new Date().toISOString()
+    for (const assignment of next.assignments) {
+      const group = groups.get(assignment.groupId)
+      if (!assignment.scheduledDate || assignment.status === 'done' || group?.recurring) continue
+      const inScope = shiftScope === 'today' ? assignment.scheduledDate === date : assignment.scheduledDate >= date
+      if (!inScope) continue
+      if (assignment.locked && !shiftLocked) { ignoredLocked += 1; continue }
+      const from = assignment.scheduledDate
+      const rawTarget = shiftDate(from, days)
+      const to = rawTarget > next.settings.endDate ? next.settings.endDate : rawTarget
+      if (to === from) { stayedAtEnd += 1; continue }
+      assignment.previousDate = from
+      assignment.scheduledDate = to
+      assignment.lastManualMoveAt = movedAt
+      assignment.scheduleSource = 'carryover'
+      assignment.intentStrength = assignment.locked ? 'locked' : 'manual'
+      changes.push({ id: assignment.id, title: assignment.title, from, to })
+    }
+    next.updatedAt = movedAt
+    return {
+      next,
+      changes,
+      ignoredLocked,
+      stayedAtEnd,
+      issues: analyzePlan(next, date).slice(0, 10)
+    }
+  }, [state, groups, date, shiftScope, shiftDays, shiftLocked])
+
+  const applyShift = () => {
+    const days = Math.max(1, Math.min(14, Math.round(shiftDays || 1)))
+    commit(draft => {
+      const movedAt = new Date().toISOString()
+      for (const assignment of draft.assignments) {
+        const group = draft.taskGroups.find(g => g.id === assignment.groupId)
+        if (!assignment.scheduledDate || assignment.status === 'done' || group?.recurring) continue
+        const inScope = shiftScope === 'today' ? assignment.scheduledDate === date : assignment.scheduledDate >= date
+        if (!inScope || (assignment.locked && !shiftLocked)) continue
+        const from = assignment.scheduledDate
+        const rawTarget = shiftDate(from, days)
+        const to = rawTarget > draft.settings.endDate ? draft.settings.endDate : rawTarget
+        if (to === from) continue
+        assignment.previousDate = from
+        assignment.scheduledDate = to
+        assignment.lastManualMoveAt = movedAt
+        assignment.scheduleSource = 'carryover'
+        assignment.intentStrength = assignment.locked ? 'locked' : 'manual'
+      }
+    })
+    setShiftOpen(false)
+  }
 
   const moveImpactLabel = (assignment: Assignment, targetDate: string) => {
     const targetLoad = state.assignments
@@ -356,7 +418,7 @@ function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void;
         <div className="date-switcher"><button className="icon-button" onClick={() => setDate(clampDate(format(new Date(parseISO(date).getTime()-86400000),'yyyy-MM-dd'), state.settings.startDate,state.settings.endDate))}><ChevronLeft size={19}/></button><div><h2>{fmtDate(date, 'M月d日')} · {fmtWeekday(date)}</h2><span className={`day-badge day-${config.type}`}>{dayTypeLabel[config.type]}</span></div><button className="icon-button" onClick={() => setDate(clampDate(format(new Date(parseISO(date).getTime()+86400000),'yyyy-MM-dd'), state.settings.startDate,state.settings.endDate))}><ChevronRight size={19}/></button></div>
         <p>{tasks.length ? `今天有 ${tasks.length} 项任务，预计 ${minutesText(planned)}。` : '今天暂时没有安排任务。'}</p>
       </div>
-      <div className="button-wrap"><button className="secondary-button" onClick={() => onNavigate('calendar')}><CalendarDays size={16}/>打开月历</button>{tasks.some(t=>t.status!=='done'&&!groups.get(t.groupId)?.recurring)&&<button className="secondary-button" onClick={()=>prepareCarryover(date)}>结束今天</button>}</div>
+      <div className="button-wrap"><button className="secondary-button" onClick={() => onNavigate('calendar')}><CalendarDays size={16}/>打开月历</button><button className="secondary-button" onClick={()=>setShiftOpen(true)}>整体顺延</button>{tasks.some(t=>t.status!=='done'&&!groups.get(t.groupId)?.recurring)&&<button className="secondary-button" onClick={()=>prepareCarryover(date)}>结束今天</button>}</div>
     </section>
     <section className="compact-metrics">
       <div><span>预计时间</span><strong>{minutesText(planned)}</strong></div>
@@ -381,6 +443,29 @@ function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void;
       <p className="muted-text">系统给出推荐日期，你可以逐项修改、保留为逾期，或进入重排中心比较完整方案。</p>
       <div className="carryover-list">{tasks.filter(t=>t.status!== 'done'&&!groups.get(t.groupId)?.recurring).map(a=><div key={a.id} className="carryover-row"><div><strong>{a.title}</strong><span>{groups.get(a.groupId)?.subject} · 当前安排 {a.scheduledDate}</span></div><select value={carryDates[a.id]??''} onChange={e=>setCarryDates(prev=>({...prev,[a.id]:e.target.value}))}><option value="">保留在原日并标记逾期</option>{suggestMoveDates(state,a.id,8).filter(d=>d>date).slice(0,5).map(d=><option key={d} value={d}>{moveImpactLabel(a,d)}</option>)}</select></div>)}</div>
       <div className="modal-actions"><button className="secondary-button" onClick={()=>{setEndTodayOpen(false);onReplan(date)}}>比较完整方案</button><button className="primary-button" onClick={()=>{for(const [id,target] of Object.entries(carryDates))if(target)moveAssignments([id],target,'carryover');setEndTodayOpen(false)}}>应用这些选择</button></div>
+    </Modal>
+    <Modal open={shiftOpen} title="整体顺延 · 先看影响再应用" onClose={()=>setShiftOpen(false)} wide>
+      <p className="muted-text">适合“今天完全没时间”的情况。每日重复任务不会移动；你的选择会被记录为手动意图，之后自动重排会优先保留。</p>
+      <div className="replan-controls">
+        <div className="segmented-control">
+          <button className={shiftScope==='today'?'active':''} onClick={()=>setShiftScope('today')}>仅今日未完成</button>
+          <button className={shiftScope==='future'?'active':''} onClick={()=>setShiftScope('future')}>从今天起全部</button>
+        </div>
+        <label className="field compact-field"><span>顺延天数</span><input type="number" min="1" max="14" value={shiftDays} onChange={e=>setShiftDays(Math.max(1,Math.min(14,Number(e.target.value)||1)))}/></label>
+        <label className="lock-choice"><input type="checkbox" checked={shiftLocked} onChange={e=>setShiftLocked(e.target.checked)}/><Lock size={14}/>同时移动已锁定任务</label>
+      </div>
+      <div className="summary-grid replan-summary-grid">
+        <div className="metric-card"><span>将移动</span><strong>{shiftPreview.changes.length}</strong><small>项任务</small></div>
+        <div className="metric-card"><span>锁定未移动</span><strong>{shiftPreview.ignoredLocked}</strong><small>项</small></div>
+        <div className="metric-card"><span>停留截止日</span><strong>{shiftPreview.stayedAtEnd}</strong><small>项</small></div>
+        <div className="metric-card"><span>影响范围</span><strong>{shiftScope==='today'?'当天':'后续全部'}</strong><small>顺延 {shiftDays} 天</small></div>
+      </div>
+      <section className="replan-section">
+        <div className="replan-section-title"><CalendarDays size={18}/><div><h3>变更预览</h3><p>只展示前 16 项；应用后仍可撤销。</p></div></div>
+        <div className="carryover-list">{shiftPreview.changes.slice(0,16).map(change=><div className="carryover-row" key={change.id}><div><strong>{change.title}</strong><span>{change.from} → {change.to}</span></div></div>)}</div>
+      </section>
+      {shiftPreview.issues.length>0&&<section className="replan-section warning-section"><div className="replan-section-title"><Sparkles size={18}/><div><h3>应用后的影响</h3><p>系统只提示后果，不替你取消本次顺延。</p></div></div><div className="warning-list">{shiftPreview.issues.map((issue,index)=><div key={index} className={`warning-item issue-${issue.level}`}>{issue.message}</div>)}</div></section>}
+      <div className="modal-actions"><button className="secondary-button" onClick={()=>setShiftOpen(false)}>取消</button><button className="primary-button" disabled={!shiftPreview.changes.length} onClick={applyShift}>应用整体顺延</button></div>
     </Modal>
   </>
 }

@@ -27,9 +27,10 @@ export function ReplanDialog({
     if (!bundle) return
     setDecisions({})
     setAcceptedDayTypes({})
-    const preferred: ReplanStrategy = currentState.settings.planningMode === 'sprint' ? 'goal' : currentState.settings.planningMode === 'relaxed' ? 'preserve' : 'balanced'
+    const modeDefault: ReplanStrategy = currentState.settings.planningMode === 'sprint' ? 'goal' : currentState.settings.planningMode === 'relaxed' ? 'preserve' : 'balanced'
+    const preferred = request.strategy ?? modeDefault
     setStrategy(bundle.scenarios.some(x => x.strategy === preferred) ? preferred : bundle.scenarios[0]?.strategy ?? 'balanced')
-  }, [bundle?.scenarios[0]?.id, currentState.settings.planningMode])
+  }, [bundle?.scenarios[0]?.id, currentState.settings.planningMode, request.strategy])
 
   const result = bundle?.scenarios.find(x => x.strategy === strategy) ?? bundle?.scenarios[0]
   const editedState = useMemo(() => {
@@ -93,7 +94,7 @@ export function ReplanDialog({
 
     {!result ? <p>正在计算……</p> : <>
       <div className="scenario-tabs">
-        {bundle?.scenarios.map(item => <button key={item.strategy} className={strategy === item.strategy ? 'active' : ''} onClick={() => { setStrategy(item.strategy); setDecisions({}); setAcceptedDayTypes({}) }}>
+        {bundle?.scenarios.map(item => <button key={item.strategy} className={strategy === item.strategy ? 'active' : ''} onClick={() => { setStrategy(item.strategy); onRequestChange({ ...request, strategy: item.strategy }); setDecisions({}); setAcceptedDayTypes({}) }}>
           <strong>{item.title}</strong><span>{item.description}</span>
         </button>)}
       </div>
