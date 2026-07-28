@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import {
-  BarChart3, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Cloud, CloudOff,
+  BarChart3, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Cloud, CloudOff,
   Download, FileDown, Filter, LayoutDashboard, ListTodo, Lock, Menu, Plus, RefreshCw,
   RotateCcw, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X
 } from 'lucide-react'
@@ -18,13 +18,16 @@ import { uid } from './lib/id'
 import { buildBlankState, buildGuestDemoState, normalizeState } from './lib/seed'
 import { loadLocalState } from './lib/db'
 import { Modal } from './components/Modal'
+import { Drawer } from './components/Drawer'
 import { TaskCard } from './components/TaskCard'
 import { ReplanDialog } from './components/ReplanDialog'
 import { TaskGroupDialog } from './components/TaskGroupDialog'
+import { HistoryDiffDialog } from './components/HistoryDiffDialog'
+import { FocusTimerPage, getTimerElapsedSeconds } from './components/FocusTimerPage'
 import { downloadSnapshot, getSession, signIn, signOut, signUp, supabase, supabaseConfigured, uploadSnapshot } from './lib/supabase'
 import './styles.css'
 
-type Page = 'today' | 'calendar' | 'tasks' | 'stats' | 'settings'
+type Page = 'today' | 'calendar' | 'tasks' | 'stats' | 'settings' | 'timer'
 type ShiftScope = 'today' | 'future'
 type CloudSyncStatus = 'local' | 'restoring' | 'saving' | 'saved' | 'error'
 
@@ -219,6 +222,8 @@ export default function App() {
 
   if (!ready || dataSwitching) return <div className="loading-screen"><div className="spinner"/><p>{dataSwitching ? '正在安全切换数据空间……' : '正在载入学习计划……'}</p></div>
 
+  if (page === 'timer') return <FocusTimerPage onExit={() => setPage('today')}/>
+
   return (
     <div className={`app-shell ${state.settings.sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className={`sidebar ${mobileNav ? 'sidebar-mobile-open' : ''}`}>
@@ -239,7 +244,7 @@ export default function App() {
         <header className="topbar">
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)}><Menu size={21}/></button>
           <div className="page-heading"><h1>{navItems.find(n => n.id === page)?.label}</h1><span>{format(new Date(), 'yyyy年M月d日')}</span></div>
-          <div className="topbar-actions"><button className="secondary-button" onClick={() => openReplan()}><RefreshCw size={16}/>重排中心</button></div>
+          <div className="topbar-actions"><ActiveTimerReturnButton onOpen={() => setPage('timer')}/><button className="secondary-button" onClick={() => openReplan()}><RefreshCw size={16}/>重排中心</button></div>
         </header>
         <div className="page-content">
           {page === 'today' && <TodayPage onNavigate={setPage} onReplan={date => openReplan({ mode: 'repair', fromDate: date })}/>} 
@@ -257,7 +262,7 @@ export default function App() {
         onRequestChange={setReplanRequest}
         onRegenerate={() => setReplan(previewReplan(replanRequest, replanBaseState))}
         onClose={() => { setReplanOpen(false); setReplanBaseState(undefined) }}
-        onApply={(result, editedState) => { applyReplan(result, editedState); setReplanOpen(false); setReplanBaseState(undefined) }}
+        onApply={(result, editedState, audit) => { applyReplan(result, editedState, audit); setReplanOpen(false); setReplanBaseState(undefined) }}
       />
       <Modal open={firstLoginOpen} title="欢迎使用 · 选择个人计划起点" onClose={() => {}}>
         <p className="onboarding-copy">云端还没有你的计划。游客演示数据不会上传，也不会包含其他账号的计划。请选择一个独立的个人空间起点。</p>
@@ -268,6 +273,23 @@ export default function App() {
       </Modal>
     </div>
   )
+}
+
+
+function ActiveTimerReturnButton({ onOpen }: { onOpen: () => void }) {
+  const { state } = useApp()
+  const [tick, setTick] = useState(0)
+  const assignment = state.assignments.find(item => item.id === state.timer.assignmentId)
+  useEffect(() => {
+    if (!state.timer.running) return
+    const id = window.setInterval(() => setTick(value => value + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [state.timer.running])
+  void tick
+  if (!assignment) return null
+  const seconds = getTimerElapsedSeconds(state.timer)
+  const elapsed = `${String(Math.floor(seconds / 3600)).padStart(2, '0')}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
+  return <button className={`active-timer-return ${state.timer.running ? 'running' : 'paused'}`} onClick={onOpen}><Clock3 size={16}/><span><strong>{state.timer.running ? '正在计时' : '计时暂停'}</strong><small>{elapsed}</small></span></button>
 }
 
 function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void; onReplan: (date: string) => void }) {
@@ -430,7 +452,7 @@ function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void;
     {state.settings.showWarnings && chemistryPrediction && chemistryPrediction !== '已完成' && chemistryPrediction > state.settings.chemistryTargetDate && <div className="alert danger"><Sparkles size={18}/><div><strong>化学预习存在延期风险</strong><span>当前预计 {fmtDate(chemistryPrediction)} 完成，目标是 {fmtDate(state.settings.chemistryTargetDate)}。</span></div></div>}
     <section className="section-block">
       <div className="section-title"><div><h2>今日任务</h2><p>完成后勾选，可录入精确到 1 分钟的实际用时。</p></div></div>
-      <div className="task-list">{tasks.length ? tasks.map(a => <TaskCard key={a.id} assignment={a} group={groups.get(a.groupId)!} onComplete={openComplete}/>) : <EmptyState title="今天没有任务" text="可以到月历调整计划，或把今天设为休息日。"/>}</div>
+      <div className="task-list">{tasks.length ? tasks.map(a => <TaskCard key={a.id} assignment={a} group={groups.get(a.groupId)!} onComplete={openComplete} onOpenTimer={() => onNavigate('timer')}/>) : <EmptyState title="今天没有任务" text="可以到月历调整计划，或把今天设为休息日。"/>}</div>
     </section>
     <Modal open={Boolean(completeTarget)} title={completeTarget ? `记录：${completeTarget.title}` : '记录任务'} onClose={() => setCompleteTarget(undefined)}>
       <div className="form-stack">
@@ -471,92 +493,304 @@ function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void;
 }
 
 function CalendarPage({ onReplan }: { onReplan: (date: string, baseState?: AppState) => void }) {
-  const { state, updateAssignment, updateDayConfig, moveAssignments } = useApp()
+  const { state, commit, updateAssignment, updateDayConfig, moveAssignments } = useApp()
   const [month, setMonth] = useState(startOfMonth(parseISO(state.settings.startDate)))
   const [dayOpen, setDayOpen] = useState<string>()
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [overflowSelectedIds, setOverflowSelectedIds] = useState<string[]>([])
+  const [overflowPanel, setOverflowPanel] = useState<{ date: string; top: number; left: number }>()
+  const [taskOpenId, setTaskOpenId] = useState<string>()
   const [moveNotice, setMoveNotice] = useState<{ id: string; title: string; date: string }>()
   const [pendingDayType, setPendingDayType] = useState<DayType>()
   const [pendingCustomMinutes, setPendingCustomMinutes] = useState<number>()
-  const groups = useMemo(() => new Map(state.taskGroups.map(g => [g.id, g])), [state.taskGroups])
+  const [dragAssignmentId, setDragAssignmentId] = useState<string>()
+  const [dragTargetDate, setDragTargetDate] = useState<string>()
+  const [calendarTaskLimit, setCalendarTaskLimit] = useState(() => window.innerWidth >= 1400 ? 4 : window.innerWidth >= 900 ? 3 : 2)
+  const longPressTimer = useRef<number>()
+  const groups = useMemo(() => new Map(state.taskGroups.map(group => [group.id, group])), [state.taskGroups])
+
+  useEffect(() => {
+    const updateLimit = () => setCalendarTaskLimit(window.innerWidth >= 1400 ? 4 : window.innerWidth >= 900 ? 3 : 2)
+    window.addEventListener('resize', updateLimit)
+    return () => window.removeEventListener('resize', updateLimit)
+  }, [])
+
+  useEffect(() => {
+    if (!overflowPanel) return
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('.calendar-overflow-panel') || target?.closest('.calendar-more-button')) return
+      setOverflowPanel(undefined)
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer)
+  }, [overflowPanel])
   const monthStart = startOfMonth(month)
   const monthEnd = endOfMonth(month)
-  const days = dateRange(format(monthStart,'yyyy-MM-dd'), format(monthEnd,'yyyy-MM-dd'))
+  const days = dateRange(format(monthStart, 'yyyy-MM-dd'), format(monthEnd, 'yyyy-MM-dd'))
   const blanks = Array.from({ length: getDay(monthStart) })
   const planInterval = { start: parseISO(state.settings.startDate), end: parseISO(state.settings.endDate) }
 
-  const tasksFor = (date: string) => state.assignments.filter(a => a.scheduledDate === date)
-  const loadFor = (date: string) => tasksFor(date).reduce((sum,a) => {
-    const g = groups.get(a.groupId); return sum + ((g?.countInStats || state.settings.countWordsTime) ? effectiveMinutes(a) : 0)
-  },0)
-  const drop = (date: string, e: React.DragEvent) => {
-    e.preventDefault()
-    const id = e.dataTransfer.getData('text/assignment-id')
-    const a = state.assignments.find(x => x.id === id)
-    const g = a && groups.get(a.groupId)
-    if (!a || a.locked || !g) return
-    if (g.dailyMax && state.assignments.filter(x => x.groupId === g.id && x.scheduledDate === date && x.id !== id).length >= g.dailyMax) {
-      window.alert(`“${g.title}”每天最多安排 ${g.dailyMax} 个。`); return
+  const sortTasks = (items: Assignment[]) => [...items].sort((a, b) => {
+    const runningA = state.timer.assignmentId === a.id && state.timer.running ? 1 : 0
+    const runningB = state.timer.assignmentId === b.id && state.timer.running ? 1 : 0
+    if (runningA !== runningB) return runningB - runningA
+    const manualA = a.intentStrength === 'manual' ? 1 : 0
+    const manualB = b.intentStrength === 'manual' ? 1 : 0
+    if (manualA !== manualB) return manualB - manualA
+    if (a.locked !== b.locked) return Number(b.locked) - Number(a.locked)
+    const priorityA = groups.get(a.groupId)?.priority ?? 0
+    const priorityB = groups.get(b.groupId)?.priority ?? 0
+    if (priorityA !== priorityB) return priorityB - priorityA
+    if (a.status === 'done' && b.status !== 'done') return 1
+    if (a.status !== 'done' && b.status === 'done') return -1
+    return effectiveMinutes(b) - effectiveMinutes(a)
+  })
+
+  const tasksFor = (date: string) => sortTasks(state.assignments.filter(assignment => assignment.scheduledDate === date))
+  const countedMinutes = (assignment: Assignment) => {
+    const group = groups.get(assignment.groupId)
+    return group && (group.countInStats || state.settings.countWordsTime) ? effectiveMinutes(assignment) : 0
+  }
+  const loadFor = (date: string) => tasksFor(date).reduce((sum, assignment) => sum + countedMinutes(assignment), 0)
+
+  const moveWithValidation = (assignmentId: string, targetDate: string) => {
+    const assignment = state.assignments.find(item => item.id === assignmentId)
+    const group = assignment && groups.get(assignment.groupId)
+    if (!assignment || !group || assignment.locked || assignment.scheduledDate === targetDate) return false
+    if (targetDate < state.settings.startDate || targetDate > state.settings.endDate) {
+      window.alert('目标日期超出当前计划范围。')
+      return false
     }
-    updateAssignment(id, { scheduledDate: date })
-    setMoveNotice({ id, title: a.title, date })
+    const sameGroupCount = state.assignments.filter(item => item.groupId === group.id && item.scheduledDate === targetDate && item.id !== assignmentId).length
+    if (group.dailyMax && sameGroupCount >= group.dailyMax) {
+      window.alert(`“${group.title}”每天最多安排 ${group.dailyMax} 个。`)
+      return false
+    }
+    const targetLoad = loadFor(targetDate) - (assignment.scheduledDate === targetDate ? countedMinutes(assignment) : 0)
+    const projected = targetLoad + countedMinutes(assignment)
+    const capacity = getCapacity(state, targetDate)
+    const risks: string[] = []
+    if (projected > capacity) risks.push(`将从 ${minutesText(targetLoad)} 增至 ${minutesText(projected)}，超过容量 ${minutesText(projected - capacity)}`)
+    if (targetDate > group.targetDate) risks.push(`会越过目标日期 ${group.targetDate}`)
+    if (targetDate > group.dueDate) risks.push(`会越过最终截止日期 ${group.dueDate}`)
+    if (risks.length && !window.confirm(`移动“${assignment.title}”到 ${targetDate}？\n\n${risks.join('\n')}`)) return false
+    updateAssignment(assignmentId, { scheduledDate: targetDate })
+    setMoveNotice({ id: assignmentId, title: assignment.title, date: targetDate })
+    return true
+  }
+
+  const drop = (date: string, event: React.DragEvent) => {
+    event.preventDefault()
+    const id = event.dataTransfer.getData('text/assignment-id') || dragAssignmentId
+    if (id) moveWithValidation(id, date)
+    setDragAssignmentId(undefined)
+    setDragTargetDate(undefined)
+  }
+
+  const beginDrag = (assignment: Assignment, event: React.DragEvent) => {
+    window.clearTimeout(longPressTimer.current)
+    event.stopPropagation()
+    setDragAssignmentId(assignment.id)
+    event.dataTransfer.setData('text/assignment-id', assignment.id)
+    event.dataTransfer.effectAllowed = 'move'
+  }
+
+  const startLongPress = (assignmentId: string) => {
+    window.clearTimeout(longPressTimer.current)
+    longPressTimer.current = window.setTimeout(() => setTaskOpenId(assignmentId), 350)
+  }
+  const cancelLongPress = () => window.clearTimeout(longPressTimer.current)
+
+  const openOverflow = (date: string, event: React.MouseEvent) => {
+    event.stopPropagation()
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    const width = 380
+    setOverflowSelectedIds([])
+    setOverflowPanel({
+      date,
+      top: Math.max(12, Math.min(window.innerHeight - 470, rect.bottom + 8)),
+      left: Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))
+    })
   }
 
   const dayTasks = dayOpen ? tasksFor(dayOpen) : []
   const dayCfg = dayOpen ? getDayConfig(state, dayOpen) : undefined
-  const bulkMove = () => {
-    const target = window.prompt('输入目标日期（YYYY-MM-DD）')
-    if (!target || !selectedIds.length) return
-    moveAssignments(selectedIds, target)
+  const taskOpen = taskOpenId ? state.assignments.find(item => item.id === taskOpenId) : undefined
+  const taskOpenGroup = taskOpen ? groups.get(taskOpen.groupId) : undefined
+  const overflowTasks = overflowPanel ? tasksFor(overflowPanel.date).slice(calendarTaskLimit) : []
+
+  const bulkMoveTo = (ids: string[], target: string) => {
+    if (!target || !ids.length) return false
+    if (target < state.settings.startDate || target > state.settings.endDate) { window.alert('目标日期超出当前计划范围。'); return false }
+    const moving = state.assignments.filter(item => ids.includes(item.id) && !item.locked)
+    const selectedByGroup = new Map<string, number>()
+    for (const assignment of moving) selectedByGroup.set(assignment.groupId, (selectedByGroup.get(assignment.groupId) ?? 0) + 1)
+    for (const [groupId, selectedCount] of selectedByGroup) {
+      const group = groups.get(groupId)
+      if (!group?.dailyMax) continue
+      const existing = state.assignments.filter(item => item.groupId === groupId && item.scheduledDate === target && !ids.includes(item.id)).length
+      if (existing + selectedCount > group.dailyMax) { window.alert(`“${group.title}”每天最多安排 ${group.dailyMax} 个。`); return false }
+    }
+    const projected = loadFor(target) + moving.reduce((sum, assignment) => sum + (assignment.scheduledDate === target ? 0 : countedMinutes(assignment)), 0)
+    const capacity = getCapacity(state, target)
+    const lateTitles = moving.filter(assignment => { const group = groups.get(assignment.groupId); return Boolean(group && target > group.targetDate) }).map(assignment => assignment.title)
+    const risks: string[] = []
+    if (projected > capacity) risks.push(`预计 ${minutesText(projected)}，超过容量 ${minutesText(projected - capacity)}`)
+    if (lateTitles.length) risks.push(`${lateTitles.length} 项会越过目标日期`)
+    if (risks.length && !window.confirm(`批量移动到 ${target}？\n\n${risks.join('\n')}`)) return false
+    moveAssignments(ids, target)
     setSelectedIds([])
+    setOverflowSelectedIds([])
+    return true
+  }
+
+  const bulkMove = (ids = selectedIds) => {
+    const target = window.prompt('输入目标日期（YYYY-MM-DD）')
+    if (target) bulkMoveTo(ids, target)
+  }
+
+  const shiftOverflowSelected = () => {
+    if (!overflowSelectedIds.length || !overflowPanel) return
+    const target = shiftDate(overflowPanel.date, 1)
+    if (target > state.settings.endDate) { window.alert('这些任务已经在计划最后一天，无法继续顺延。'); return }
+    bulkMoveTo(overflowSelectedIds, target)
+  }
+
+  const lockOverflowSelected = () => {
+    if (!overflowSelectedIds.length) return
+    commit(draft => {
+      for (const assignment of draft.assignments) {
+        if (!overflowSelectedIds.includes(assignment.id)) continue
+        assignment.locked = true
+        assignment.intentStrength = 'locked'
+      }
+    })
+    setOverflowSelectedIds([])
+  }
+
+  let dayPreviewState: AppState | undefined
+  if (dayOpen && dayCfg) {
+    dayPreviewState = structuredClone(state)
+    const type = pendingDayType ?? dayCfg.type
+    dayPreviewState.dayConfigs[dayOpen] = {
+      ...dayCfg,
+      date: dayOpen,
+      type,
+      customMinutes: type === 'custom' ? pendingCustomMinutes ?? dayCfg.customMinutes ?? state.settings.regularMinutes : undefined,
+      userSet: true
+    }
   }
 
   return <>
-    <section className="calendar-toolbar"><div><h2>{format(month,'yyyy年M月')}</h2><p>拖拽任务可改期；点击日期可调整日类型与批量移动。</p></div><div><button className="icon-button" onClick={() => setMonth(addMonths(month,-1))}><ChevronLeft size={19}/></button><button className="secondary-button" onClick={() => setMonth(startOfMonth(parseISO(state.settings.startDate)))}>计划开始</button><button className="icon-button" onClick={() => setMonth(addMonths(month,1))}><ChevronRight size={19}/></button></div></section>
-    {moveNotice && <div className="manual-move-notice"><div><strong>已记录你的手动安排</strong><span>「{moveNotice.title}」已移到 {moveNotice.date}，自动重排会优先保留，也不会近期拉回原日期。</span></div><div className="button-wrap"><button className="secondary-button" onClick={()=>{updateAssignment(moveNotice.id,{locked:true});setMoveNotice(undefined)}}><Lock size={15}/>同时锁定</button><button className="text-button" onClick={()=>setMoveNotice(undefined)}>知道了</button></div></div>}
+    <section className="calendar-toolbar"><div><h2>{format(month, 'yyyy年M月')}</h2><p>拖拽任务可改期；点击日期管理全天，点击“+N 项”只展开被折叠任务。</p></div><div><button className="icon-button" onClick={() => setMonth(addMonths(month, -1))}><ChevronLeft size={19}/></button><button className="secondary-button" onClick={() => setMonth(startOfMonth(parseISO(state.settings.startDate)))}>计划开始</button><button className="icon-button" onClick={() => setMonth(addMonths(month, 1))}><ChevronRight size={19}/></button></div></section>
+    {moveNotice && <div className="manual-move-notice"><div><strong>已记录你的手动安排</strong><span>「{moveNotice.title}」已移到 {moveNotice.date}，自动重排会优先保留，也不会近期拉回原日期。</span></div><div className="button-wrap"><button className="secondary-button" onClick={() => { updateAssignment(moveNotice.id, { locked: true }); setMoveNotice(undefined) }}><Lock size={15}/>同时锁定</button><button className="text-button" onClick={() => setMoveNotice(undefined)}>知道了</button></div></div>}
     <section className="calendar-card">
-      <div className="weekday-row">{['日','一','二','三','四','五','六'].map(x => <div key={x}>周{x}</div>)}</div>
+      <div className="weekday-row">{['日', '一', '二', '三', '四', '五', '六'].map(label => <div key={label}>周{label}</div>)}</div>
       <div className="calendar-grid">
-        {blanks.map((_,i)=><div className="calendar-cell outside" key={`b${i}`}/>)}
+        {blanks.map((_, index) => <div className="calendar-cell outside" key={`b${index}`}/>)}
         {days.map(date => {
           const inPlan = isWithinInterval(parseISO(date), planInterval)
           const tasks = tasksFor(date)
+          const visibleTasks = tasks.slice(0, calendarTaskLimit)
           const load = loadFor(date)
-          const cap = inPlan ? getCapacity(state,date) : 0
-          const ratio = cap ? load/cap : 0
-          const cfg = inPlan ? getDayConfig(state,date) : undefined
-          return <div key={date} className={`calendar-cell ${!inPlan?'outside':''} ${cfg?`day-${cfg.type}`:''} ${ratio>1?'load-over':ratio>.8?'load-near':''}`} onDragOver={e=>e.preventDefault()} onDrop={e=>drop(date,e)} onClick={() => { if (!inPlan) return; setDayOpen(date); const current=getDayConfig(state,date); setPendingDayType(current.type); setPendingCustomMinutes(current.customMinutes) }}>
-            <div className="calendar-date"><span>{Number(date.slice(-2))}</span>{cfg && <small>{dayTypeLabel[cfg.type]}</small>}</div>
-            {inPlan && <div className="load-line"><i style={{width:`${Math.min(100,ratio*100)}%`}}/></div>}
-            <div className="calendar-tasks">{tasks.slice(0,3).map(a => <div key={a.id} draggable={!a.locked} onDragStart={e=>{e.stopPropagation();e.dataTransfer.setData('text/assignment-id',a.id)}} onClick={e=>e.stopPropagation()} className={a.status==='done'?'mini-done':''}><span className={`subject-dot subject-${groups.get(a.groupId)?.subject}`}/>{a.title}</div>)}{tasks.length>3&&<small>+{tasks.length-3} 项</small>}</div>
-            {inPlan && <footer>{minutesText(load)} / {minutesText(cap)}</footer>}
+          const capacity = inPlan ? getCapacity(state, date) : 0
+          const ratio = capacity ? load / capacity : 0
+          const config = inPlan ? getDayConfig(state, date) : undefined
+          const dragged = dragAssignmentId ? state.assignments.find(item => item.id === dragAssignmentId) : undefined
+          const projected = dragged ? load + (dragged.scheduledDate === date ? 0 : countedMinutes(dragged)) : load
+          return <div
+            key={date}
+            className={`calendar-cell ${!inPlan ? 'outside' : ''} ${config ? `day-${config.type}` : ''} ${ratio > 1 ? 'load-over' : ratio > .8 ? 'load-near' : ''} ${dragTargetDate === date ? 'calendar-drag-target' : ''}`}
+            onDragOver={event => { if (!inPlan) return; event.preventDefault(); setDragTargetDate(date) }}
+            onDrop={event => inPlan && drop(date, event)}
+            onClick={() => {
+              if (!inPlan) return
+              setDayOpen(date)
+              const current = getDayConfig(state, date)
+              setPendingDayType(current.type)
+              setPendingCustomMinutes(current.customMinutes)
+            }}
+          >
+            <div className="calendar-date"><span>{Number(date.slice(-2))}</span>{config && <small>{dayTypeLabel[config.type]}</small>}</div>
+            {inPlan && <div className="load-line"><i style={{ width: `${Math.min(100, ratio * 100)}%` }}/></div>}
+            <div className="calendar-tasks">
+              {visibleTasks.map(assignment => <div
+                key={assignment.id}
+                draggable={!assignment.locked}
+                onDragStart={event => beginDrag(assignment, event)}
+                onDragEnd={() => { setDragAssignmentId(undefined); setDragTargetDate(undefined) }}
+                onPointerDown={() => startLongPress(assignment.id)}
+                onPointerUp={cancelLongPress}
+                onPointerCancel={cancelLongPress}
+                onPointerMove={cancelLongPress}
+                onClick={event => { event.stopPropagation(); setTaskOpenId(assignment.id) }}
+                className={assignment.status === 'done' ? 'mini-done' : ''}
+              ><span className={`subject-dot subject-${groups.get(assignment.groupId)?.subject}`}/><span>{assignment.title}</span><em>{minutesText(assignment.estimatedMinutes)}</em></div>)}
+              {tasks.length > calendarTaskLimit && <button className="calendar-more-button" onClick={event => openOverflow(date, event)}>+{tasks.length - calendarTaskLimit} 项</button>}
+            </div>
+            {dragTargetDate === date && dragged && <div className={`calendar-drop-preview ${projected > capacity ? 'over' : ''}`}><strong>放入后 {minutesText(projected)}</strong><span>{projected > capacity ? `超载 ${minutesText(projected - capacity)}` : `剩余 ${minutesText(capacity - projected)}`}</span></div>}
+            {inPlan && <footer>{minutesText(load)} / {minutesText(capacity)}</footer>}
           </div>
         })}
       </div>
     </section>
-    <Modal open={Boolean(dayOpen)} title={dayOpen ? `${fmtDate(dayOpen)} · ${fmtWeekday(dayOpen)}` : '日期'} onClose={() => {setDayOpen(undefined);setSelectedIds([]);setPendingDayType(undefined);setPendingCustomMinutes(undefined)}} wide>
-      {dayOpen && dayCfg && <>
-        <div className="day-settings-row">
-          <label className="field"><span>日期类型</span><select value={pendingDayType ?? dayCfg.type} onChange={e => setPendingDayType(e.target.value as DayType)}>{(['regular','study','travel','custom'] as DayType[]).map(t=><option key={t} value={t}>{dayTypeLabel[t]}</option>)}</select></label>
-          {(pendingDayType ?? dayCfg.type)==='custom'&&<label className="field"><span>可用分钟</span><input type="number" value={pendingCustomMinutes??dayCfg.customMinutes??210} onChange={e=>setPendingCustomMinutes(Number(e.target.value))}/></label>}
-          <label className="field grow"><span>备注</span><input value={dayCfg.note??''} onChange={e=>updateDayConfig(dayOpen,{note:e.target.value})} placeholder="例如：外出、下午补课"/></label>
+
+    {overflowPanel && <div className="calendar-overflow-backdrop" onMouseDown={() => setOverflowPanel(undefined)}>
+      <section className="calendar-overflow-panel" style={{ top: overflowPanel.top, left: overflowPanel.left }} onMouseDown={event => event.stopPropagation()}>
+        <header><div><strong>{fmtDate(overflowPanel.date)} · 其余 {overflowTasks.length} 项</strong><span>这些是日期格中未显示的任务，可直接拖到月历其他日期。</span></div><button className="icon-button" onClick={() => setOverflowPanel(undefined)}><X size={18}/></button></header>
+        <div className="overflow-bulk-bar"><span>已选择 {overflowSelectedIds.length} 项</span><div className="button-wrap"><button className="secondary-button" disabled={!overflowSelectedIds.length} onClick={() => bulkMove(overflowSelectedIds)}>批量移动</button><button className="secondary-button" disabled={!overflowSelectedIds.length} onClick={shiftOverflowSelected}>顺延一天</button><button className="secondary-button" disabled={!overflowSelectedIds.length} onClick={lockOverflowSelected}>锁定</button></div></div>
+        <div className="overflow-task-list">
+          {overflowTasks.length === 0 && <p className="muted-text">折叠任务已经全部移走或不再需要折叠。</p>}
+          {overflowTasks.map(assignment => <div
+            className="overflow-task-row"
+            key={assignment.id}
+            draggable={!assignment.locked}
+            onDragStart={event => beginDrag(assignment, event)}
+            onDragEnd={() => { setDragAssignmentId(undefined); setDragTargetDate(undefined) }}
+            onPointerDown={() => startLongPress(assignment.id)}
+            onPointerUp={cancelLongPress}
+            onPointerCancel={cancelLongPress}
+            onPointerMove={cancelLongPress}
+          >
+            <input type="checkbox" checked={overflowSelectedIds.includes(assignment.id)} onChange={event => setOverflowSelectedIds(previous => event.target.checked ? [...previous, assignment.id] : previous.filter(id => id !== assignment.id))}/>
+            <button className="overflow-task-content" onClick={() => setTaskOpenId(assignment.id)}><span className={`subject-dot subject-${groups.get(assignment.groupId)?.subject}`}/><div><strong>{assignment.title}</strong><span>{groups.get(assignment.groupId)?.subject} · {minutesText(assignment.estimatedMinutes)}</span></div></button>
+            {assignment.locked ? <small>已锁定</small> : <button className="text-button" onClick={() => setTaskOpenId(assignment.id)}>移动</button>}
+          </div>)}
         </div>
-        <div className="day-load-summary"><span>预计 {minutesText(loadFor(dayOpen))}</span><span>容量 {minutesText(getCapacity(state,dayOpen))}</span><span>{dayTasks.filter(t=>t.status==='done').length}/{dayTasks.length} 已完成</span></div>
+      </section>
+    </div>}
+
+    <Modal open={Boolean(dayOpen)} title={dayOpen ? `${fmtDate(dayOpen)} · ${fmtWeekday(dayOpen)}` : '日期'} onClose={() => { setDayOpen(undefined); setSelectedIds([]); setPendingDayType(undefined); setPendingCustomMinutes(undefined) }} wide>
+      {dayOpen && dayCfg && dayPreviewState && <>
+        <div className="day-settings-row">
+          <label className="field"><span>日期类型</span><select value={pendingDayType ?? dayCfg.type} onChange={event => setPendingDayType(event.target.value as DayType)}>{(['regular', 'study', 'travel', 'custom'] as DayType[]).map(type => <option key={type} value={type}>{dayTypeLabel[type]}</option>)}</select></label>
+          {(pendingDayType ?? dayCfg.type) === 'custom' && <label className="field"><span>可用分钟</span><input type="number" value={pendingCustomMinutes ?? dayCfg.customMinutes ?? 210} onChange={event => setPendingCustomMinutes(Number(event.target.value))}/></label>}
+          <label className="field grow"><span>备注</span><input value={dayCfg.note ?? ''} onChange={event => updateDayConfig(dayOpen, { note: event.target.value })} placeholder="例如：外出、下午补课"/></label>
+        </div>
+        <div className="day-load-summary day-load-live"><span>预计 {minutesText(loadFor(dayOpen))}</span><span>容量 {minutesText(getCapacity(state, dayOpen))} → {minutesText(getCapacity(dayPreviewState, dayOpen))}</span><span>{dayTasks.filter(task => task.status === 'done').length}/{dayTasks.length} 已完成</span><em className={loadFor(dayOpen) > getCapacity(dayPreviewState, dayOpen) ? 'over' : ''}>{loadFor(dayOpen) > getCapacity(dayPreviewState, dayOpen) ? `调整后超载 ${minutesText(loadFor(dayOpen) - getCapacity(dayPreviewState, dayOpen))}` : `调整后剩余 ${minutesText(getCapacity(dayPreviewState, dayOpen) - loadFor(dayOpen))}`}</em></div>
         <div className="bulk-row"><span>已选择 {selectedIds.length} 项</span><div className="button-wrap">
-          {(pendingDayType??dayCfg.type)!==dayCfg.type || ((pendingDayType??dayCfg.type)==='custom' && pendingCustomMinutes!==dayCfg.customMinutes) ? <button className="primary-button" onClick={()=>{
-            const next=structuredClone(state)
-            next.dayConfigs[dayOpen]={...dayCfg,date:dayOpen,type:pendingDayType??dayCfg.type,customMinutes:(pendingDayType??dayCfg.type)==='custom'?(pendingCustomMinutes??dayCfg.customMinutes??state.settings.regularMinutes):undefined,userSet:true}
-            const ordinary=next.assignments.filter(a=>a.scheduledDate===dayOpen&&a.status!=='done'&&!groups.get(a.groupId)?.recurring)
-            const newCapacity=getCapacity(next,dayOpen)
-            const newLoad=ordinary.reduce((sum,a)=>sum+((groups.get(a.groupId)?.countInStats||next.settings.countWordsTime)?effectiveMinutes(a):0),0)
-            if(ordinary.length && ((pendingDayType??dayCfg.type)==='travel' || newLoad>newCapacity)) onReplan(dayOpen,next)
-            else updateDayConfig(dayOpen,next.dayConfigs[dayOpen])
-          }}>预览并应用日期类型</button> : <button className="secondary-button" onClick={()=>onReplan(dayOpen)}>预览局部修复</button>}
-          <button className="secondary-button" disabled={!selectedIds.length} onClick={bulkMove}>批量移动</button>
+          {(pendingDayType ?? dayCfg.type) !== dayCfg.type || ((pendingDayType ?? dayCfg.type) === 'custom' && pendingCustomMinutes !== dayCfg.customMinutes) ? <button className="primary-button" onClick={() => {
+            const ordinary = dayPreviewState!.assignments.filter(assignment => assignment.scheduledDate === dayOpen && assignment.status !== 'done' && !groups.get(assignment.groupId)?.recurring)
+            const newCapacity = getCapacity(dayPreviewState!, dayOpen)
+            const newLoad = ordinary.reduce((sum, assignment) => sum + countedMinutes(assignment), 0)
+            if (ordinary.length && ((pendingDayType ?? dayCfg.type) === 'travel' || newLoad > newCapacity)) onReplan(dayOpen, dayPreviewState)
+            else updateDayConfig(dayOpen, dayPreviewState!.dayConfigs[dayOpen])
+          }}>预览并应用日期类型</button> : <button className="secondary-button" onClick={() => onReplan(dayOpen)}>预览局部修复</button>}
+          <button className="secondary-button" disabled={!selectedIds.length} onClick={() => bulkMove()}>批量移动</button>
         </div></div>
-        <div className="day-task-list">{dayTasks.map(a => <label key={a.id} className="select-task-row"><input type="checkbox" checked={selectedIds.includes(a.id)} onChange={e=>setSelectedIds(prev=>e.target.checked?[...prev,a.id]:prev.filter(x=>x!==a.id))}/><div><strong>{a.title}</strong><span>{groups.get(a.groupId)?.subject} · {minutesText(a.estimatedMinutes)}</span></div>{a.locked&&<small>已锁定</small>}</label>)}</div>
+        <div className="day-task-list">{dayTasks.map(assignment => <label key={assignment.id} className="select-task-row"><input type="checkbox" checked={selectedIds.includes(assignment.id)} onChange={event => setSelectedIds(previous => event.target.checked ? [...previous, assignment.id] : previous.filter(id => id !== assignment.id))}/><button className="select-task-content" onClick={event => { event.preventDefault(); setTaskOpenId(assignment.id) }}><strong>{assignment.title}</strong><span>{groups.get(assignment.groupId)?.subject} · {minutesText(assignment.estimatedMinutes)}</span></button>{assignment.locked && <small>已锁定</small>}</label>)}</div>
       </>}
     </Modal>
+
+    <Drawer open={Boolean(taskOpen)} title={taskOpen?.title ?? '任务详情'} subtitle={taskOpenGroup ? `${taskOpenGroup.subject} · 优先级 ${taskOpenGroup.priority}` : undefined} onClose={() => setTaskOpenId(undefined)}>
+      {taskOpen && taskOpenGroup && <div className="task-quick-editor">
+        <div className="task-detail-metrics"><div><span>预计时间</span><strong>{minutesText(taskOpen.estimatedMinutes)}</strong></div><div><span>状态</span><strong>{taskOpen.status === 'done' ? '已完成' : taskOpen.status === 'partial' ? '部分完成' : '待完成'}</strong></div><div><span>排期来源</span><strong>{taskOpen.intentStrength === 'manual' ? '用户手动' : taskOpen.scheduleSource}</strong></div></div>
+        <label className="field"><span>移动到</span><input type="date" min={state.settings.startDate} max={state.settings.endDate} value={taskOpen.scheduledDate ?? ''} onChange={event => moveWithValidation(taskOpen.id, event.target.value)}/></label>
+        <label className="switch-row"><button type="button" className={`switch ${taskOpen.locked ? 'on' : ''}`} onClick={() => updateAssignment(taskOpen.id, { locked: !taskOpen.locked })}><i/></button><span>锁定任务，自动重排不得移动</span></label>
+        <div className="task-impact-note"><strong>目标日期 {taskOpenGroup.targetDate}</strong><span>最终截止 {taskOpenGroup.dueDate}。移动出现超载或越过目标时，系统会先说明后果。</span></div>
+      </div>}
+    </Drawer>
   </>
 }
 
@@ -651,6 +885,7 @@ function SettingsPage({ sessionEmail, cloudMessage }: { sessionEmail?: string; c
   const [email,setEmail]=useState('')
   const [password,setPassword]=useState('')
   const [authMessage,setAuthMessage]=useState('')
+  const [historyEntry,setHistoryEntry]=useState<AppState['replanHistory'][number]>()
   const fileRef=useRef<HTMLInputElement>(null)
 
   const exportJson=()=>downloadBlob(JSON.stringify(state,null,2),`study-plan-${todayISO()}.json`,'application/json')
@@ -696,7 +931,7 @@ function SettingsPage({ sessionEmail, cloudMessage }: { sessionEmail?: string; c
       <div className="toggle-grid"><Toggle checked={state.settings.countWordsTime} onChange={v=>updateSettings({countWordsTime:v})} label="把每日单词计入计划与统计时间"/><Toggle checked={state.settings.showWarnings} onChange={v=>updateSettings({showWarnings:v})} label="显示黄色和红色进度提醒"/><Toggle checked={state.settings.optionalReview} onChange={v=>updateSettings({optionalReview:v})} label="显示可选每日复盘入口"/><Toggle checked={state.settings.keepOfflineOnLogout} onChange={v=>updateSettings({keepOfflineOnLogout:v})} label="退出登录后在此设备保留个人离线缓存"/></div>
     </SettingsSection>
     <SettingsSection title="重排历史" description="每次应用重排都会保存一个快照，最多保留最近 10 次。恢复旧版本本身仍可撤销。">
-      <div className="history-list">{state.replanHistory.length? [...state.replanHistory].reverse().map(entry=><div className="history-row" key={entry.id}><div><strong>{entry.label}</strong><span>{new Date(entry.createdAt).toLocaleString()} · 移动 {entry.moveCount} 项</span></div><button className="secondary-button" onClick={()=>window.confirm('恢复到这个重排前版本？')&&restoreReplanHistory(entry.id)}>恢复</button></div>):<p className="muted-text">还没有重排历史。</p>}</div>
+      <div className="history-list">{state.replanHistory.length? [...state.replanHistory].reverse().map(entry=><div className="history-row" key={entry.id}><div><strong>{entry.label}</strong><span>{new Date(entry.createdAt).toLocaleString()} · 移动 {entry.moveCount} 项</span>{entry.audit&&<div className="history-audit-summary"><span>人工决策 {entry.audit.decisions.length}</span><span>日期调整 {entry.audit.dayTypes.length}</span></div>}</div><div className="button-wrap">{entry.afterSnapshot&&<button className="secondary-button" onClick={()=>setHistoryEntry(entry)}>查看差异</button>}<button className="secondary-button" onClick={()=>window.confirm('恢复到这个重排前版本？')&&restoreReplanHistory(entry.id)}>恢复</button></div></div>):<p className="muted-text">还没有重排历史。</p>}</div>
     </SettingsSection>
     <SettingsSection title="数据与恢复" description={`当前数据空间：${namespace==='guest'?'游客演示':sessionEmail??'个人账号'}。JSON 备份可能包含个人计划，请妥善保管。`}>
       <div className="button-wrap"><button className="secondary-button" onClick={exportJson}><Download size={16}/>导出 JSON</button><button className="secondary-button" onClick={exportCsv}><FileDown size={16}/>导出 CSV</button><button className="secondary-button" onClick={()=>window.print()}><FileDown size={16}/>打印 / 导出 PDF</button><button className="secondary-button" onClick={()=>fileRef.current?.click()}><Upload size={16}/>导入 JSON</button><input ref={fileRef} type="file" accept="application/json" hidden onChange={e=>e.target.files?.[0]&&importJson(e.target.files[0])}/><button className="secondary-button" disabled={!canUndo} onClick={undo}><RotateCcw size={16}/>恢复上一步</button>{namespace==='guest'&&<button className="secondary-button" onClick={()=>window.confirm('恢复默认演示数据？')&&resetAll('demo')}>恢复演示数据</button>}<button className="danger-button" onClick={()=>window.confirm('确认重置当前数据空间？请先导出备份。')&&resetAll(namespace==='guest'?'demo':'blank')}><Trash2 size={16}/>重置计划</button></div>
@@ -709,6 +944,7 @@ function SettingsPage({ sessionEmail, cloudMessage }: { sessionEmail?: string; c
     <SettingsSection title="DeepSeek API" description="当前仍只预留扩展位置，不把 AI 作为排期核心依赖。">
       <div className="reserved-card"><Sparkles size={21}/><div><strong>AI 功能暂未启用</strong><p>后续可通过服务端代理加入自然语言录入、周总结与复杂解释。核心排期保持离线可用和可解释。</p></div></div>
     </SettingsSection>
+    <HistoryDiffDialog entry={historyEntry} onClose={()=>setHistoryEntry(undefined)}/>
   </div>
 }
 

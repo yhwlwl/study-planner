@@ -1,9 +1,9 @@
 declare namespace JSX { interface IntrinsicAttributes { key?: any } interface IntrinsicElements { [elemName: string]: any } }
-declare namespace React { type ReactNode = any; interface DragEvent<T = any> { preventDefault(): void; stopPropagation(): void; dataTransfer: any; target: T; currentTarget: T } }
+declare namespace React { type ReactNode = any; interface DragEvent<T = any> { preventDefault(): void; stopPropagation(): void; dataTransfer: any; target: T; currentTarget: T } interface MouseEvent<T = any> { preventDefault(): void; stopPropagation(): void; target: T; currentTarget: T } }
 declare module 'react' {
   export type ReactNode = any
   export const StrictMode: any
-  export type DragEvent<T = any> = React.DragEvent<T>
+  export type DragEvent<T = any> = React.DragEvent<T>; export type MouseEvent<T = any> = React.MouseEvent<T>
   export function useState<T>(): [T | undefined, (value: T | undefined | ((prev: T | undefined) => T | undefined)) => void]
   export function useState<T>(initial: T | (() => T)): [T, (value: T | ((prev: T) => T)) => void]
   export function useEffect(effect: () => void | (() => void), deps?: readonly any[]): void
@@ -23,7 +23,7 @@ declare module '@supabase/supabase-js' {
   export function createClient(url: string, key: string): any
 }
 declare module 'lucide-react' {
-  export const AlertTriangle:any; export const BarChart3:any; export const CalendarClock:any; export const CalendarDays:any; export const Check:any; export const CheckCircle2:any; export const ChevronLeft:any; export const ChevronRight:any; export const Clock3:any; export const Cloud:any; export const CloudOff:any; export const Download:any; export const FileDown:any; export const Filter:any; export const LayoutDashboard:any; export const ListTodo:any; export const Lock:any; export const Menu:any; export const Pause:any; export const Play:any; export const Plus:any; export const RefreshCw:any; export const RotateCcw:any; export const Search:any; export const Settings:any; export const SlidersHorizontal:any; export const Sparkles:any; export const Trash2:any; export const Unlock:any; export const Upload:any; export const X:any
+  export const AlertTriangle:any; export const ChevronDown:any; export const ChevronUp:any; export const Undo2:any; export const BarChart3:any; export const CalendarClock:any; export const CalendarDays:any; export const Check:any; export const CheckCircle2:any; export const ChevronLeft:any; export const ChevronRight:any; export const Clock3:any; export const Cloud:any; export const CloudOff:any; export const Download:any; export const FileDown:any; export const Filter:any; export const LayoutDashboard:any; export const ListTodo:any; export const Lock:any; export const Menu:any; export const Pause:any; export const Play:any; export const Plus:any; export const RefreshCw:any; export const RotateCcw:any; export const Search:any; export const Settings:any; export const SlidersHorizontal:any; export const Sparkles:any; export const Trash2:any; export const Unlock:any; export const Upload:any; export const X:any
 }
 declare module 'recharts' { export const Bar:any; export const BarChart:any; export const CartesianGrid:any; export const Legend:any; export const Line:any; export const LineChart:any; export const Pie:any; export const PieChart:any; export const Cell:any; export const ResponsiveContainer:any; export const Tooltip:any; export const XAxis:any; export const YAxis:any }
 declare module 'date-fns' {

@@ -1,14 +1,15 @@
-import { Check, ChevronLeft, ChevronRight, Clock3, Lock, Pause, Play, RotateCcw, Unlock } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight, Clock3, Lock, Play, RotateCcw, Unlock } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { Assignment, TaskGroup } from '../types'
 import { minutesText, shiftDate } from '../lib/date'
 import { useApp } from '../AppContext'
 
-export function TaskCard({ assignment, group, onComplete, compact = false }: { assignment: Assignment; group: TaskGroup; onComplete: (assignment: Assignment) => void; compact?: boolean }) {
-  const { state, updateAssignment, startTimer, pauseTimer, stopTimer, addTime } = useApp()
+export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact = false }: { assignment: Assignment; group: TaskGroup; onComplete: (assignment: Assignment) => void; onOpenTimer: (assignment: Assignment) => void; compact?: boolean }) {
+  const { state, updateAssignment, startTimer } = useApp()
   const [tick, setTick] = useState(0)
   const timer = state.timer
   const active = timer.assignmentId === assignment.id
+  const anotherTimerActive = Boolean(timer.assignmentId && !active)
   useEffect(() => {
     if (!active || !timer.running) return
     const id = window.setInterval(() => setTick(x => x + 1), 1000)
@@ -25,11 +26,6 @@ export function TaskCard({ assignment, group, onComplete, compact = false }: { a
   const move = (delta: -1 | 1) => {
     if (!assignment.scheduledDate) return
     updateAssignment(assignment.id, { scheduledDate: shiftDate(assignment.scheduledDate, delta) })
-  }
-
-  const finishTimer = () => {
-    const minutes = stopTimer()
-    addTime(assignment.id, minutes)
   }
 
   return (
@@ -49,8 +45,11 @@ export function TaskCard({ assignment, group, onComplete, compact = false }: { a
         {active && <div className="timer-strip"><Clock3 size={15}/><span>{String(Math.floor(elapsed / 3600)).padStart(2,'0')}:{String(Math.floor(elapsed % 3600 / 60)).padStart(2,'0')}:{String(elapsed % 60).padStart(2,'0')}</span></div>}
       </div>
       {!compact && <div className="task-actions">
-        {assignment.status !== 'done' && (!active ? <button className="text-button" onClick={() => startTimer(assignment.id)}><Play size={15}/>计时</button> : timer.running ? <button className="text-button" onClick={pauseTimer}><Pause size={15}/>暂停</button> : <button className="text-button" onClick={() => startTimer(assignment.id)}><Play size={15}/>继续</button>)}
-        {active && <button className="text-button" onClick={finishTimer}><Clock3 size={15}/>记入</button>}
+        {assignment.status !== 'done' && (active
+          ? <button className="text-button timer-start-button" onClick={() => onOpenTimer(assignment)}><Clock3 size={15}/>返回计时</button>
+          : anotherTimerActive
+            ? <button className="text-button timer-start-button" onClick={() => onOpenTimer(assignment)} title="请先结束当前任务的计时"><Clock3 size={15}/>查看当前计时</button>
+            : <button className="text-button timer-start-button" onClick={() => { startTimer(assignment.id); onOpenTimer(assignment) }}><Play size={15}/>开始计时</button>)}
         <button className="icon-button subtle" onClick={() => move(-1)} disabled={!assignment.scheduledDate || assignment.locked}><ChevronLeft size={17}/></button>
         <button className="icon-button subtle" onClick={() => move(1)} disabled={!assignment.scheduledDate || assignment.locked}><ChevronRight size={17}/></button>
         <button className="icon-button subtle" onClick={() => updateAssignment(assignment.id, { locked: !assignment.locked })}>{assignment.locked ? <Lock size={16}/> : <Unlock size={16}/>}</button>

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type {
-  AppSettings, AppState, Assignment, DayConfig, ReplanBundle, ReplanRequest,
+  AppSettings, AppState, Assignment, DayConfig, ReplanAudit, ReplanBundle, ReplanHistoryEntry, ReplanRequest,
   ReplanResult, TaskGroup
 } from './types'
 import {
@@ -35,7 +35,7 @@ interface AppContextValue {
   editTaskGroup: (group: TaskGroup) => void
   deleteTaskGroup: (id: string) => void
   previewReplan: (request?: Partial<ReplanRequest>, baseState?: AppState) => ReplanBundle
-  applyReplan: (result: ReplanResult, editedState?: AppState) => void
+  applyReplan: (result: ReplanResult, editedState?: AppState, audit?: ReplanAudit) => void
   restoreReplanHistory: (id: string) => void
   startTimer: (assignmentId: string) => void
   pauseTimer: () => void
@@ -238,9 +238,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  const applyReplan = useCallback((result: ReplanResult, editedState?: AppState) => setState(prev => {
+  const applyReplan = useCallback((result: ReplanResult, editedState?: AppState, audit?: ReplanAudit) => setState(prev => {
     history.current = [...history.current.slice(-29), structuredClone(prev)]
-    const entry = {
+    const entry: ReplanHistoryEntry = {
       id: uid('history'),
       createdAt: new Date().toISOString(),
       label: `${result.request.mode === 'repair' ? '局部修复' : '全面重排'} · ${result.title}`,
@@ -249,6 +249,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       snapshot: JSON.stringify(withoutNestedHistory(prev))
     }
     const next = normalizeState(editedState ?? result.nextState)
+    entry.afterSnapshot = JSON.stringify(withoutNestedHistory(next))
+    entry.audit = audit
     next.replanHistory = [...(prev.replanHistory ?? []), entry].slice(-10)
     next.updatedAt = new Date().toISOString()
     return next

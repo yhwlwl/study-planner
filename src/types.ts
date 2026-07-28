@@ -99,6 +99,26 @@ export interface TimerState {
   running: boolean
 }
 
+export interface ReplanAuditDecision {
+  assignmentId: string
+  mode: 'accept' | 'keep' | 'custom'
+  date?: string
+  lock?: boolean
+  previewFixed?: boolean
+}
+
+export interface ReplanAuditDayType {
+  date: string
+  type: DayType
+  customMinutes?: number
+}
+
+export interface ReplanAudit {
+  strategy: ReplanStrategy
+  decisions: ReplanAuditDecision[]
+  dayTypes: ReplanAuditDayType[]
+}
+
 export interface ReplanHistoryEntry {
   id: string
   createdAt: string
@@ -106,6 +126,8 @@ export interface ReplanHistoryEntry {
   mode: ReplanMode
   moveCount: number
   snapshot: string
+  afterSnapshot?: string
+  audit?: ReplanAudit
 }
 
 export interface AppState {
