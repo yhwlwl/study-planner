@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Session } from '@supabase/supabase-js'
 import {
   BarChart3, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Cloud, CloudOff,
   Download, FileDown, Filter, LayoutDashboard, ListTodo, Menu, Plus, RefreshCw,
@@ -22,6 +23,7 @@ import { downloadSnapshot, getSession, signIn, signOut, signUp, supabase, supaba
 import './styles.css'
 
 type Page = 'today' | 'calendar' | 'tasks' | 'stats' | 'settings'
+type CloudSyncStatus = 'local' | 'restoring' | 'saving' | 'saved' | 'error'
 
 const navItems: { id: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'today', label: '今日', icon: LayoutDashboard },
@@ -32,38 +34,94 @@ const navItems: { id: Page; label: string; icon: typeof LayoutDashboard }[] = [
 ]
 
 export default function App() {
-  const { state, ready, updateSettings, previewReplan, applyReplan, replaceState } = useApp()
+  const { state, ready, loadedFromStorage, updateSettings, previewReplan, applyReplan, replaceState } = useApp()
   const [page, setPage] = useState<Page>('today')
   const [mobileNav, setMobileNav] = useState(false)
   const [replan, setReplan] = useState<ReplanResult>()
   const [replanOpen, setReplanOpen] = useState(false)
-  const [sessionEmail, setSessionEmail] = useState<string>()
-  const initialCloudCheck = useRef(false)
+  const [sessionUser, setSessionUser] = useState<{ id: string; email?: string }>()
+  const [cloudReady, setCloudReady] = useState(false)
+  const [syncStatus, setSyncStatus] = useState<CloudSyncStatus>('local')
+  const stateRef = useRef(state)
+  stateRef.current = state
 
   useEffect(() => {
     if (!supabase) return
-    getSession().then(session => setSessionEmail(session?.user.email))
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => setSessionEmail(session?.user.email))
+    const applySession = (session: Session | null) => {
+      const user = session ? { id: session.user.id, email: session.user.email } : undefined
+      setSessionUser(user)
+      if (!user) {
+        setCloudReady(false)
+        setSyncStatus('local')
+      }
+    }
+    getSession().then(applySession)
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => applySession(session))
     return () => data.subscription.unsubscribe()
   }, [])
 
   useEffect(() => {
-    if (!ready || !sessionEmail || initialCloudCheck.current) return
-    initialCloudCheck.current = true
-    downloadSnapshot().then(cloud => {
-      if (!cloud) return
-      if (new Date(cloud.updatedAt).getTime() > new Date(state.updatedAt).getTime() + 1000) {
-        cloud.conflictBackups = [...(cloud.conflictBackups ?? []).slice(-2), structuredClone(state)]
-        replaceState(cloud, false)
+    if (!ready || !sessionUser?.id) return
+    let cancelled = false
+    setCloudReady(false)
+    setSyncStatus('restoring')
+
+    const bootstrapCloud = async () => {
+      try {
+        const local = structuredClone(stateRef.current)
+        const cloud = await downloadSnapshot()
+        if (cancelled) return
+        const deviceUserKey = 'study-planner-cloud-user'
+        const firstLoginOnDevice = window.localStorage.getItem(deviceUserKey) !== sessionUser.id
+
+        if (cloud) {
+          const cloudUpdatedAt = Date.parse(cloud.updatedAt) || 0
+          const localUpdatedAt = Date.parse(local.updatedAt) || 0
+          const restoreCloud = firstLoginOnDevice || !loadedFromStorage || cloudUpdatedAt >= localUpdatedAt
+          if (restoreCloud) {
+            cloud.conflictBackups = [...(cloud.conflictBackups ?? []).slice(-2), local]
+            replaceState(cloud, false)
+          } else {
+            await uploadSnapshot(local)
+          }
+        } else {
+          await uploadSnapshot(local)
+        }
+
+        window.localStorage.setItem(deviceUserKey, sessionUser.id)
+        if (!cancelled) {
+          setCloudReady(true)
+          setSyncStatus('saved')
+        }
+      } catch {
+        if (!cancelled) {
+          setCloudReady(false)
+          setSyncStatus('error')
+        }
       }
-    }).catch(() => undefined)
-  }, [ready, sessionEmail, replaceState, state])
+    }
+
+    void bootstrapCloud()
+    return () => { cancelled = true }
+  }, [ready, sessionUser?.id, loadedFromStorage, replaceState])
 
   useEffect(() => {
-    if (!ready || !sessionEmail) return
-    const id = window.setTimeout(() => uploadSnapshot(state).catch(() => undefined), 2500)
-    return () => window.clearTimeout(id)
-  }, [state, ready, sessionEmail])
+    if (!ready || !sessionUser?.id || !cloudReady) return
+    setSyncStatus('saving')
+    let cancelled = false
+    const id = window.setTimeout(async () => {
+      try {
+        await uploadSnapshot(state)
+        if (!cancelled) setSyncStatus('saved')
+      } catch {
+        if (!cancelled) setSyncStatus('error')
+      }
+    }, 1200)
+    return () => {
+      cancelled = true
+      window.clearTimeout(id)
+    }
+  }, [state, ready, sessionUser?.id, cloudReady])
 
   const openReplan = () => {
     setReplan(previewReplan())
@@ -83,7 +141,7 @@ export default function App() {
           })}
         </nav>
         <div className="sidebar-bottom">
-          <div className={`sync-status ${sessionEmail ? 'online' : ''}`}>{sessionEmail ? <Cloud size={16}/> : <CloudOff size={16}/>}<span>{sessionEmail ? '云同步已开启' : '当前仅本地保存'}</span></div>
+          <div className={`sync-status ${sessionUser ? 'online' : ''} ${syncStatus === 'error' ? 'sync-error' : ''}`}>{sessionUser ? <Cloud size={16}/> : <CloudOff size={16}/>}<span>{!sessionUser ? '当前仅本地保存' : syncStatus === 'restoring' ? '正在从云端恢复' : syncStatus === 'saving' ? '正在自动保存' : syncStatus === 'error' ? '云同步失败' : '已自动保存到云端'}</span></div>
           <button className="collapse-button" onClick={() => updateSettings({ sidebarCollapsed: !state.settings.sidebarCollapsed })}><ChevronLeft size={18}/><span>收起侧边栏</span></button>
         </div>
       </aside>
@@ -99,7 +157,7 @@ export default function App() {
           {page === 'calendar' && <CalendarPage/>}
           {page === 'tasks' && <TasksPage/>}
           {page === 'stats' && <StatsPage/>}
-          {page === 'settings' && <SettingsPage sessionEmail={sessionEmail}/>} 
+          {page === 'settings' && <SettingsPage sessionEmail={sessionUser?.email}/>} 
         </div>
       </main>
       <ReplanDialog result={replan} open={replanOpen} onClose={() => setReplanOpen(false)} onApply={() => { if (replan) applyReplan(replan); setReplanOpen(false) }}/>
@@ -374,7 +432,7 @@ function SettingsPage({ sessionEmail }: { sessionEmail?: string }) {
     <SettingsSection title="数据与恢复" description="本地数据保存在浏览器 IndexedDB；建议定期导出 JSON 完整备份。">
       <div className="button-wrap"><button className="secondary-button" onClick={exportJson}><Download size={16}/>导出 JSON</button><button className="secondary-button" onClick={exportCsv}><FileDown size={16}/>导出 CSV</button><button className="secondary-button" onClick={()=>window.print()}><FileDown size={16}/>打印 / 导出 PDF</button><button className="secondary-button" onClick={()=>fileRef.current?.click()}><Upload size={16}/>导入 JSON</button><input ref={fileRef} type="file" accept="application/json" hidden onChange={e=>e.target.files?.[0]&&importJson(e.target.files[0])}/><button className="secondary-button" disabled={!canUndo} onClick={undo}><RotateCcw size={16}/>恢复上一步</button><button className="danger-button" onClick={()=>window.confirm('确认重置全部数据？请先导出备份。')&&resetAll()}><Trash2 size={16}/>重置计划</button></div>
     </SettingsSection>
-    <SettingsSection title="Supabase 云同步" description={supabaseConfigured?'已检测到环境变量配置。登录后会自动同步，也可手动上传或恢复。':'尚未配置。复制 .env.example 为 .env，并填写项目 URL 与 anon key。'}>
+    <SettingsSection title="Supabase 云同步" description={supabaseConfigured?'登录后会先自动恢复云端数据，之后每次修改都会自动保存；手动上传和恢复仍可作为补充。':'尚未配置。复制 .env.example 为 .env，并填写项目 URL 与 publishable / anon key。'}>
       {!supabaseConfigured?<div className="code-note">VITE_SUPABASE_URL<br/>VITE_SUPABASE_ANON_KEY</div>:sessionEmail?<div className="cloud-panel"><div><Cloud size={20}/><span>已登录：{sessionEmail}</span></div><div className="button-wrap"><button className="secondary-button" onClick={cloudUpload}>立即上传</button><button className="secondary-button" onClick={cloudDownload}>从云端恢复</button><button className="secondary-button" onClick={()=>signOut()}>退出登录</button></div></div>:<div className="auth-form"><input type="email" placeholder="邮箱" value={email} onChange={e=>setEmail(e.target.value)}/><input type="password" placeholder="密码" value={password} onChange={e=>setPassword(e.target.value)}/><button className="primary-button" onClick={()=>login('in')}>登录</button><button className="secondary-button" onClick={()=>login('up')}>注册</button></div>}
       {authMessage&&<p className="settings-message">{authMessage}</p>}
     </SettingsSection>

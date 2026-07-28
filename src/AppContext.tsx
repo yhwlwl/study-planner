@@ -10,6 +10,7 @@ type Recipe = (draft: AppState) => void
 interface AppContextValue {
   state: AppState
   ready: boolean
+  loadedFromStorage: boolean
   canUndo: boolean
   commit: (recipe: Recipe, options?: { history?: boolean }) => void
   replaceState: (state: AppState, history?: boolean) => void
@@ -35,6 +36,7 @@ const AppContext = createContext<AppContextValue | undefined>(undefined)
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(buildInitialState)
   const [ready, setReady] = useState(false)
+  const [loadedFromStorage, setLoadedFromStorage] = useState(false)
   const history = useRef<AppState[]>([])
   const stateRef = useRef(state)
   stateRef.current = state
@@ -42,7 +44,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let mounted = true
     loadLocalState().then(saved => {
-      if (mounted && saved?.version) setState(saved)
+      if (mounted && saved?.version) {
+        setState(saved)
+        setLoadedFromStorage(true)
+      }
     }).finally(() => mounted && setReady(true))
     return () => { mounted = false }
   }, [])
@@ -172,11 +177,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo<AppContextValue>(() => ({
-    state, ready, canUndo: history.current.length > 0, commit, replaceState, undo,
+    state, ready, loadedFromStorage, canUndo: history.current.length > 0, commit, replaceState, undo,
     updateSettings, updateDayConfig, updateAssignment, finishAssignment, addTime,
     addTaskGroup, editTaskGroup, deleteTaskGroup, previewReplan, applyReplan,
     startTimer, pauseTimer, stopTimer, resetAll
-  }), [state, ready, commit, replaceState, undo, updateSettings, updateDayConfig, updateAssignment, finishAssignment, addTime, addTaskGroup, editTaskGroup, deleteTaskGroup, previewReplan, applyReplan, startTimer, pauseTimer, stopTimer, resetAll])
+  }), [state, ready, loadedFromStorage, commit, replaceState, undo, updateSettings, updateDayConfig, updateAssignment, finishAssignment, addTime, addTaskGroup, editTaskGroup, deleteTaskGroup, previewReplan, applyReplan, startTimer, pauseTimer, stopTimer, resetAll])
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }
