@@ -19,12 +19,18 @@ export function getDayConfig(state: AppState, date: string): DayConfig {
   return state.dayConfigs[date] ?? { date, type: 'regular' }
 }
 
-export function getCapacity(state: AppState, date: string): number {
+export function getBaseCapacity(state: AppState, date: string): number {
   const config = getDayConfig(state, date)
   if (config.type === 'study') return state.settings.studyMinutes
   if (config.type === 'travel') return state.settings.travelMinutes
   if (config.type === 'custom') return config.customMinutes ?? state.settings.regularMinutes
   return state.settings.regularMinutes
+}
+
+export function getCapacity(state: AppState, date: string): number {
+  const config = getDayConfig(state, date)
+  if (typeof config.availableMinutes === 'number') return Math.max(0, Math.round(config.availableMinutes))
+  return getBaseCapacity(state, date)
 }
 
 export function minutesText(minutes: number): string {

@@ -234,7 +234,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       mode: request?.mode ?? 'repair',
       fromDate: request?.fromDate ?? new Date().toISOString().slice(0, 10),
       strategy: request?.strategy,
-      freezeDays: request?.freezeDays ?? source.settings.freezeDays
+      freezeDays: request?.freezeDays ?? source.settings.freezeDays,
+      todayExtraMinutes: request?.todayExtraMinutes ?? 0,
+      allowBufferUseDates: request?.allowBufferUseDates ?? [],
+      limitOverrides: request?.limitOverrides ?? [],
+      localRadius: request?.localRadius ?? source.settings.localRepairRadius
     })
   }, [])
 

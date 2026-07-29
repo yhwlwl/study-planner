@@ -6,7 +6,9 @@ export type PlanningMode = 'sprint' | 'balanced' | 'relaxed'
 export type ScheduleSource = 'system' | 'manual' | 'carryover' | 'replan' | 'import' | 'recurring'
 export type IntentStrength = 'normal' | 'manual' | 'locked'
 export type ReplanMode = 'repair' | 'full'
-export type ReplanStrategy = 'preserve' | 'balanced' | 'goal'
+export type ReplanStrategy = 'preserve' | 'balanced' | 'goal' | 'rest'
+export type BufferPreference = 'preserve' | 'goal' | 'spread'
+export type TaskActivityType = 'normal' | 'classical-study' | 'classical-dictation' | 'recitation' | 'chem-preview' | 'math-paper'
 
 export interface AppSettings {
   planName: string
@@ -32,6 +34,12 @@ export interface AppSettings {
   highLoadThreshold: number
   highLoadStreak: number
   keepOfflineOnLogout: boolean
+  targetUtilization: number
+  nearFullThreshold: number
+  bufferUtilization: number
+  localRepairRadius: number
+  maxNewTasksPerDay: number
+  maxLoadChangeRatio: number
 }
 
 export interface DayConfig {
@@ -40,6 +48,11 @@ export interface DayConfig {
   customMinutes?: number
   note?: string
   userSet?: boolean
+  isBufferDay?: boolean
+  availableMinutes?: number
+  bufferReason?: string
+  bufferPreference?: BufferPreference
+  bufferProtected?: boolean
 }
 
 export interface TaskGroup {
@@ -60,6 +73,8 @@ export interface TaskGroup {
   flexibleDuration?: boolean
   allowSplit?: boolean
   memoryTask?: boolean
+  activityType?: TaskActivityType
+  highIntensity?: boolean
   notes?: string
   sourceLabel?: string
 }
@@ -112,12 +127,25 @@ export interface ReplanAuditDayType {
   date: string
   type: DayType
   customMinutes?: number
+  isBufferDay?: boolean
+  availableMinutes?: number
+  bufferReason?: string
+  bufferPreference?: BufferPreference
+}
+
+export interface ReplanLimitOverride {
+  date: string
+  key: string
+  limit: number
 }
 
 export interface ReplanAudit {
   strategy: ReplanStrategy
   decisions: ReplanAuditDecision[]
   dayTypes: ReplanAuditDayType[]
+  limitOverrides?: ReplanLimitOverride[]
+  todayExtraMinutes?: number
+  allowBufferUseDates?: string[]
 }
 
 export interface ReplanHistoryEntry {
@@ -150,12 +178,21 @@ export interface ReplanRequest {
   fromDate: string
   strategy?: ReplanStrategy
   freezeDays?: number
+  todayExtraMinutes?: number
+  allowBufferUseDates?: string[]
+  limitOverrides?: ReplanLimitOverride[]
+  localRadius?: number
 }
 
 export interface ReplanAlternative {
   date: string
   label: string
   impact: string
+}
+
+export interface ReplanRejectedAlternative {
+  date: string
+  reasons: string[]
 }
 
 export interface ReplanMove {
@@ -167,6 +204,7 @@ export interface ReplanMove {
   reason: string
   impact: string
   alternatives: ReplanAlternative[]
+  rejectedAlternatives?: ReplanRejectedAlternative[]
   wasManual: boolean
   hardRequired: boolean
 }
@@ -186,6 +224,26 @@ export interface LoadChange {
   capacity: number
 }
 
+export interface ReplanConstraintConflict {
+  date: string
+  key: string
+  label: string
+  current: number
+  limit: number
+  suggestedLimit: number
+  affectedAssignmentIds: string[]
+  options: string[]
+}
+
+export interface ReplanDisturbance {
+  changedDays: number
+  movedTasks: number
+  originalDateRetentionRate: number
+  averageLoadDelta: number
+  maximumLoadDelta: number
+  preservedDailyBundles: number
+}
+
 export interface ReplanSummary {
   moved: number
   preservedManual: number
@@ -197,6 +255,9 @@ export interface ReplanSummary {
   chemistryAfter?: string
   allBefore?: string
   allAfter?: string
+  bufferDays?: number
+  changedDays?: number
+  originalRetentionRate?: number
 }
 
 export interface ReplanResult {
@@ -211,11 +272,22 @@ export interface ReplanResult {
   consequences: string[]
   dayTypeSuggestions: DayTypeSuggestion[]
   loadChanges: LoadChange[]
+  constraintConflicts: ReplanConstraintConflict[]
+  disturbance: ReplanDisturbance
   summary: ReplanSummary
 }
 
 export interface ReplanBundle {
   request: ReplanRequest
   issues: string[]
+  todaySnapshot?: {
+    date: string
+    actualMinutes: number
+    inferredMinutes: number
+    completedCount: number
+    remainingCapacity: number
+    allowedIncomingMinutes: number
+    message: string
+  }
   scenarios: ReplanResult[]
 }

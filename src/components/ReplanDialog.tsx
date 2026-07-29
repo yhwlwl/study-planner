@@ -8,7 +8,7 @@ import type {
   ReplanResult, ReplanStrategy, Subject
 } from '../types'
 import { dateRange, dayTypeLabel, fmtDate, fmtWeekday, getCapacity, minutesText } from '../lib/date'
-import { analyzePlan, effectiveMinutes } from '../lib/planner'
+import { analyzePlan, effectiveMinutes, planningDayLoad } from '../lib/planner'
 import { Drawer } from './Drawer'
 import { Modal } from './Modal'
 
@@ -43,9 +43,7 @@ function assignmentMinutes(state: AppState, assignment: Assignment) {
 }
 
 function dayLoad(state: AppState, date: string) {
-  return state.assignments
-    .filter(item => item.scheduledDate === date)
-    .reduce((sum, item) => sum + assignmentMinutes(state, item), 0)
+  return planningDayLoad(state, date)
 }
 
 function buildDayDiff(beforeState: AppState, afterState: AppState, date: string): DayDiffRow[] {
@@ -136,7 +134,7 @@ function DayDiffPanel({
         <div>{taskView(row.before, 'before', row)}</div>
         <div>{taskView(row.after, 'after', row)}</div>
         {changed && <div className="diff-row-actions">
-          {move && <span className="diff-reason" title={`${move.reason}；${move.impact}`}>{move.reason}</span>}
+          {move && <div className="diff-reason-block"><span className="diff-reason" title={`${move.reason}；${move.impact}`}>{move.reason}</span>{move.rejectedAlternatives && move.rejectedAlternatives.length > 0 && <details><summary>为什么没有选其他日期</summary>{move.rejectedAlternatives.map(item => <div key={`${move.assignmentId}-${item.date}`}><strong>{item.date}</strong><span>{item.reasons.join('；')}</span></div>)}</details>}</div>}
           <button className={decision.mode === 'accept' ? 'choice-active' : ''} onClick={() => onDecision(assignment.id, { ...decision, mode: 'accept', date: undefined, previewFixed: true })}>接受</button>
           <button className={decision.mode === 'keep' ? 'choice-active' : ''} onClick={() => onDecision(assignment.id, { ...decision, mode: 'keep', date: undefined, previewFixed: true })}>保留原日</button>
           <label className="inline-date-choice"><span>改到</span><input
@@ -162,7 +160,7 @@ export function ReplanDialog({
   open: boolean
   request: ReplanRequest
   onRequestChange: (request: ReplanRequest) => void
-  onRegenerate: () => void
+  onRegenerate: (request?: ReplanRequest) => void
   onClose: () => void
   onApply: (result: ReplanResult, state: AppState, audit: ReplanAudit) => void
 }) {
@@ -212,6 +210,29 @@ export function ReplanDialog({
   }, [activeBundleId, bundle, currentState.settings.planningMode, open, request.strategy])
 
   const result = bundle?.scenarios.find(item => item.strategy === strategy) ?? bundle?.scenarios[0]
+  const protectedBufferDates = useMemo(() => dateRange(currentState.settings.startDate, currentState.settings.endDate)
+    .filter(date => date >= request.fromDate)
+    .filter(date => {
+      const config = currentState.dayConfigs[date]
+      return Boolean(config?.isBufferDay && (config.bufferProtected ?? config.userSet))
+    }), [currentState.dayConfigs, currentState.settings.endDate, currentState.settings.startDate, request.fromDate])
+
+  const regenerateWith = (patch: Partial<ReplanRequest>) => {
+    const nextRequest = { ...request, ...patch }
+    onRequestChange(nextRequest)
+    onRegenerate(nextRequest)
+  }
+
+  const allowConstraintOnce = (date: string, key: string, limit: number) => {
+    const overrides = [...(request.limitOverrides ?? []).filter(item => !(item.date === date && item.key === key)), { date, key, limit }]
+    regenerateWith({ limitOverrides: overrides })
+  }
+
+  const toggleBufferUse = (date: string) => {
+    const current = request.allowBufferUseDates ?? []
+    const next = current.includes(date) ? current.filter(item => item !== date) : [...current, date]
+    regenerateWith({ allowBufferUseDates: next })
+  }
 
   const pushSnapshot = () => setUndoStack(previous => [...previous.slice(-29), {
     decisions: structuredClone(decisions),
@@ -372,10 +393,25 @@ export function ReplanDialog({
         </div>
         <label className="field compact-field"><span>从哪天开始</span><input type="date" value={request.fromDate} onChange={event => onRequestChange({ ...request, fromDate: event.target.value })}/></label>
         <label className="field compact-field"><span>冻结近期天数</span><input type="number" min="0" max="7" value={request.freezeDays ?? 2} onChange={event => onRequestChange({ ...request, freezeDays: Number(event.target.value) })}/></label>
-        <button className="secondary-button" onClick={onRegenerate}><RefreshCw size={16}/>重新计算</button>
+        <button className="secondary-button" onClick={() => onRegenerate(request)}><RefreshCw size={16}/>重新计算</button>
         <button className="secondary-button" disabled={!undoStack.length} onClick={undoPreview}><Undo2 size={16}/>撤销预览操作</button>
-        <p className="replan-control-note">冻结期内的手动安排默认不动；预览中亲自调整的任务会标记为“本次预览固定”。</p>
+        <p className="replan-control-note">过去日期完全冻结；今天按真实学习时间半冻结。全面重排默认从明天开始，手动安排长期受到保护。</p>
       </div>
+
+      {bundle?.todaySnapshot && <section className="today-replan-snapshot">
+        <div><strong>今日执行快照</strong><span>{bundle.todaySnapshot.message}</span></div>
+        <div className="today-snapshot-values">
+          <span>真实计时 {minutesText(bundle.todaySnapshot.actualMinutes)}</span>
+          {bundle.todaySnapshot.inferredMinutes > 0 && <span>推定用时 {minutesText(bundle.todaySnapshot.inferredMinutes)}</span>}
+          <span>已完成 {bundle.todaySnapshot.completedCount} 项</span>
+          <span>自动剩余 {minutesText(bundle.todaySnapshot.remainingCapacity)}</span>
+        </div>
+        <div className="today-extra-control">
+          <span>从现在起，今天还能接收的新任务：</span>
+          {[0, 30, 60].map(minutes => <button key={minutes} className={(request.todayExtraMinutes ?? 0) === minutes ? 'choice-active' : ''} onClick={() => regenerateWith({ todayExtraMinutes: minutes })}>{minutes === 0 ? '今天不再新增' : `还能学${minutes}分钟`}</button>)}
+          <label><span>自定义</span><input type="number" min="0" step="10" value={![0, 30, 60].includes(request.todayExtraMinutes ?? 0) ? request.todayExtraMinutes ?? 0 : ''} placeholder="分钟" onChange={event => onRequestChange({ ...request, todayExtraMinutes: Math.max(0, Number(event.target.value)) })}/></label>
+        </div>
+      </section>}
 
       {!result || !editedState ? <p>正在计算……</p> : <>
         <div className="scenario-tabs">
@@ -398,8 +434,10 @@ export function ReplanDialog({
 
         <div className="summary-grid replan-summary-grid">
           <div className="metric-card"><span>将移动</span><strong>{result.summary.moved}</strong><small>项任务</small></div>
+          <div className="metric-card"><span>改动日期</span><strong>{result.disturbance.changedDays}</strong><small>天</small></div>
+          <div className="metric-card"><span>原计划保留率</span><strong>{Math.round(result.disturbance.originalDateRetentionRate * 100)}%</strong><small>越高越少扰动</small></div>
+          <div className="metric-card"><span>尚未解决</span><strong>{result.summary.unresolved}</strong><small>项；不会强塞</small></div>
           <div className="metric-card"><span>保留手动安排</span><strong>{result.summary.preservedManual}</strong><small>项</small></div>
-          <div className="metric-card"><span>尚未解决</span><strong>{result.summary.unresolved}</strong><small>项</small></div>
           <div className="metric-card"><span>核心任务预计</span><strong>{result.summary.coreAfter ?? '待决定'}</strong><small>原先 {result.summary.coreBefore ?? '未知'}</small></div>
         </div>
 
@@ -407,6 +445,28 @@ export function ReplanDialog({
           <div className="replan-section-title"><SlidersHorizontal size={18}/><div><h3>方案后果</h3><p>这里只说明影响，不替你做决定。</p></div></div>
           <div className="consequence-list">{result.consequences.map((item, index) => <div key={index}>{item}</div>)}</div>
         </section>
+
+        {result.constraintConflicts.length > 0 && <section className="replan-section constraint-conflict-section">
+          <div className="replan-section-title"><AlertTriangle size={18}/><div><h3>没有完全合法的位置，需要你选择</h3><p>所有每日上限默认都是硬限制。这里只提供一次性放宽，不会永久改变任务组规则。</p></div></div>
+          <div className="constraint-conflict-list">{result.constraintConflicts.map(conflict => <article key={`${conflict.date}-${conflict.key}`}>
+            <div><strong>{conflict.date} · {conflict.label}</strong><span>当前需要 {Math.round(conflict.current)}，默认上限 {Math.round(conflict.limit)}；影响 {conflict.affectedAssignmentIds.length} 项任务。</span></div>
+            <ul>{conflict.options.map(option => <li key={option}>{option}</li>)}</ul>
+            <button className="secondary-button" onClick={() => allowConstraintOnce(conflict.date, conflict.key, conflict.suggestedLimit)}>仅本次放宽到 {conflict.suggestedLimit} 并重算</button>
+          </article>)}</div>
+        </section>}
+
+        {protectedBufferDates.length > 0 && <section className="replan-section buffer-use-section">
+          <div className="replan-section-title"><CalendarClock size={18}/><div><h3>受保护的活动日 / 缓冲日</h3><p>系统默认不会向这些日期增加任务。确有必要时，可以只为本次重排开放某一天；不会永久取消保护。</p></div></div>
+          <div className="buffer-use-list">{protectedBufferDates.map(date => {
+            const config = currentState.dayConfigs[date]
+            const allowed = request.allowBufferUseDates?.includes(date) ?? false
+            return <article className={allowed ? 'buffer-use-active' : ''} key={date}>
+              <div><strong>{fmtDate(date)} · {fmtWeekday(date)}</strong><span>{config?.availableMinutes === 0 ? '完全休息' : `最多 ${minutesText(getCapacity(currentState, date))}`} · {config?.bufferReason || '用户手动设置'}</span></div>
+              <button className={allowed ? 'secondary-button choice-active' : 'secondary-button'} onClick={() => toggleBufferUse(date)}>{allowed ? '恢复保护' : '仅本次允许使用'}</button>
+            </article>
+          })}</div>
+          {(request.allowBufferUseDates?.length ?? 0) > 0 && <p className="buffer-use-warning">开放缓冲日只解除“禁止新增”的保护，仍必须遵守该日可用时间、任务上限和高强度限制。</p>}
+        </section>}
 
         {changedLoads.length > 0 && <section className="replan-section">
           <div className="replan-section-title section-title-with-actions"><CalendarClock size={18}/><div><h3>修改前后负载</h3><p>点击任意日期，查看两栏任务差异并直接接受、否决或改期。</p></div><div className="segmented-control small"><button className={!onlyChanges ? 'active' : ''} onClick={() => setOnlyChanges(false)}>全部任务</button><button className={onlyChanges ? 'active' : ''} onClick={() => setOnlyChanges(true)}>只看变化</button></div></div>
@@ -497,12 +557,24 @@ export function ReplanDialog({
           const auditDates = dateRange(currentState.settings.startDate, currentState.settings.endDate).filter(date => {
             const before = currentState.dayConfigs[date]
             const after = editedState.dayConfigs[date]
-            return before?.type !== after?.type || before?.customMinutes !== after?.customMinutes
+            return before?.type !== after?.type || before?.customMinutes !== after?.customMinutes || before?.isBufferDay !== after?.isBufferDay || before?.availableMinutes !== after?.availableMinutes || before?.bufferReason !== after?.bufferReason || before?.bufferPreference !== after?.bufferPreference || before?.bufferProtected !== after?.bufferProtected
           })
           const audit: ReplanAudit = {
             strategy,
             decisions: Object.entries(decisions).map(([assignmentId, decision]) => ({ assignmentId, ...decision })),
-            dayTypes: auditDates.map(date => ({ date, type: editedState.dayConfigs[date]?.type ?? 'regular', customMinutes: editedState.dayConfigs[date]?.customMinutes }))
+            dayTypes: auditDates.map(date => ({
+              date,
+              type: editedState.dayConfigs[date]?.type ?? 'regular',
+              customMinutes: editedState.dayConfigs[date]?.customMinutes,
+              isBufferDay: editedState.dayConfigs[date]?.isBufferDay,
+              availableMinutes: editedState.dayConfigs[date]?.availableMinutes,
+              bufferReason: editedState.dayConfigs[date]?.bufferReason,
+              bufferPreference: editedState.dayConfigs[date]?.bufferPreference,
+              bufferProtected: editedState.dayConfigs[date]?.bufferProtected
+            })),
+            limitOverrides: request.limitOverrides,
+            todayExtraMinutes: request.todayExtraMinutes,
+            allowBufferUseDates: request.allowBufferUseDates
           }
           onApply(result, editedState, audit)
         }}>应用全部已接受调整</button></div>
