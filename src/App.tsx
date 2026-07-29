@@ -64,6 +64,24 @@ export default function App() {
     if (!supabase) return
     const applySession = async (session: Session | null) => {
       const user = session ? { id: session.user.id, email: session.user.email } : undefined
+
+      // Supabase may emit TOKEN_REFRESHED / SIGNED_IN again when a background tab
+      // becomes visible. That is not an account change. Starting the privacy
+      // overlay for the same user would leave it waiting for a bootstrap effect
+      // whose dependency (user id) has not changed.
+      if (user && previousUserId.current === user.id) {
+        setSessionUser(current => (
+          current?.id === user.id && current.email === user.email ? current : user
+        ))
+        return
+      }
+
+      // Repeated anonymous-session events are also no-ops.
+      if (!user && !previousUserId.current) {
+        setSessionUser(undefined)
+        return
+      }
+
       if (!user) {
         setDataSwitching(true)
         const oldUser = previousUserId.current
@@ -73,9 +91,12 @@ export default function App() {
         setSyncStatus('local')
         setFirstLoginOpen(false)
         const keepOffline = stateRef.current.settings.keepOfflineOnLogout
-        await loadDataSpace('guest', buildGuestDemoState())
-        if (oldUser && !keepOffline) await clearDataSpace(`user:${oldUser}`)
-        setDataSwitching(false)
+        try {
+          await loadDataSpace('guest', buildGuestDemoState())
+          if (oldUser && !keepOffline) await clearDataSpace(`user:${oldUser}`)
+        } finally {
+          setDataSwitching(false)
+        }
         return
       }
       previousUserId.current = user.id
