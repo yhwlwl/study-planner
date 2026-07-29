@@ -4,6 +4,7 @@ import { useApp } from '../AppContext'
 import { minutesText } from '../lib/date'
 import { uid } from '../lib/id'
 import { Modal } from './Modal'
+import { NumericInput } from './NumericInput'
 
 function formatElapsed(totalSeconds: number) {
   const seconds = Math.max(0, Math.floor(totalSeconds))
@@ -165,8 +166,8 @@ export function FocusTimerPage({ onExit }: { onExit: () => void }) {
           <div><strong>{assignment.title}</strong><span>本次计时 {elapsedText}</span></div>
         </div>
         <div className="form-stack">
-          <label className="field"><span>记入实际用时（分钟）</span><input type="number" min="1" step="1" value={sessionMinutes} onChange={event => setSessionMinutes(event.target.value)} autoFocus/></label>
-          <label className="field"><span>保存为部分完成时的当前进度</span><input type="number" min="1" max="99" value={progress} onChange={event => setProgress(Number(event.target.value))}/></label>
+          <label className="field"><span>记入实际用时（分钟）</span><NumericInput min={1} step={1} value={sessionMinutes === '' ? undefined : Number(sessionMinutes)} onValueChange={value => setSessionMinutes(String(value))} onEmpty={() => setSessionMinutes('')} autoFocus/></label>
+          <label className="field"><span>保存为部分完成时的当前进度</span><NumericInput min={1} max={99} value={progress} onValueChange={setProgress}/></label>
         </div>
         <p className="focus-finish-tip">仅记入时间不会改变任务完成状态；选择部分完成或标记完成后，计时结果会同时写入任务记录。</p>
         <div className="modal-actions focus-finish-actions">

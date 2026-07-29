@@ -21,6 +21,7 @@ import { TaskGroupDialog } from './components/TaskGroupDialog'
 import { HistoryDiffDialog } from './components/HistoryDiffDialog'
 import { FocusTimerPage, getTimerElapsedSeconds } from './components/FocusTimerPage'
 import { StatsPage } from './components/StatsPage'
+import { NumericInput } from './components/NumericInput'
 import { downloadSnapshot, getSession, signIn, signOut, signUp, supabase, supabaseConfigured, uploadSnapshot } from './lib/supabase'
 import './styles.css'
 
@@ -483,8 +484,8 @@ function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void;
     </section>
     <Modal open={Boolean(completeTarget)} title={completeTarget ? `记录：${completeTarget.title}` : '记录任务'} onClose={() => setCompleteTarget(undefined)}>
       <div className="form-stack">
-        <label className="field"><span>本次实际用时（分钟，可留空）</span><input type="number" min="0" step="1" value={actual} onChange={e => setActual(e.target.value)} autoFocus/></label>
-        <label className="field"><span>若未完成，填写当前进度</span><input type="number" min="1" max="99" value={progress} onChange={e => setProgress(Number(e.target.value))}/></label>
+        <label className="field"><span>本次实际用时（分钟，可留空）</span><NumericInput min={0} step={1} value={actual === '' ? undefined : Number(actual)} onValueChange={value => setActual(String(value))} onEmpty={() => setActual('')} autoFocus/></label>
+        <label className="field"><span>若未完成，填写当前进度</span><NumericInput min={1} max={99} value={progress} onValueChange={setProgress}/></label>
       </div>
       <div className="modal-actions"><button className="secondary-button" onClick={() => saveCompletion(false)}>保存为部分完成</button><button className="primary-button" onClick={() => saveCompletion(true)}>标记完成</button></div>
     </Modal>
@@ -500,7 +501,7 @@ function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void;
           <button className={shiftScope==='today'?'active':''} onClick={()=>setShiftScope('today')}>仅今日未完成</button>
           <button className={shiftScope==='future'?'active':''} onClick={()=>setShiftScope('future')}>从今天起全部</button>
         </div>
-        <label className="field compact-field"><span>顺延天数</span><input type="number" min="1" max="14" value={shiftDays} onChange={e=>setShiftDays(Math.max(1,Math.min(14,Number(e.target.value)||1)))}/></label>
+        <label className="field compact-field"><span>顺延天数</span><NumericInput min={1} max={14} value={shiftDays} onValueChange={setShiftDays}/></label>
         <label className="lock-choice"><input type="checkbox" checked={shiftLocked} onChange={e=>setShiftLocked(e.target.checked)}/><Lock size={14}/>同时移动已锁定任务</label>
       </div>
       <div className="summary-grid replan-summary-grid">
@@ -821,7 +822,7 @@ ${risks.join('\n')}
       {dayOpen && dayCfg && dayPreviewState && <>
         <div className="day-settings-row">
           <label className="field"><span>日期类型</span><select value={pendingDayType ?? dayCfg.type} onChange={event => setPendingDayType(event.target.value as DayType)}>{(['regular', 'study', 'travel', 'custom'] as DayType[]).map(type => <option key={type} value={type}>{dayTypeLabel[type]}</option>)}</select></label>
-          {(pendingDayType ?? dayCfg.type) === 'custom' && <label className="field"><span>可用分钟</span><input type="number" value={pendingCustomMinutes ?? dayCfg.customMinutes ?? 210} onChange={event => setPendingCustomMinutes(Number(event.target.value))}/></label>}
+          {(pendingDayType ?? dayCfg.type) === 'custom' && <label className="field"><span>可用分钟</span><NumericInput min={0} value={pendingCustomMinutes ?? dayCfg.customMinutes ?? 210} onValueChange={setPendingCustomMinutes}/></label>}
           <label className="field grow"><span>备注</span><input value={dayCfg.note ?? ''} onChange={event => updateDayConfig(dayOpen, { note: event.target.value })} placeholder="例如：外出、下午补课"/></label>
         </div>
         <section className="buffer-day-editor">
@@ -832,7 +833,7 @@ ${risks.join('\n')}
             <button className={pendingAvailabilityMode === 'rest' ? 'active' : ''} onClick={() => setPendingAvailabilityMode('rest')}>完全休息</button>
           </div>
           {pendingAvailabilityMode !== 'default' && <div className="buffer-fields">
-            {pendingAvailabilityMode === 'reduced' && <label className="field"><span>最多可学习（分钟）</span><input type="number" min="0" step="10" value={pendingAvailableMinutes} onChange={event => setPendingAvailableMinutes(Math.max(0, Number(event.target.value)))}/></label>}
+            {pendingAvailabilityMode === 'reduced' && <label className="field"><span>最多可学习（分钟）</span><NumericInput min={0} step={10} value={pendingAvailableMinutes} onValueChange={setPendingAvailableMinutes}/></label>}
             <label className="field grow"><span>原因</span><input value={pendingBufferReason} onChange={event => setPendingBufferReason(event.target.value)} placeholder="例如：明天参加活动，下午不在家"/></label>
             <label className="field"><span>后续调整偏好</span><select value={pendingBufferPreference} onChange={event => setPendingBufferPreference(event.target.value as BufferPreference)}><option value="preserve">尽量保持后续每日安排</option><option value="goal">优先保护目标日期</option><option value="spread">尽量均匀分散</option></select></label>
           </div>}
@@ -939,29 +940,29 @@ function SettingsPage({ sessionEmail, cloudMessage }: { sessionEmail?: string; c
         <label className="field"><span>结束日期</span><input type="date" value={state.settings.endDate} onChange={e=>updateSettings({endDate:e.target.value})}/></label>
         <label className="field"><span>核心任务目标</span><input type="date" value={state.settings.coreTargetDate} onChange={e=>updateSettings({coreTargetDate:e.target.value})}/></label>
         <label className="field"><span>化学预习目标</span><input type="date" value={state.settings.chemistryTargetDate} onChange={e=>updateSettings({chemistryTargetDate:e.target.value})}/></label>
-        <label className="field"><span>检查缓冲天数</span><input type="number" min="0" value={state.settings.bufferDays} onChange={e=>updateSettings({bufferDays:Number(e.target.value)})}/></label>
+        <label className="field"><span>检查缓冲天数</span><NumericInput min={0} value={state.settings.bufferDays} onValueChange={value=>updateSettings({bufferDays:value})}/></label>
         <label className="field"><span>默认排期风格</span><select value={state.settings.planningMode} onChange={e=>updateSettings({planningMode:e.target.value as AppState['settings']['planningMode']})}><option value="sprint">冲刺</option><option value="balanced">平衡</option><option value="relaxed">轻松</option></select></label>
       </div>
     </SettingsSection>
     <SettingsSection title="自动重排偏好" description="这些是软约束。系统会说明突破它们的原因，不会把建议伪装成强制决定。">
       <div className="form-grid three">
-        <label className="field"><span>冻结近期天数</span><input type="number" min="0" max="7" value={state.settings.freezeDays} onChange={e=>updateSettings({freezeDays:Number(e.target.value)})}/></label>
-        <label className="field"><span>常规日最多任务</span><input type="number" min="1" value={state.settings.regularMaxTasks} onChange={e=>updateSettings({regularMaxTasks:Number(e.target.value)})}/></label>
-        <label className="field"><span>学习日最多任务</span><input type="number" min="1" value={state.settings.studyMaxTasks} onChange={e=>updateSettings({studyMaxTasks:Number(e.target.value)})}/></label>
-        <label className="field"><span>平衡方案目标利用率（%）</span><input type="number" min="50" max="100" value={Math.round(state.settings.targetUtilization*100)} onChange={e=>updateSettings({targetUtilization:Number(e.target.value)/100})}/></label>
-        <label className="field"><span>接近满载提示线（%）</span><input type="number" min="60" max="100" value={Math.round(state.settings.nearFullThreshold*100)} onChange={e=>updateSettings({nearFullThreshold:Number(e.target.value)/100})}/></label>
-        <label className="field"><span>缓冲日目标利用率（%）</span><input type="number" min="0" max="80" value={Math.round(state.settings.bufferUtilization*100)} onChange={e=>updateSettings({bufferUtilization:Number(e.target.value)/100})}/></label>
-        <label className="field"><span>局部修复优先范围（前后天数）</span><input type="number" min="1" max="14" value={state.settings.localRepairRadius} onChange={e=>updateSettings({localRepairRadius:Number(e.target.value)})}/></label>
-        <label className="field"><span>单日尽量最多新增任务</span><input type="number" min="0" max="10" value={state.settings.maxNewTasksPerDay} onChange={e=>updateSettings({maxNewTasksPerDay:Number(e.target.value)})}/></label>
-        <label className="field"><span>单日负载变化预算（%容量）</span><input type="number" min="0" max="100" value={Math.round(state.settings.maxLoadChangeRatio*100)} onChange={e=>updateSettings({maxLoadChangeRatio:Number(e.target.value)/100})}/></label>
-        <label className="field"><span>单科建议占比上限（%）</span><input type="number" min="30" max="100" value={Math.round(state.settings.subjectShareLimit*100)} onChange={e=>updateSettings({subjectShareLimit:Number(e.target.value)/100})}/></label>
+        <label className="field"><span>冻结近期天数</span><NumericInput min={0} max={7} value={state.settings.freezeDays} onValueChange={value=>updateSettings({freezeDays:value})}/></label>
+        <label className="field"><span>常规日最多任务</span><NumericInput min={1} value={state.settings.regularMaxTasks} onValueChange={value=>updateSettings({regularMaxTasks:value})}/></label>
+        <label className="field"><span>学习日最多任务</span><NumericInput min={1} value={state.settings.studyMaxTasks} onValueChange={value=>updateSettings({studyMaxTasks:value})}/></label>
+        <label className="field"><span>平衡方案目标利用率（%）</span><NumericInput min={50} max={100} value={Math.round(state.settings.targetUtilization*100)} onValueChange={value=>updateSettings({targetUtilization:value/100})}/></label>
+        <label className="field"><span>接近满载提示线（%）</span><NumericInput min={60} max={100} value={Math.round(state.settings.nearFullThreshold*100)} onValueChange={value=>updateSettings({nearFullThreshold:value/100})}/></label>
+        <label className="field"><span>缓冲日目标利用率（%）</span><NumericInput min={0} max={80} value={Math.round(state.settings.bufferUtilization*100)} onValueChange={value=>updateSettings({bufferUtilization:value/100})}/></label>
+        <label className="field"><span>局部修复优先范围（前后天数）</span><NumericInput min={1} max={14} value={state.settings.localRepairRadius} onValueChange={value=>updateSettings({localRepairRadius:value})}/></label>
+        <label className="field"><span>单日尽量最多新增任务</span><NumericInput min={0} max={10} value={state.settings.maxNewTasksPerDay} onValueChange={value=>updateSettings({maxNewTasksPerDay:value})}/></label>
+        <label className="field"><span>单日负载变化预算（%容量）</span><NumericInput min={0} max={100} value={Math.round(state.settings.maxLoadChangeRatio*100)} onValueChange={value=>updateSettings({maxLoadChangeRatio:value/100})}/></label>
+        <label className="field"><span>单科建议占比上限（%）</span><NumericInput min={30} max={100} value={Math.round(state.settings.subjectShareLimit*100)} onValueChange={value=>updateSettings({subjectShareLimit:value/100})}/></label>
       </div>
     </SettingsSection>
     <SettingsSection title="每日容量" description="容量是重排硬上限；平衡方案默认只使用约 85%，目标优先方案也不会静默突破 100%。">
       <div className="form-grid three">
-        <label className="field"><span>常规日（分钟）</span><input type="number" value={state.settings.regularMinutes} onChange={e=>updateSettings({regularMinutes:Number(e.target.value)})}/></label>
-        <label className="field"><span>学习日（分钟）</span><input type="number" value={state.settings.studyMinutes} onChange={e=>updateSettings({studyMinutes:Number(e.target.value)})}/></label>
-        <label className="field"><span>旅游日（分钟）</span><input type="number" value={state.settings.travelMinutes} onChange={e=>updateSettings({travelMinutes:Number(e.target.value)})}/></label>
+        <label className="field"><span>常规日（分钟）</span><NumericInput min={0} value={state.settings.regularMinutes} onValueChange={value=>updateSettings({regularMinutes:value})}/></label>
+        <label className="field"><span>学习日（分钟）</span><NumericInput min={0} value={state.settings.studyMinutes} onValueChange={value=>updateSettings({studyMinutes:value})}/></label>
+        <label className="field"><span>旅游日（分钟）</span><NumericInput min={0} value={state.settings.travelMinutes} onValueChange={value=>updateSettings({travelMinutes:value})}/></label>
       </div>
       <div className="toggle-grid"><Toggle checked={state.settings.countWordsTime} onChange={v=>updateSettings({countWordsTime:v})} label="把每日单词计入计划与统计时间"/><Toggle checked={state.settings.showWarnings} onChange={v=>updateSettings({showWarnings:v})} label="显示黄色和红色进度提醒"/><Toggle checked={state.settings.optionalReview} onChange={v=>updateSettings({optionalReview:v})} label="显示可选每日复盘入口"/><Toggle checked={state.settings.keepOfflineOnLogout} onChange={v=>updateSettings({keepOfflineOnLogout:v})} label="退出登录后在此设备保留个人离线缓存"/></div>
     </SettingsSection>

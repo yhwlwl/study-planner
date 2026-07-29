@@ -11,6 +11,7 @@ import { dateRange, dayTypeLabel, fmtDate, fmtWeekday, getCapacity, minutesText 
 import { analyzePlan, effectiveMinutes, planningDayLoad } from '../lib/planner'
 import { Drawer } from './Drawer'
 import { Modal } from './Modal'
+import { NumericInput } from './NumericInput'
 
 type MoveDecision = {
   mode: 'accept' | 'keep' | 'custom'
@@ -392,7 +393,7 @@ export function ReplanDialog({
           <button className={request.mode === 'full' ? 'active' : ''} onClick={() => onRequestChange({ ...request, mode: 'full' })}>全面重排</button>
         </div>
         <label className="field compact-field"><span>从哪天开始</span><input type="date" value={request.fromDate} onChange={event => onRequestChange({ ...request, fromDate: event.target.value })}/></label>
-        <label className="field compact-field"><span>冻结近期天数</span><input type="number" min="0" max="7" value={request.freezeDays ?? 2} onChange={event => onRequestChange({ ...request, freezeDays: Number(event.target.value) })}/></label>
+        <label className="field compact-field"><span>冻结近期天数</span><NumericInput min={0} max={7} value={request.freezeDays ?? 2} onValueChange={value => onRequestChange({ ...request, freezeDays: value })}/></label>
         <button className="secondary-button" onClick={() => onRegenerate(request)}><RefreshCw size={16}/>重新计算</button>
         <button className="secondary-button" disabled={!undoStack.length} onClick={undoPreview}><Undo2 size={16}/>撤销预览操作</button>
         <p className="replan-control-note">过去日期完全冻结；今天按真实学习时间半冻结。全面重排默认从明天开始，手动安排长期受到保护。</p>
@@ -409,7 +410,7 @@ export function ReplanDialog({
         <div className="today-extra-control">
           <span>从现在起，今天还能接收的新任务：</span>
           {[0, 30, 60].map(minutes => <button key={minutes} className={(request.todayExtraMinutes ?? 0) === minutes ? 'choice-active' : ''} onClick={() => regenerateWith({ todayExtraMinutes: minutes })}>{minutes === 0 ? '今天不再新增' : `还能学${minutes}分钟`}</button>)}
-          <label><span>自定义</span><input type="number" min="0" step="10" value={![0, 30, 60].includes(request.todayExtraMinutes ?? 0) ? request.todayExtraMinutes ?? 0 : ''} placeholder="分钟" onChange={event => onRequestChange({ ...request, todayExtraMinutes: Math.max(0, Number(event.target.value)) })}/></label>
+          <label><span>自定义</span><NumericInput min={0} step={10} value={![0, 30, 60].includes(request.todayExtraMinutes ?? 0) ? request.todayExtraMinutes : undefined} placeholder="分钟" onValueChange={value => onRequestChange({ ...request, todayExtraMinutes: value })} onEmpty={() => onRequestChange({ ...request, todayExtraMinutes: 0 })}/></label>
         </div>
       </section>}
 
@@ -591,7 +592,7 @@ export function ReplanDialog({
       {detailDate && result && editedState && <>
         <div className="drawer-day-controls">
           <label className="field"><span>日期类型</span><select value={detailType} onChange={event => changeDayType(detailDate, { type: event.target.value as DayType, customMinutes: dayTypeOverrides[detailDate]?.customMinutes })}>{(['regular', 'study', 'travel', 'custom'] as DayType[]).map(type => <option value={type} key={type}>{dayTypeLabel[type]}</option>)}</select></label>
-          {detailType === 'custom' && <label className="field"><span>自定义容量（分钟）</span><input type="number" value={dayTypeOverrides[detailDate]?.customMinutes ?? getCapacity(editedState, detailDate)} onChange={event => changeDayType(detailDate, { type: 'custom', customMinutes: Number(event.target.value) })}/></label>}
+          {detailType === 'custom' && <label className="field"><span>自定义容量（分钟）</span><NumericInput min={0} value={dayTypeOverrides[detailDate]?.customMinutes ?? getCapacity(editedState, detailDate)} onValueChange={value => changeDayType(detailDate, { type: 'custom', customMinutes: value })}/></label>}
           <div className="day-type-impact">
             <span>原容量 {minutesText(getCapacity(currentState, detailDate))}</span>
             <b>→</b>
