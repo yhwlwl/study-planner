@@ -90,14 +90,14 @@ export function FocusTimerPage({ onExit }: { onExit: () => void }) {
     const minutes = Math.max(1, Math.round(Number(sessionMinutes) || 1))
     // Reset the running session first. The chosen minute value below is authoritative.
     stopTimer()
-    if (mode === 'time') addTime(assignment.id, minutes)
-    if (mode === 'done') finishAssignment(assignment.id, minutes)
+    if (mode === 'time') addTime(assignment.id, minutes, 'timer')
+    if (mode === 'done') finishAssignment(assignment.id, minutes, 'timer')
     if (mode === 'partial') {
       commit(draft => {
         const item = draft.assignments.find(candidate => candidate.id === assignment.id)
         if (!item) return
         item.actualMinutes += minutes
-        item.timeEntries.push({ id: uid('time'), minutes, createdAt: new Date().toISOString() })
+        item.timeEntries.push({ id: uid('time'), minutes, createdAt: new Date().toISOString(), source: 'timer' })
         item.progress = Math.max(1, Math.min(99, progress))
         item.remainingMinutes = Math.max(1, Math.round(item.estimatedMinutes * (1 - item.progress / 100)))
         item.status = 'partial'

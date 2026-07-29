@@ -29,8 +29,8 @@ interface AppContextValue {
   updateDayConfig: (date: string, patch: Partial<DayConfig>) => void
   updateAssignment: (id: string, patch: Partial<Assignment>) => void
   moveAssignments: (ids: string[], date: string, source?: 'manual' | 'carryover') => void
-  finishAssignment: (id: string, actualMinutes?: number) => void
-  addTime: (id: string, minutes: number) => void
+  finishAssignment: (id: string, actualMinutes?: number, source?: 'timer' | 'manual' | 'finish') => void
+  addTime: (id: string, minutes: number, source?: 'timer' | 'manual' | 'finish') => void
   addTaskGroup: (group: TaskGroup) => void
   editTaskGroup: (group: TaskGroup) => void
   deleteTaskGroup: (id: string) => void
@@ -177,19 +177,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }), [commit])
 
-  const addTime = useCallback((id: string, minutes: number) => commit(draft => {
+  const addTime = useCallback((id: string, minutes: number, source: 'timer' | 'manual' | 'finish' = 'manual') => commit(draft => {
     const item = draft.assignments.find(a => a.id === id)
     if (!item || minutes <= 0) return
     item.actualMinutes += minutes
-    item.timeEntries.push({ id: uid('time'), minutes, createdAt: new Date().toISOString() })
+    item.timeEntries.push({ id: uid('time'), minutes, createdAt: new Date().toISOString(), source })
   }), [commit])
 
-  const finishAssignment = useCallback((id: string, actualMinutes?: number) => commit(draft => {
+  const finishAssignment = useCallback((id: string, actualMinutes?: number, source: 'timer' | 'manual' | 'finish' = 'finish') => commit(draft => {
     const item = draft.assignments.find(a => a.id === id)
     if (!item) return
     if (actualMinutes && actualMinutes > 0) {
       item.actualMinutes += actualMinutes
-      item.timeEntries.push({ id: uid('time'), minutes: actualMinutes, createdAt: new Date().toISOString() })
+      item.timeEntries.push({ id: uid('time'), minutes: actualMinutes, createdAt: new Date().toISOString(), source })
     }
     item.progress = 100
     item.remainingMinutes = 0

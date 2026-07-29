@@ -5,10 +5,6 @@ import {
   Download, FileDown, Filter, LayoutDashboard, ListTodo, Lock, Menu, Plus, RefreshCw,
   RotateCcw, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X
 } from 'lucide-react'
-import {
-  Bar, BarChart, CartesianGrid, Legend, Line, LineChart, Pie, PieChart, Cell,
-  ResponsiveContainer, Tooltip, XAxis, YAxis
-} from 'recharts'
 import { addMonths, endOfMonth, format, getDay, isWithinInterval, parseISO, startOfMonth } from 'date-fns'
 import { useApp } from './AppContext'
 import type { AppState, Assignment, DayType, Priority, ReplanBundle, ReplanRequest, Subject, TaskGroup } from './types'
@@ -24,6 +20,7 @@ import { ReplanDialog } from './components/ReplanDialog'
 import { TaskGroupDialog } from './components/TaskGroupDialog'
 import { HistoryDiffDialog } from './components/HistoryDiffDialog'
 import { FocusTimerPage, getTimerElapsedSeconds } from './components/FocusTimerPage'
+import { StatsPage } from './components/StatsPage'
 import { downloadSnapshot, getSession, signIn, signOut, signUp, supabase, supabaseConfigured, uploadSnapshot } from './lib/supabase'
 import './styles.css'
 
@@ -271,7 +268,7 @@ export default function App() {
           {page === 'today' && <TodayPage onNavigate={setPage} onReplan={date => openReplan({ mode: 'repair', fromDate: date })}/>} 
           {page === 'calendar' && <CalendarPage onReplan={(date, baseState) => openReplan({ mode: 'repair', fromDate: date }, baseState)}/>} 
           {page === 'tasks' && <TasksPage/>}
-          {page === 'stats' && <StatsPage/>}
+          {page === 'stats' && <StatsPage onOpenReplan={date => openReplan({ mode: 'repair', fromDate: date })}/>}
           {page === 'settings' && <SettingsPage sessionEmail={sessionUser?.email} cloudMessage={cloudMessage}/>} 
         </div>
       </main>
@@ -444,7 +441,7 @@ function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void;
       if (!item) return
       if (minutes) {
         item.actualMinutes += minutes
-        item.timeEntries.push({ id: uid('time'), minutes, createdAt: new Date().toISOString() })
+        item.timeEntries.push({ id: uid('time'), minutes, createdAt: new Date().toISOString(), source: 'manual' })
       }
       item.progress = finish ? 100 : Math.min(99, Math.max(1, progress))
       item.remainingMinutes = finish ? 0 : effectiveMinutes(item)
@@ -862,45 +859,6 @@ function TasksPage() {
   </>
 }
 
-function StatsPage() {
-  const { state } = useApp()
-  const groups = new Map(state.taskGroups.map(g=>[g.id,g]))
-  const dates = dateRange(state.settings.startDate,state.settings.endDate)
-  const daily = dates.map(date=>{
-    const tasks=state.assignments.filter(a=>a.scheduledDate===date)
-    return { date: date.slice(5).replace('-','.'), planned: tasks.reduce((s,a)=>s+((groups.get(a.groupId)?.countInStats||state.settings.countWordsTime)?a.estimatedMinutes:0),0), actual: tasks.reduce((s,a)=>s+a.actualMinutes,0) }
-  })
-  const subjectData = ['语文','数学','英语','物理','化学','生物','其他'].map(subject=>{
-    const ids=new Set(state.taskGroups.filter(g=>g.subject===subject).map(g=>g.id))
-    const items=state.assignments.filter(a=>ids.has(a.groupId))
-    return { subject, planned: items.reduce((s,a)=>s+a.estimatedMinutes,0), actual: items.reduce((s,a)=>s+a.actualMinutes,0) }
-  }).filter(x=>x.planned>0)
-  const priorityData = [5,3,2,1,0].map(p=>{
-    const ids=new Set(state.taskGroups.filter(g=>g.priority===p).map(g=>g.id)); const items=state.assignments.filter(a=>ids.has(a.groupId)); const done=items.filter(a=>a.status==='done').length
-    return { priority:`P${p}`, completion:items.length?Math.round(done/items.length*100):0 }
-  })
-  const totalPlan = state.assignments.reduce((s,a)=>s+((groups.get(a.groupId)?.countInStats||state.settings.countWordsTime)?a.estimatedMinutes:0),0)
-  const totalActual = state.assignments.reduce((s,a)=>s+a.actualMinutes,0)
-  const corePrediction = predictCompletion(state,g=>g.priority===5&&!g.recurring&&g.targetDate<=state.settings.coreTargetDate)
-  const chemPrediction = predictCompletion(state,g=>g.subject==='化学'&&g.title==='预习')
-  const remaining = state.assignments.filter(a=>a.status!=='done'&&(groups.get(a.groupId)?.priority??0)>0).reduce((s,a)=>s+effectiveMinutes(a),0)
-
-  return <>
-    <section className="summary-grid stats-summary">
-      <div className="metric-card"><span>累计实际学习</span><strong>{minutesText(totalActual)}</strong><small>计划总量 {minutesText(totalPlan)}</small></div>
-      <div className="metric-card"><span>计划与实际差值</span><strong>{totalActual-totalPlan>0?'+':''}{minutesText(Math.abs(totalActual-totalPlan))}</strong><small>{totalActual>totalPlan?'实际高于预计':'实际低于预计'}</small></div>
-      <div className="metric-card"><span>核心任务预计完成</span><strong>{corePrediction==='已完成'?'已完成':corePrediction?fmtDate(corePrediction):'尚无法预测'}</strong><small>目标 {fmtDate(state.settings.coreTargetDate)}</small></div>
-      <div className="metric-card"><span>剩余预计时间</span><strong>{minutesText(remaining)}</strong><small>化学预习：{chemPrediction==='已完成'?'已完成':chemPrediction?fmtDate(chemPrediction):'待排期'}</small></div>
-    </section>
-    <section className="chart-grid">
-      <ChartCard title="每日计划与实际"><ResponsiveContainer width="100%" height={280}><LineChart data={daily}><CartesianGrid strokeDasharray="3 3" vertical={false}/><XAxis dataKey="date" interval={3}/><YAxis/><Tooltip formatter={(v:number)=>`${v} 分钟`}/><Legend/><Line type="monotone" dataKey="planned" name="计划" strokeWidth={2} dot={false}/><Line type="monotone" dataKey="actual" name="实际" strokeWidth={2} dot={false}/></LineChart></ResponsiveContainer></ChartCard>
-      <ChartCard title="各科计划与实际"><ResponsiveContainer width="100%" height={280}><BarChart data={subjectData}><CartesianGrid strokeDasharray="3 3" vertical={false}/><XAxis dataKey="subject"/><YAxis/><Tooltip formatter={(v:number)=>`${v} 分钟`}/><Legend/><Bar dataKey="planned" name="计划" radius={[6,6,0,0]}/><Bar dataKey="actual" name="实际" radius={[6,6,0,0]}/></BarChart></ResponsiveContainer></ChartCard>
-      <ChartCard title="优先级完成进度"><ResponsiveContainer width="100%" height={280}><BarChart data={priorityData} layout="vertical"><CartesianGrid strokeDasharray="3 3" horizontal={false}/><XAxis type="number" domain={[0,100]} tickFormatter={v=>`${v}%`}/><YAxis type="category" dataKey="priority"/><Tooltip formatter={(v:number)=>`${v}%`}/><Bar dataKey="completion" name="完成率" radius={[0,6,6,0]}/></BarChart></ResponsiveContainer></ChartCard>
-      <ChartCard title="各科实际时间占比"><ResponsiveContainer width="100%" height={280}><PieChart><Pie data={subjectData.filter(x=>x.actual>0)} dataKey="actual" nameKey="subject" outerRadius={90} label>{subjectData.map((_,i)=><Cell key={i}/>)}</Pie><Tooltip formatter={(v:number)=>`${v} 分钟`}/><Legend/></PieChart></ResponsiveContainer></ChartCard>
-    </section>
-  </>
-}
-
 function SettingsPage({ sessionEmail, cloudMessage }: { sessionEmail?: string; cloudMessage?: string }) {
   const { state, namespace, updateSettings, undo, canUndo, replaceState, resetAll, restoreReplanHistory } = useApp()
   const [email,setEmail]=useState('')
@@ -971,7 +929,6 @@ function SettingsPage({ sessionEmail, cloudMessage }: { sessionEmail?: string; c
 
 function SettingsSection({title,description,children}:{title:string;description:string;children:React.ReactNode}){return <section className="settings-section"><div><h2>{title}</h2><p>{description}</p></div><div>{children}</div></section>}
 function Toggle({checked,onChange,label}:{checked:boolean;onChange:(v:boolean)=>void;label:string}){return <label className="switch-row"><button type="button" className={`switch ${checked?'on':''}`} onClick={()=>onChange(!checked)}><i/></button><span>{label}</span></label>}
-function ChartCard({title,children}:{title:string;children:React.ReactNode}){return <section className="chart-card"><h3>{title}</h3>{children}</section>}
 function EmptyState({title,text}:{title:string;text:string}){return <div className="empty-state"><CheckCircle2 size={30}/><h3>{title}</h3><p>{text}</p></div>}
 function downloadBlob(content:string,name:string,type:string){const blob=new Blob([content],{type});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();URL.revokeObjectURL(url)}
 function csvEscape(v:string){return `"${v.replaceAll('"','""')}"`}

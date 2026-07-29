@@ -68,6 +68,7 @@ export interface TimeEntry {
   id: string
   minutes: number
   createdAt: string
+  source?: 'timer' | 'manual' | 'finish'
 }
 
 export interface Assignment {
