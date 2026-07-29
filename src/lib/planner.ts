@@ -6,6 +6,7 @@ import type {
 } from '../types'
 import { dateRange, getBaseCapacity, getCapacity, getDayConfig, shiftDate, todayISO } from './date'
 import { uid } from './id'
+import { cloneActiveState } from './state'
 
 const before = (a: string, b: string) => isBefore(parseISO(a), parseISO(b))
 const after = (a: string, b: string) => isAfter(parseISO(a), parseISO(b))
@@ -694,7 +695,7 @@ function explainMove(
 }
 
 function buildScenario(input: AppState, request: ReplanRequest, strategy: ReplanStrategy, repair: ReturnType<typeof identifyRepairCandidates>): ReplanResult {
-  const state = structuredClone(input)
+  const state = cloneActiveState(input)
   if (strategy === 'rest') applyAutomaticBufferDays(state, request)
   const scenarioRepair = strategy === 'rest' ? identifyRepairCandidates(state, request) : repair
   const groups = groupMap(state)
@@ -892,7 +893,7 @@ function buildScenario(input: AppState, request: ReplanRequest, strategy: Replan
 }
 
 export function autoConfigureDayTypes(state: AppState): AppState {
-  const next = structuredClone(state)
+  const next = cloneActiveState(state)
   for (const date of dateRange(next.settings.startDate, next.settings.endDate)) {
     if (!next.dayConfigs[date]) next.dayConfigs[date] = { date, type: 'regular', userSet: false }
   }

@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type {
   AppSettings, AppState, Assignment, DayConfig, ReplanAudit, ReplanBundle, ReplanHistoryEntry, ReplanRequest,
-  ReplanResult, TaskGroup
+  ReplanResult, SequenceRenumberSuggestion, TaskGroup
 } from './types'
 import {
   buildBlankState, buildGuestDemoState, buildInitialState,
@@ -10,6 +10,7 @@ import {
 import { clearLocalState, loadLocalState, saveLocalState } from './lib/db'
 import { generateReplanBundle } from './lib/planner'
 import { uid } from './lib/id'
+import { findSequenceRenumberGroups, renumberTaskGroupsByDate } from './lib/sequence'
 
 type Recipe = (draft: AppState) => void
 
@@ -41,15 +42,34 @@ interface AppContextValue {
   pauseTimer: () => void
   stopTimer: () => number
   resetAll: (kind?: 'demo' | 'blank') => Promise<void>
+  sequenceRenumberSuggestion?: SequenceRenumberSuggestion
+  dismissSequenceRenumberSuggestion: () => void
+  applySequenceRenumber: (groupIds?: string[]) => void
 }
 
 const AppContext = createContext<AppContextValue | undefined>(undefined)
 
 function withoutNestedHistory(state: AppState) {
-  const snapshot = structuredClone(state)
-  snapshot.replanHistory = []
-  snapshot.conflictBackups = []
-  return snapshot
+  return structuredClone({
+    ...state,
+    replanHistory: [],
+    conflictBackups: []
+  })
+}
+
+function cloneForMutation(state: AppState): AppState {
+  return {
+    ...state,
+    settings: { ...state.settings },
+    dayConfigs: structuredClone(state.dayConfigs),
+    taskGroups: structuredClone(state.taskGroups),
+    assignments: structuredClone(state.assignments),
+    timer: { ...state.timer },
+    // These arrays contain large immutable snapshot strings. Ordinary edits never
+    // mutate them, so retaining their references avoids repeatedly cloning MBs.
+    replanHistory: state.replanHistory,
+    conflictBackups: state.conflictBackups
+  }
 }
 
 function templateState(kind: 'demo' | 'blank') {
@@ -62,9 +82,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [namespace, setNamespace] = useState('guest')
   const [ready, setReady] = useState(false)
   const [loadedFromStorage, setLoadedFromStorage] = useState(false)
+  const [sequenceRenumberSuggestion, setSequenceRenumberSuggestion] = useState<SequenceRenumberSuggestion>()
   const history = useRef<AppState[]>([])
   const stateRef = useRef(state)
   const namespaceRef = useRef(namespace)
+  const previousScheduleRef = useRef<{ namespace: string; assignments: Map<string, { groupId: string; scheduledDate?: string }> }>()
   stateRef.current = state
   namespaceRef.current = namespace
 
@@ -80,15 +102,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
+    const currentAssignments = new Map(
+      state.assignments.map(assignment => [assignment.id, { groupId: assignment.groupId, scheduledDate: assignment.scheduledDate }])
+    )
+    const previous = previousScheduleRef.current
+    previousScheduleRef.current = { namespace, assignments: currentAssignments }
+
+    if (!ready || !previous || previous.namespace !== namespace) return
+
+    const changedGroupIds = new Set<string>()
+    const changedSources = new Set<'manual' | 'automatic'>()
+    for (const assignment of state.assignments) {
+      const before = previous.assignments.get(assignment.id)
+      if (!before || before.scheduledDate === assignment.scheduledDate) continue
+      changedGroupIds.add(assignment.groupId)
+      changedSources.add(assignment.scheduleSource === 'replan' ? 'automatic' : 'manual')
+    }
+    if (changedGroupIds.size === 0) return
+
+    const groups = findSequenceRenumberGroups(state, changedGroupIds)
+    if (groups.length === 0) return
+    const source = changedSources.size > 1 ? 'mixed' : changedSources.has('automatic') ? 'automatic' : 'manual'
+    setSequenceRenumberSuggestion({ source, groups })
+  }, [state.assignments, namespace, ready])
+
+  useEffect(() => {
     if (!ready) return
     const currentNamespace = namespace
-    const handle = window.setTimeout(() => saveLocalState(currentNamespace, state), 250)
+    const handle = window.setTimeout(() => { void saveLocalState(currentNamespace, state).catch(() => undefined) }, 180)
     return () => window.clearTimeout(handle)
   }, [state, namespace, ready])
 
   const replaceState = useCallback((nextInput: AppState, pushHistory = true) => {
     setState(prev => {
-      if (pushHistory) history.current = [...history.current.slice(-29), structuredClone(prev)]
+      if (pushHistory) history.current = [...history.current.slice(-29), prev]
       const next = normalizeState(nextInput)
       next.updatedAt = new Date().toISOString()
       return next
@@ -97,8 +144,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const commit = useCallback((recipe: Recipe, options?: { history?: boolean }) => {
     setState(prev => {
-      if (options?.history !== false) history.current = [...history.current.slice(-29), structuredClone(prev)]
-      const next = structuredClone(prev)
+      if (options?.history !== false) history.current = [...history.current.slice(-29), prev]
+      const next = cloneForMutation(prev)
       recipe(next)
       next.updatedAt = new Date().toISOString()
       return next
@@ -117,7 +164,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const setDataSpace = useCallback(async (nextNamespace: string, nextInput: AppState, pushHistory = false) => {
     const next = normalizeState(nextInput)
-    if (pushHistory) history.current = [...history.current.slice(-29), structuredClone(stateRef.current)]
+    if (pushHistory) history.current = [...history.current.slice(-29), stateRef.current]
     else history.current = []
     setNamespace(nextNamespace)
     setLoadedFromStorage(true)
@@ -243,7 +290,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const applyReplan = useCallback((result: ReplanResult, editedState?: AppState, audit?: ReplanAudit) => setState(prev => {
-    history.current = [...history.current.slice(-29), structuredClone(prev)]
+    history.current = [...history.current.slice(-29), prev]
     const entry: ReplanHistoryEntry = {
       id: uid('history'),
       createdAt: new Date().toISOString(),
@@ -256,6 +303,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     entry.afterSnapshot = JSON.stringify(withoutNestedHistory(next))
     entry.audit = audit
     next.replanHistory = [...(prev.replanHistory ?? []), entry].slice(-10)
+    next.conflictBackups = prev.conflictBackups
     next.updatedAt = new Date().toISOString()
     return next
   }), [])
@@ -263,7 +311,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const restoreReplanHistory = useCallback((id: string) => setState(prev => {
     const entry = prev.replanHistory.find(x => x.id === id)
     if (!entry) return prev
-    history.current = [...history.current.slice(-29), structuredClone(prev)]
+    history.current = [...history.current.slice(-29), prev]
     try {
       const restored = normalizeState(JSON.parse(entry.snapshot) as AppState)
       restored.replanHistory = prev.replanHistory
@@ -302,6 +350,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return Math.max(1, Math.round(seconds / 60))
   }, [commit])
 
+  const dismissSequenceRenumberSuggestion = useCallback(() => {
+    setSequenceRenumberSuggestion(undefined)
+  }, [])
+
+  const applySequenceRenumber = useCallback((groupIds?: string[]) => {
+    const selected = groupIds?.length ? groupIds : sequenceRenumberSuggestion?.groups.map(group => group.groupId) ?? []
+    if (selected.length === 0) {
+      setSequenceRenumberSuggestion(undefined)
+      return
+    }
+    commit(draft => renumberTaskGroupsByDate(draft, selected))
+    setSequenceRenumberSuggestion(undefined)
+  }, [commit, sequenceRenumberSuggestion])
+
   const resetAll = useCallback(async (kind: 'demo' | 'blank' = namespaceRef.current === 'guest' ? 'demo' : 'blank') => {
     const next = templateState(kind)
     await clearLocalState(namespaceRef.current)
@@ -314,12 +376,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     commit, replaceState, loadDataSpace, setDataSpace, clearDataSpace, undo,
     updateSettings, updateDayConfig, updateAssignment, moveAssignments, finishAssignment, addTime,
     addTaskGroup, editTaskGroup, deleteTaskGroup, previewReplan, applyReplan, restoreReplanHistory,
-    startTimer, pauseTimer, stopTimer, resetAll
+    startTimer, pauseTimer, stopTimer, resetAll, sequenceRenumberSuggestion,
+    dismissSequenceRenumberSuggestion, applySequenceRenumber
   }), [
     state, namespace, ready, loadedFromStorage, commit, replaceState, loadDataSpace, setDataSpace,
     clearDataSpace, undo, updateSettings, updateDayConfig, updateAssignment, moveAssignments,
     finishAssignment, addTime, addTaskGroup, editTaskGroup, deleteTaskGroup, previewReplan,
-    applyReplan, restoreReplanHistory, startTimer, pauseTimer, stopTimer, resetAll
+    applyReplan, restoreReplanHistory, startTimer, pauseTimer, stopTimer, resetAll,
+    sequenceRenumberSuggestion, dismissSequenceRenumberSuggestion, applySequenceRenumber
   ])
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

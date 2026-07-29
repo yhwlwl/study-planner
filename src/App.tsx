@@ -7,10 +7,11 @@ import {
 } from 'lucide-react'
 import { addMonths, endOfMonth, format, getDay, isWithinInterval, parseISO, startOfMonth } from 'date-fns'
 import { useApp } from './AppContext'
-import type { AppState, Assignment, BufferPreference, DayType, Priority, ReplanBundle, ReplanRequest, Subject, TaskGroup } from './types'
+import type { AppState, Assignment, BufferPreference, DayType, Priority, ReplanBundle, ReplanRequest, SequenceRenumberSuggestion, Subject, TaskGroup } from './types'
 import { clampDate, dateRange, dayTypeLabel, fmtDate, fmtWeekday, getCapacity, getDayConfig, minutesText, shiftDate, todayISO } from './lib/date'
 import { analyzePlan, checkAssignmentPlacement, effectiveMinutes, getDurationSuggestion, planningDayLoad, predictCompletion, suggestMoveDates } from './lib/planner'
 import { uid } from './lib/id'
+import { cloneActiveState } from './lib/state'
 import { buildBlankState, buildGuestDemoState, normalizeState } from './lib/seed'
 import { loadLocalState } from './lib/db'
 import { Modal } from './components/Modal'
@@ -22,12 +23,20 @@ import { HistoryDiffDialog } from './components/HistoryDiffDialog'
 import { FocusTimerPage, getTimerElapsedSeconds } from './components/FocusTimerPage'
 import { StatsPage } from './components/StatsPage'
 import { NumericInput } from './components/NumericInput'
-import { downloadSnapshot, getSession, signIn, signOut, signUp, supabase, supabaseConfigured, uploadSnapshot } from './lib/supabase'
+import { downloadSnapshot, getSession, preparePortableState, signIn, signOut, signUp, supabase, supabaseConfigured, uploadSnapshot } from './lib/supabase'
 import './styles.css'
 
 type Page = 'today' | 'calendar' | 'tasks' | 'stats' | 'settings' | 'timer'
 type ShiftScope = 'today' | 'future'
-type CloudSyncStatus = 'local' | 'restoring' | 'saving' | 'saved' | 'error'
+type CloudSyncStatus = 'local' | 'restoring' | 'queued' | 'saving' | 'saved' | 'error'
+
+type CloudSaveQueue = {
+  scope?: string
+  pending?: AppState
+  timer?: number
+  inFlight?: Promise<void>
+  lastSavedUpdatedAt?: string
+}
 
 const navItems: { id: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'today', label: '今日', icon: LayoutDashboard },
@@ -40,7 +49,8 @@ const navItems: { id: Page; label: string; icon: typeof LayoutDashboard }[] = [
 export default function App() {
   const {
     state, namespace, ready, updateSettings, previewReplan, applyReplan,
-    replaceState, loadDataSpace, setDataSpace, clearDataSpace
+    replaceState, loadDataSpace, setDataSpace, clearDataSpace, sequenceRenumberSuggestion,
+    dismissSequenceRenumberSuggestion, applySequenceRenumber
   } = useApp()
   const [page, setPage] = useState<Page>('today')
   const [mobileNav, setMobileNav] = useState(false)
@@ -56,7 +66,96 @@ export default function App() {
   const [dataSwitching, setDataSwitching] = useState(false)
   const previousUserId = useRef<string>()
   const stateRef = useRef(state)
+  const cloudSaveQueue = useRef<CloudSaveQueue>({})
   stateRef.current = state
+
+  const resetCloudQueue = (scope?: string, lastSavedUpdatedAt?: string) => {
+    const queue = cloudSaveQueue.current
+    if (queue.timer) window.clearTimeout(queue.timer)
+    queue.scope = scope
+    queue.pending = undefined
+    queue.timer = undefined
+    queue.lastSavedUpdatedAt = lastSavedUpdatedAt
+  }
+
+  const flushCloudQueue = async () => {
+    const queue = cloudSaveQueue.current
+    if (queue.inFlight || !queue.pending || !queue.scope) return
+    const scope = queue.scope
+    const userId = scope.replace(/^user:/, '')
+    const next = queue.pending
+    queue.pending = undefined
+    queue.timer = undefined
+    setSyncStatus('saving')
+
+    const rawRequest = uploadSnapshot(next, userId)
+    const request = rawRequest.then(() => undefined, () => undefined)
+    queue.inFlight = request
+    try {
+      await rawRequest
+      if (queue.scope === scope) queue.lastSavedUpdatedAt = next.updatedAt
+    } catch {
+      if (queue.scope === scope) setSyncStatus('error')
+    } finally {
+      if (queue.inFlight === request) queue.inFlight = undefined
+      if (queue.scope !== scope) return
+      const pendingAfter = cloudSaveQueue.current.pending as AppState | undefined
+      if (pendingAfter && pendingAfter.updatedAt !== queue.lastSavedUpdatedAt) {
+        setSyncStatus('queued')
+        queue.timer = window.setTimeout(() => { void flushCloudQueue() }, 120)
+      } else if (queue.lastSavedUpdatedAt === next.updatedAt) {
+        setSyncStatus('saved')
+      }
+    }
+  }
+
+  const queueCloudSave = (next: AppState, userId: string, delay = 450) => {
+    const scope = `user:${userId}`
+    const queue = cloudSaveQueue.current
+    if (queue.scope !== scope) resetCloudQueue(scope)
+    if (queue.lastSavedUpdatedAt === next.updatedAt) return
+    queue.pending = next
+    if (queue.timer) window.clearTimeout(queue.timer)
+    if (!queue.inFlight) setSyncStatus('queued')
+    queue.timer = window.setTimeout(() => { void flushCloudQueue() }, delay)
+  }
+
+  const uploadCloudNow = async () => {
+    if (!sessionUser?.id) throw new Error('请先登录')
+    const userId = sessionUser.id
+    const scope = `user:${userId}`
+    const queue = cloudSaveQueue.current
+    if (queue.scope !== scope) resetCloudQueue(scope)
+    if (queue.timer) window.clearTimeout(queue.timer)
+    queue.timer = undefined
+    if (queue.inFlight) {
+      try { await queue.inFlight } catch { /* retry below with latest state */ }
+    }
+    if (queue.timer) window.clearTimeout(queue.timer)
+    queue.timer = undefined
+    const latest = stateRef.current
+    queue.pending = undefined
+    setSyncStatus('saving')
+    const rawRequest = uploadSnapshot(latest, userId)
+    const request = rawRequest.then(() => undefined, () => undefined)
+    queue.inFlight = request
+    try {
+      const savedAt = await rawRequest
+      queue.lastSavedUpdatedAt = latest.updatedAt
+      setSyncStatus('saved')
+      return savedAt
+    } catch (error) {
+      setSyncStatus('error')
+      throw error
+    } finally {
+      if (queue.inFlight === request) queue.inFlight = undefined
+      const pendingAfter = cloudSaveQueue.current.pending as AppState | undefined
+      if (pendingAfter && pendingAfter.updatedAt !== queue.lastSavedUpdatedAt) {
+        setSyncStatus('queued')
+        queue.timer = window.setTimeout(() => { void flushCloudQueue() }, 120)
+      }
+    }
+  }
 
   useEffect(() => {
     if (!supabase) return
@@ -86,6 +185,7 @@ export default function App() {
         previousUserId.current = undefined
         setSessionUser(undefined)
         setCloudReady(false)
+        resetCloudQueue()
         setSyncStatus('local')
         setFirstLoginOpen(false)
         const keepOffline = stateRef.current.settings.keepOfflineOnLogout
@@ -98,6 +198,7 @@ export default function App() {
         return
       }
       previousUserId.current = user.id
+      resetCloudQueue(`user:${user.id}`)
       setDataSwitching(true)
       setSessionUser(user)
     }
@@ -113,13 +214,24 @@ export default function App() {
     setSyncStatus('restoring')
     const bootstrapCloud = async () => {
       try {
-        const userNamespace = `user:${sessionUser.id}`
-        const localUser = await loadLocalState(userNamespace)
-        const cloud = await downloadSnapshot()
+        const userId = sessionUser.id
+        const userNamespace = `user:${userId}`
+        // Local cache and cloud snapshot are independent; read them in parallel.
+        const [localUser, cloud] = await Promise.all([
+          loadLocalState(userNamespace),
+          downloadSnapshot(userId)
+        ])
         if (cancelled) return
+
+        const normalizedLocal = localUser ? normalizeState(localUser) : undefined
         if (cloud) {
-          const normalizedCloud = normalizeState(cloud)
-          const normalizedLocal = localUser ? normalizeState(localUser) : undefined
+          const cloudNeedsCompaction = Boolean(cloud.replanHistory?.length || cloud.conflictBackups?.length)
+          const normalizedCloud = normalizeState({
+            ...cloud,
+            // Replan history and conflict backups are device-local performance data.
+            replanHistory: normalizedLocal?.replanHistory ?? [],
+            conflictBackups: normalizedLocal?.conflictBackups ?? []
+          })
           const localNewer = normalizedLocal && Date.parse(normalizedLocal.updatedAt) > Date.parse(normalizedCloud.updatedAt)
           if (localNewer) {
             const useLocal = window.confirm(`检测到此设备的个人计划比云端更新。
@@ -128,19 +240,24 @@ export default function App() {
 取消：恢复云端版本，并把本机版本保存为冲突备份。`)
             if (useLocal) {
               await setDataSpace(userNamespace, normalizedLocal, false)
-              await uploadSnapshot(normalizedLocal)
+              await uploadSnapshot(normalizedLocal, userId)
+              resetCloudQueue(userNamespace, normalizedLocal.updatedAt)
               setCloudMessage('已使用较新的本机版本并同步到云端。')
             } else {
-              normalizedCloud.conflictBackups = [...(normalizedCloud.conflictBackups ?? []).slice(-4), JSON.stringify(normalizedLocal)]
+              const backup = JSON.stringify(preparePortableState(normalizedLocal))
+              normalizedCloud.conflictBackups = [...(normalizedLocal.conflictBackups ?? []).slice(-2), backup].slice(-3)
               await setDataSpace(userNamespace, normalizedCloud, false)
+              resetCloudQueue(userNamespace, cloudNeedsCompaction ? undefined : normalizedCloud.updatedAt)
               setCloudMessage('已恢复云端版本，本机版本已保留为冲突备份。')
             }
           } else {
             if (normalizedLocal && normalizedLocal.updatedAt !== normalizedCloud.updatedAt) {
-              normalizedCloud.conflictBackups = [...(normalizedCloud.conflictBackups ?? []).slice(-4), JSON.stringify(normalizedLocal)]
+              const backup = JSON.stringify(preparePortableState(normalizedLocal))
+              normalizedCloud.conflictBackups = [...(normalizedLocal.conflictBackups ?? []).slice(-2), backup].slice(-3)
             }
             await setDataSpace(userNamespace, normalizedCloud, false)
-            setCloudMessage('已从云端恢复个人计划。')
+            resetCloudQueue(userNamespace, cloudNeedsCompaction ? undefined : normalizedCloud.updatedAt)
+            setCloudMessage(cloudNeedsCompaction ? '已恢复个人计划，正在压缩旧版云端快照。' : '已从云端恢复个人计划。')
           }
           if (!cancelled) {
             setCloudReady(true)
@@ -149,12 +266,13 @@ export default function App() {
           }
           return
         }
-        if (localUser && localUser.taskGroups.length > 0) {
-          const normalizedLocal = normalizeState(localUser)
+
+        if (normalizedLocal && normalizedLocal.taskGroups.length > 0) {
           await setDataSpace(userNamespace, normalizedLocal, false)
           const uploadLocal = window.confirm('云端没有计划，但此设备保存了一份个人计划。是否把它作为云端初始版本？')
           if (uploadLocal) {
-            await uploadSnapshot(normalizedLocal)
+            await uploadSnapshot(normalizedLocal, userId)
+            resetCloudQueue(userNamespace, normalizedLocal.updatedAt)
             setCloudReady(true)
             setSyncStatus('saved')
             setCloudMessage('已把本机个人计划设为云端初始版本。')
@@ -166,9 +284,11 @@ export default function App() {
           }
           return
         }
+
         // 云端为空时绝不上传游客数据，先让用户选择模板。
         await loadDataSpace(userNamespace, buildBlankState())
         if (!cancelled) {
+          resetCloudQueue(userNamespace)
           setSyncStatus('local')
           setFirstLoginOpen(true)
           setDataSwitching(false)
@@ -188,36 +308,34 @@ export default function App() {
 
   useEffect(() => {
     if (!ready || !sessionUser?.id || !cloudReady || namespace !== `user:${sessionUser.id}`) return
-    setSyncStatus('saving')
-    let cancelled = false
-    const id = window.setTimeout(async () => {
-      try {
-        await uploadSnapshot(state)
-        if (!cancelled) setSyncStatus('saved')
-      } catch {
-        if (!cancelled) setSyncStatus('error')
-      }
-    }, 1200)
-    return () => {
-      cancelled = true
-      window.clearTimeout(id)
-    }
+    queueCloudSave(state, sessionUser.id)
   }, [state, ready, sessionUser?.id, cloudReady, namespace])
 
   useEffect(() => {
-    const retry = async () => {
+    const retry = () => {
       if (!sessionUser?.id || !cloudReady || namespace !== `user:${sessionUser.id}`) return
-      setSyncStatus('saving')
-      try {
-        await uploadSnapshot(stateRef.current)
-        setSyncStatus('saved')
-      } catch {
-        setSyncStatus('error')
-      }
+      queueCloudSave(stateRef.current, sessionUser.id, 0)
     }
     window.addEventListener('online', retry)
     return () => window.removeEventListener('online', retry)
   }, [sessionUser?.id, cloudReady, namespace])
+
+  useEffect(() => {
+    const flushBeforeBackground = () => {
+      if (document.visibilityState === 'hidden' && cloudSaveQueue.current.pending) void flushCloudQueue()
+    }
+    const flushBeforePageHide = () => {
+      if (cloudSaveQueue.current.pending) void flushCloudQueue()
+    }
+    document.addEventListener('visibilitychange', flushBeforeBackground)
+    window.addEventListener('pagehide', flushBeforePageHide)
+    return () => {
+      document.removeEventListener('visibilitychange', flushBeforeBackground)
+      window.removeEventListener('pagehide', flushBeforePageHide)
+      const queue = cloudSaveQueue.current
+      if (queue.timer) window.clearTimeout(queue.timer)
+    }
+  }, [])
 
   const openReplan = (patch?: Partial<ReplanRequest>, baseState?: AppState) => {
     const source = baseState ?? state
@@ -241,7 +359,8 @@ export default function App() {
     if (!sessionUser?.id) return
     const initial = kind === 'demo' ? buildGuestDemoState() : buildBlankState()
     await setDataSpace(`user:${sessionUser.id}`, initial, false)
-    await uploadSnapshot(initial)
+    await uploadSnapshot(initial, sessionUser.id)
+    resetCloudQueue(`user:${sessionUser.id}`, initial.updatedAt)
     setCloudReady(true)
     setSyncStatus('saved')
     setFirstLoginOpen(false)
@@ -263,7 +382,7 @@ export default function App() {
           })}
         </nav>
         <div className="sidebar-bottom">
-          <div className={`sync-status ${sessionUser ? 'online' : ''} ${syncStatus === 'error' ? 'sync-error' : ''}`}>{sessionUser ? <Cloud size={16}/> : <CloudOff size={16}/>}<span>{!sessionUser ? '游客演示 · 仅本地保存' : syncStatus === 'restoring' ? '正在从云端恢复' : syncStatus === 'saving' ? '正在自动保存' : syncStatus === 'error' ? '云同步失败' : cloudReady ? '已自动保存到云端' : '等待初始化个人计划'}</span></div>
+          <div className={`sync-status ${sessionUser ? 'online' : ''} ${syncStatus === 'error' ? 'sync-error' : ''}`}>{sessionUser ? <Cloud size={16}/> : <CloudOff size={16}/>}<span>{!sessionUser ? '游客演示 · 仅本地保存' : syncStatus === 'restoring' ? '正在从云端恢复' : syncStatus === 'queued' ? '已保存到本机 · 等待云同步' : syncStatus === 'saving' ? '正在同步到云端' : syncStatus === 'error' ? '云同步失败' : cloudReady ? '已自动保存到云端' : '等待初始化个人计划'}</span></div>
           <button className="collapse-button" onClick={() => updateSettings({ sidebarCollapsed: !state.settings.sidebarCollapsed })}><ChevronLeft size={18}/><span>收起侧边栏</span></button>
         </div>
       </aside>
@@ -279,9 +398,14 @@ export default function App() {
           {page === 'calendar' && <CalendarPage onReplan={(date, baseState) => openReplan({ mode: 'repair', fromDate: date }, baseState)}/>} 
           {page === 'tasks' && <TasksPage/>}
           {page === 'stats' && <StatsPage onOpenReplan={date => openReplan({ mode: 'repair', fromDate: date })}/>}
-          {page === 'settings' && <SettingsPage sessionEmail={sessionUser?.email} cloudMessage={cloudMessage}/>} 
+          {page === 'settings' && <SettingsPage sessionUserId={sessionUser?.id} sessionEmail={sessionUser?.email} cloudMessage={cloudMessage} onCloudUpload={uploadCloudNow}/>} 
         </div>
       </main>
+      <SequenceRenumberDialog
+        suggestion={sequenceRenumberSuggestion}
+        onKeep={dismissSequenceRenumberSuggestion}
+        onApply={applySequenceRenumber}
+      />
       <ReplanDialog
         bundle={replan}
         currentState={replanBaseState ?? state}
@@ -303,6 +427,69 @@ export default function App() {
   )
 }
 
+
+function SequenceRenumberDialog({
+  suggestion,
+  onKeep,
+  onApply
+}: {
+  suggestion?: SequenceRenumberSuggestion
+  onKeep: () => void
+  onApply: (groupIds?: string[]) => void
+}) {
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([])
+
+  useEffect(() => {
+    setSelectedGroupIds(suggestion?.groups.map(group => group.groupId) ?? [])
+  }, [suggestion])
+
+  const sourceLabel = suggestion?.source === 'automatic'
+    ? '自动重排后'
+    : suggestion?.source === 'mixed'
+      ? '本次调整后'
+      : '手动调整后'
+
+  return <Modal open={Boolean(suggestion)} title="任务编号顺序发生变化" onClose={onKeep} wide>
+    {suggestion && <>
+      <p className="onboarding-copy">
+        {sourceLabel}，系统发现部分同组任务的日期顺序与编号顺序不一致。重新编号只修改编号和标题，不会移动任务，也不会改变进度、计时、备注或锁定状态。
+      </p>
+      <div className="sequence-renumber-list">
+        {suggestion.groups.map(group => {
+          const selected = selectedGroupIds.includes(group.groupId)
+          return <section className={`sequence-renumber-group ${selected ? 'selected' : ''}`} key={group.groupId}>
+            <label className="sequence-renumber-head">
+              <input
+                type="checkbox"
+                checked={selected}
+                onChange={event => setSelectedGroupIds(current => event.target.checked
+                  ? [...new Set([...current, group.groupId])]
+                  : current.filter(id => id !== group.groupId))}
+              />
+              <span><strong>{group.groupTitle}</strong><small>{group.assignmentCount} 项任务 · {group.changes.length} 项编号会变化</small></span>
+            </label>
+            <div className="sequence-renumber-changes">
+              {group.changes.slice(0, 8).map(change => <div key={change.assignmentId}>
+                <span>{change.scheduledDate ? fmtDate(change.scheduledDate) : '未安排'}</span>
+                <strong>{change.fromTitle}</strong>
+                <em>→</em>
+                <strong>{change.toTitle}</strong>
+              </div>)}
+              {group.changes.length > 8 && <small>另有 {group.changes.length - 8} 项将按当前日期顺序连续编号。</small>}
+            </div>
+          </section>
+        })}
+      </div>
+      <p className="muted-text">同一天内保持当前编号先后；未安排任务排在已安排任务之后。你也可以只勾选需要重新编号的任务组。</p>
+      <div className="modal-actions">
+        <button className="secondary-button" onClick={onKeep}>保留原编号</button>
+        <button className="primary-button" disabled={selectedGroupIds.length === 0} onClick={() => onApply(selectedGroupIds)}>
+          按日期重新编号{selectedGroupIds.length ? `（${selectedGroupIds.length}组）` : ''}
+        </button>
+      </div>
+    </>}
+  </Modal>
+}
 
 function ActiveTimerReturnButton({ onOpen }: { onOpen: () => void }) {
   const { state } = useApp()
@@ -347,7 +534,8 @@ function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void;
   const risk = planned > capacity ? `今日计划超过容量 ${minutesText(planned - capacity)}` : corePrediction && corePrediction !== '已完成' && corePrediction > state.settings.coreTargetDate ? `核心任务预计 ${fmtDate(corePrediction)} 完成，晚于目标` : undefined
 
   const shiftPreview = useMemo(() => {
-    const next = structuredClone(state)
+    if (!shiftOpen) return { next: undefined, changes: [], ignoredLocked: 0, stayedAtEnd: 0, issues: [] }
+    const next = cloneActiveState(state)
     const changes: Array<{ id: string; title: string; from: string; to: string }> = []
     let ignoredLocked = 0
     let stayedAtEnd = 0
@@ -378,7 +566,7 @@ function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void;
       stayedAtEnd,
       issues: analyzePlan(next, date).slice(0, 10)
     }
-  }, [state, groups, date, shiftScope, shiftDays, shiftLocked])
+  }, [state, groups, date, shiftScope, shiftDays, shiftLocked, shiftOpen])
 
   const applyShift = () => {
     const days = Math.max(1, Math.min(14, Math.round(shiftDays || 1)))
@@ -484,7 +672,7 @@ function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void;
     </section>
     <Modal open={Boolean(completeTarget)} title={completeTarget ? `记录：${completeTarget.title}` : '记录任务'} onClose={() => setCompleteTarget(undefined)}>
       <div className="form-stack">
-        <label className="field"><span>本次实际用时（分钟，可留空）</span><NumericInput min={0} step={1} value={actual === '' ? undefined : Number(actual)} onValueChange={value => setActual(String(value))} onEmpty={() => setActual('')} autoFocus/></label>
+        <label className="field"><span>本次实际用时（分钟，可留空）</span><NumericInput min={0} max={1440} step={1} value={actual === '' ? undefined : Number(actual)} onValueChange={value => setActual(String(value))} onEmpty={() => setActual('')} autoFocus/></label>
         <label className="field"><span>若未完成，填写当前进度</span><NumericInput min={1} max={99} value={progress} onValueChange={setProgress}/></label>
       </div>
       <div className="modal-actions"><button className="secondary-button" onClick={() => saveCompletion(false)}>保存为部分完成</button><button className="primary-button" onClick={() => saveCompletion(true)}>标记完成</button></div>
@@ -664,7 +852,7 @@ ${risks.join('\n')}
     const targetConfig = getDayConfig(state, target)
     if (targetConfig.isBufferDay && (targetConfig.bufferProtected ?? targetConfig.userSet)) { window.alert('目标日期是受保护的缓冲日，不能直接批量移入。'); return false }
     const moving = state.assignments.filter(item => ids.includes(item.id) && !item.locked)
-    const previewState = structuredClone(state)
+    const previewState = cloneActiveState(state)
     const riskSet = new Set<string>()
     for (const assignment of moving) {
       const checks = checkAssignmentPlacement(previewState, assignment.id, target)
@@ -717,7 +905,7 @@ ${risks.join('\n')}
 
   let dayPreviewState: AppState | undefined
   if (dayOpen && dayCfg) {
-    dayPreviewState = structuredClone(state)
+    dayPreviewState = cloneActiveState(state)
     const type = pendingDayType ?? dayCfg.type
     const isBufferDay = pendingAvailabilityMode !== 'default'
     const availableMinutes = pendingAvailabilityMode === 'rest' ? 0 : pendingAvailabilityMode === 'reduced' ? Math.max(0, pendingAvailableMinutes) : undefined
@@ -822,7 +1010,7 @@ ${risks.join('\n')}
       {dayOpen && dayCfg && dayPreviewState && <>
         <div className="day-settings-row">
           <label className="field"><span>日期类型</span><select value={pendingDayType ?? dayCfg.type} onChange={event => setPendingDayType(event.target.value as DayType)}>{(['regular', 'study', 'travel', 'custom'] as DayType[]).map(type => <option key={type} value={type}>{dayTypeLabel[type]}</option>)}</select></label>
-          {(pendingDayType ?? dayCfg.type) === 'custom' && <label className="field"><span>可用分钟</span><NumericInput min={0} value={pendingCustomMinutes ?? dayCfg.customMinutes ?? 210} onValueChange={setPendingCustomMinutes}/></label>}
+          {(pendingDayType ?? dayCfg.type) === 'custom' && <label className="field"><span>可用分钟</span><NumericInput min={0} max={1440} value={pendingCustomMinutes ?? dayCfg.customMinutes ?? 210} onValueChange={setPendingCustomMinutes}/></label>}
           <label className="field grow"><span>备注</span><input value={dayCfg.note ?? ''} onChange={event => updateDayConfig(dayOpen, { note: event.target.value })} placeholder="例如：外出、下午补课"/></label>
         </div>
         <section className="buffer-day-editor">
@@ -833,7 +1021,7 @@ ${risks.join('\n')}
             <button className={pendingAvailabilityMode === 'rest' ? 'active' : ''} onClick={() => setPendingAvailabilityMode('rest')}>完全休息</button>
           </div>
           {pendingAvailabilityMode !== 'default' && <div className="buffer-fields">
-            {pendingAvailabilityMode === 'reduced' && <label className="field"><span>最多可学习（分钟）</span><NumericInput min={0} step={10} value={pendingAvailableMinutes} onValueChange={setPendingAvailableMinutes}/></label>}
+            {pendingAvailabilityMode === 'reduced' && <label className="field"><span>最多可学习（分钟）</span><NumericInput min={0} max={1440} step={10} value={pendingAvailableMinutes} onValueChange={setPendingAvailableMinutes}/></label>}
             <label className="field grow"><span>原因</span><input value={pendingBufferReason} onChange={event => setPendingBufferReason(event.target.value)} placeholder="例如：明天参加活动，下午不在家"/></label>
             <label className="field"><span>后续调整偏好</span><select value={pendingBufferPreference} onChange={event => setPendingBufferPreference(event.target.value as BufferPreference)}><option value="preserve">尽量保持后续每日安排</option><option value="goal">优先保护目标日期</option><option value="spread">尽量均匀分散</option></select></label>
           </div>}
@@ -912,13 +1100,15 @@ function TasksPage() {
   </>
 }
 
-function SettingsPage({ sessionEmail, cloudMessage }: { sessionEmail?: string; cloudMessage?: string }) {
+function SettingsPage({ sessionUserId, sessionEmail, cloudMessage, onCloudUpload }: { sessionUserId?: string; sessionEmail?: string; cloudMessage?: string; onCloudUpload: () => Promise<string> }) {
   const { state, namespace, updateSettings, undo, canUndo, replaceState, resetAll, restoreReplanHistory } = useApp()
   const [email,setEmail]=useState('')
   const [password,setPassword]=useState('')
   const [authMessage,setAuthMessage]=useState('')
   const [historyEntry,setHistoryEntry]=useState<AppState['replanHistory'][number]>()
+  const [planNameDraft,setPlanNameDraft]=useState(state.settings.planName)
   const fileRef=useRef<HTMLInputElement>(null)
+  useEffect(() => setPlanNameDraft(state.settings.planName), [state.settings.planName])
 
   const exportJson=()=>downloadBlob(JSON.stringify(state,null,2),`study-plan-${todayISO()}.json`,'application/json')
   const exportCsv=()=>{
@@ -928,41 +1118,41 @@ function SettingsPage({ sessionEmail, cloudMessage }: { sessionEmail?: string; c
   }
   const importJson=(file:File)=>{const reader=new FileReader();reader.onload=()=>{try{const parsed=JSON.parse(String(reader.result)) as AppState;if(!parsed.version||!parsed.taskGroups)throw new Error();if(window.confirm('导入会覆盖当前数据，是否继续？'))replaceState(parsed,true)}catch{window.alert('无法识别这个备份文件。')}};reader.readAsText(file)}
   const login=async(kind:'in'|'up')=>{try{setAuthMessage('处理中……');await(kind==='in'?signIn(email,password):signUp(email,password));setAuthMessage(kind==='in'?'登录成功，正在恢复云端计划':'注册请求已提交，请检查邮箱。')}catch(e){setAuthMessage(e instanceof Error?e.message:'操作失败')}}
-  const cloudUpload=async()=>{try{const t=await uploadSnapshot(state);setAuthMessage(`已同步：${new Date(t).toLocaleString()}`)}catch(e){setAuthMessage(e instanceof Error?e.message:'同步失败')}}
-  const cloudDownload=async()=>{try{const cloud=await downloadSnapshot();if(!cloud){setAuthMessage('云端尚无数据');return}if(window.confirm('用云端数据覆盖当前数据？当前状态会保留在撤销历史中。'))replaceState(cloud,true);setAuthMessage('已从云端恢复')}catch(e){setAuthMessage(e instanceof Error?e.message:'下载失败')}}
+  const cloudUpload=async()=>{try{const t=await onCloudUpload();setAuthMessage(`已同步：${new Date(t).toLocaleString()}`)}catch(e){setAuthMessage(e instanceof Error?e.message:'同步失败')}}
+  const cloudDownload=async()=>{try{const cloud=await downloadSnapshot(sessionUserId);if(!cloud){setAuthMessage('云端尚无数据');return}if(window.confirm('用云端数据覆盖当前数据？当前状态会保留在撤销历史中。'))replaceState({...cloud,replanHistory:state.replanHistory,conflictBackups:state.conflictBackups},true);setAuthMessage('已从云端恢复')}catch(e){setAuthMessage(e instanceof Error?e.message:'下载失败')}}
   const restoreConflict=(raw:string)=>{try{const parsed=JSON.parse(raw) as AppState;if(window.confirm('恢复这份冲突备份？当前状态会保留在撤销历史中。'))replaceState(parsed,true)}catch{window.alert('冲突备份已损坏，无法恢复。')}}
 
   return <div className="settings-stack">
     <SettingsSection title="计划设置" description="这些参数会参与容量计算、完成日期预测与重新排期。">
       <div className="form-grid">
-        <label className="field span-2"><span>计划名称</span><input value={state.settings.planName} onChange={e=>updateSettings({planName:e.target.value})}/></label>
+        <label className="field span-2"><span>计划名称</span><input value={planNameDraft} onChange={e=>setPlanNameDraft(e.target.value)} onBlur={()=>planNameDraft!==state.settings.planName&&updateSettings({planName:planNameDraft})}/></label>
         <label className="field"><span>开始日期</span><input type="date" value={state.settings.startDate} onChange={e=>updateSettings({startDate:e.target.value})}/></label>
         <label className="field"><span>结束日期</span><input type="date" value={state.settings.endDate} onChange={e=>updateSettings({endDate:e.target.value})}/></label>
         <label className="field"><span>核心任务目标</span><input type="date" value={state.settings.coreTargetDate} onChange={e=>updateSettings({coreTargetDate:e.target.value})}/></label>
         <label className="field"><span>化学预习目标</span><input type="date" value={state.settings.chemistryTargetDate} onChange={e=>updateSettings({chemistryTargetDate:e.target.value})}/></label>
-        <label className="field"><span>检查缓冲天数</span><NumericInput min={0} value={state.settings.bufferDays} onValueChange={value=>updateSettings({bufferDays:value})}/></label>
+        <label className="field"><span>检查缓冲天数</span><NumericInput commitMode="blur" min={0} max={365} value={state.settings.bufferDays} onValueChange={value=>updateSettings({bufferDays:value})}/></label>
         <label className="field"><span>默认排期风格</span><select value={state.settings.planningMode} onChange={e=>updateSettings({planningMode:e.target.value as AppState['settings']['planningMode']})}><option value="sprint">冲刺</option><option value="balanced">平衡</option><option value="relaxed">轻松</option></select></label>
       </div>
     </SettingsSection>
     <SettingsSection title="自动重排偏好" description="这些是软约束。系统会说明突破它们的原因，不会把建议伪装成强制决定。">
       <div className="form-grid three">
-        <label className="field"><span>冻结近期天数</span><NumericInput min={0} max={7} value={state.settings.freezeDays} onValueChange={value=>updateSettings({freezeDays:value})}/></label>
-        <label className="field"><span>常规日最多任务</span><NumericInput min={1} value={state.settings.regularMaxTasks} onValueChange={value=>updateSettings({regularMaxTasks:value})}/></label>
-        <label className="field"><span>学习日最多任务</span><NumericInput min={1} value={state.settings.studyMaxTasks} onValueChange={value=>updateSettings({studyMaxTasks:value})}/></label>
-        <label className="field"><span>平衡方案目标利用率（%）</span><NumericInput min={50} max={100} value={Math.round(state.settings.targetUtilization*100)} onValueChange={value=>updateSettings({targetUtilization:value/100})}/></label>
-        <label className="field"><span>接近满载提示线（%）</span><NumericInput min={60} max={100} value={Math.round(state.settings.nearFullThreshold*100)} onValueChange={value=>updateSettings({nearFullThreshold:value/100})}/></label>
-        <label className="field"><span>缓冲日目标利用率（%）</span><NumericInput min={0} max={80} value={Math.round(state.settings.bufferUtilization*100)} onValueChange={value=>updateSettings({bufferUtilization:value/100})}/></label>
-        <label className="field"><span>局部修复优先范围（前后天数）</span><NumericInput min={1} max={14} value={state.settings.localRepairRadius} onValueChange={value=>updateSettings({localRepairRadius:value})}/></label>
-        <label className="field"><span>单日尽量最多新增任务</span><NumericInput min={0} max={10} value={state.settings.maxNewTasksPerDay} onValueChange={value=>updateSettings({maxNewTasksPerDay:value})}/></label>
-        <label className="field"><span>单日负载变化预算（%容量）</span><NumericInput min={0} max={100} value={Math.round(state.settings.maxLoadChangeRatio*100)} onValueChange={value=>updateSettings({maxLoadChangeRatio:value/100})}/></label>
-        <label className="field"><span>单科建议占比上限（%）</span><NumericInput min={30} max={100} value={Math.round(state.settings.subjectShareLimit*100)} onValueChange={value=>updateSettings({subjectShareLimit:value/100})}/></label>
+        <label className="field"><span>冻结近期天数</span><NumericInput commitMode="blur" min={0} max={7} value={state.settings.freezeDays} onValueChange={value=>updateSettings({freezeDays:value})}/></label>
+        <label className="field"><span>常规日最多任务</span><NumericInput commitMode="blur" min={1} max={100} value={state.settings.regularMaxTasks} onValueChange={value=>updateSettings({regularMaxTasks:value})}/></label>
+        <label className="field"><span>学习日最多任务</span><NumericInput commitMode="blur" min={1} max={100} value={state.settings.studyMaxTasks} onValueChange={value=>updateSettings({studyMaxTasks:value})}/></label>
+        <label className="field"><span>平衡方案目标利用率（%）</span><NumericInput commitMode="blur" min={50} max={100} value={Math.round(state.settings.targetUtilization*100)} onValueChange={value=>updateSettings({targetUtilization:value/100})}/></label>
+        <label className="field"><span>接近满载提示线（%）</span><NumericInput commitMode="blur" min={60} max={100} value={Math.round(state.settings.nearFullThreshold*100)} onValueChange={value=>updateSettings({nearFullThreshold:value/100})}/></label>
+        <label className="field"><span>缓冲日目标利用率（%）</span><NumericInput commitMode="blur" min={0} max={80} value={Math.round(state.settings.bufferUtilization*100)} onValueChange={value=>updateSettings({bufferUtilization:value/100})}/></label>
+        <label className="field"><span>局部修复优先范围（前后天数）</span><NumericInput commitMode="blur" min={1} max={14} value={state.settings.localRepairRadius} onValueChange={value=>updateSettings({localRepairRadius:value})}/></label>
+        <label className="field"><span>单日尽量最多新增任务</span><NumericInput commitMode="blur" min={0} max={10} value={state.settings.maxNewTasksPerDay} onValueChange={value=>updateSettings({maxNewTasksPerDay:value})}/></label>
+        <label className="field"><span>单日负载变化预算（%容量）</span><NumericInput commitMode="blur" min={0} max={100} value={Math.round(state.settings.maxLoadChangeRatio*100)} onValueChange={value=>updateSettings({maxLoadChangeRatio:value/100})}/></label>
+        <label className="field"><span>单科建议占比上限（%）</span><NumericInput commitMode="blur" min={30} max={100} value={Math.round(state.settings.subjectShareLimit*100)} onValueChange={value=>updateSettings({subjectShareLimit:value/100})}/></label>
       </div>
     </SettingsSection>
     <SettingsSection title="每日容量" description="容量是重排硬上限；平衡方案默认只使用约 85%，目标优先方案也不会静默突破 100%。">
       <div className="form-grid three">
-        <label className="field"><span>常规日（分钟）</span><NumericInput min={0} value={state.settings.regularMinutes} onValueChange={value=>updateSettings({regularMinutes:value})}/></label>
-        <label className="field"><span>学习日（分钟）</span><NumericInput min={0} value={state.settings.studyMinutes} onValueChange={value=>updateSettings({studyMinutes:value})}/></label>
-        <label className="field"><span>旅游日（分钟）</span><NumericInput min={0} value={state.settings.travelMinutes} onValueChange={value=>updateSettings({travelMinutes:value})}/></label>
+        <label className="field"><span>常规日（分钟）</span><NumericInput commitMode="blur" min={0} max={1440} value={state.settings.regularMinutes} onValueChange={value=>updateSettings({regularMinutes:value})}/></label>
+        <label className="field"><span>学习日（分钟）</span><NumericInput commitMode="blur" min={0} max={1440} value={state.settings.studyMinutes} onValueChange={value=>updateSettings({studyMinutes:value})}/></label>
+        <label className="field"><span>旅游日（分钟）</span><NumericInput commitMode="blur" min={0} max={1440} value={state.settings.travelMinutes} onValueChange={value=>updateSettings({travelMinutes:value})}/></label>
       </div>
       <div className="toggle-grid"><Toggle checked={state.settings.countWordsTime} onChange={v=>updateSettings({countWordsTime:v})} label="把每日单词计入计划与统计时间"/><Toggle checked={state.settings.showWarnings} onChange={v=>updateSettings({showWarnings:v})} label="显示黄色和红色进度提醒"/><Toggle checked={state.settings.optionalReview} onChange={v=>updateSettings({optionalReview:v})} label="显示可选每日复盘入口"/><Toggle checked={state.settings.keepOfflineOnLogout} onChange={v=>updateSettings({keepOfflineOnLogout:v})} label="退出登录后在此设备保留个人离线缓存"/></div>
     </SettingsSection>

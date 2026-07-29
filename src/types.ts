@@ -173,6 +173,28 @@ export interface AppState {
   templateKind?: 'summer' | 'demo' | 'blank'
 }
 
+
+export interface SequenceRenumberChange {
+  assignmentId: string
+  scheduledDate?: string
+  fromIndex: number
+  toIndex: number
+  fromTitle: string
+  toTitle: string
+}
+
+export interface SequenceRenumberGroup {
+  groupId: string
+  groupTitle: string
+  assignmentCount: number
+  changes: SequenceRenumberChange[]
+}
+
+export interface SequenceRenumberSuggestion {
+  source: 'manual' | 'automatic' | 'mixed'
+  groups: SequenceRenumberGroup[]
+}
+
 export interface ReplanRequest {
   mode: ReplanMode
   fromDate: string

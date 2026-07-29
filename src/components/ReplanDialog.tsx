@@ -410,7 +410,7 @@ export function ReplanDialog({
         <div className="today-extra-control">
           <span>从现在起，今天还能接收的新任务：</span>
           {[0, 30, 60].map(minutes => <button key={minutes} className={(request.todayExtraMinutes ?? 0) === minutes ? 'choice-active' : ''} onClick={() => regenerateWith({ todayExtraMinutes: minutes })}>{minutes === 0 ? '今天不再新增' : `还能学${minutes}分钟`}</button>)}
-          <label><span>自定义</span><NumericInput min={0} step={10} value={![0, 30, 60].includes(request.todayExtraMinutes ?? 0) ? request.todayExtraMinutes : undefined} placeholder="分钟" onValueChange={value => onRequestChange({ ...request, todayExtraMinutes: value })} onEmpty={() => onRequestChange({ ...request, todayExtraMinutes: 0 })}/></label>
+          <label><span>自定义</span><NumericInput min={0} max={1440} step={10} value={![0, 30, 60].includes(request.todayExtraMinutes ?? 0) ? request.todayExtraMinutes : undefined} placeholder="分钟" onValueChange={value => onRequestChange({ ...request, todayExtraMinutes: value })} onEmpty={() => onRequestChange({ ...request, todayExtraMinutes: 0 })}/></label>
         </div>
       </section>}
 
@@ -592,7 +592,7 @@ export function ReplanDialog({
       {detailDate && result && editedState && <>
         <div className="drawer-day-controls">
           <label className="field"><span>日期类型</span><select value={detailType} onChange={event => changeDayType(detailDate, { type: event.target.value as DayType, customMinutes: dayTypeOverrides[detailDate]?.customMinutes })}>{(['regular', 'study', 'travel', 'custom'] as DayType[]).map(type => <option value={type} key={type}>{dayTypeLabel[type]}</option>)}</select></label>
-          {detailType === 'custom' && <label className="field"><span>自定义容量（分钟）</span><NumericInput min={0} value={dayTypeOverrides[detailDate]?.customMinutes ?? getCapacity(editedState, detailDate)} onValueChange={value => changeDayType(detailDate, { type: 'custom', customMinutes: value })}/></label>}
+          {detailType === 'custom' && <label className="field"><span>自定义容量（分钟）</span><NumericInput min={0} max={1440} value={dayTypeOverrides[detailDate]?.customMinutes ?? getCapacity(editedState, detailDate)} onValueChange={value => changeDayType(detailDate, { type: 'custom', customMinutes: value })}/></label>}
           <div className="day-type-impact">
             <span>原容量 {minutesText(getCapacity(currentState, detailDate))}</span>
             <b>→</b>

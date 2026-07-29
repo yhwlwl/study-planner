@@ -1,16 +1,34 @@
-# 从 V0.6.0 升级到 V0.6.1
+# 从 V0.6.3 升级到 V0.6.4
 
-1. 将补丁包中的文件按目录上传并覆盖同名文件。
-2. 本次只优化前端数字输入体验，不修改计划数据结构、Supabase 表、环境变量或 Vercel 配置。
-3. 旧计划、游客演示数据、重排历史和统计记录都无需迁移。
-4. 更新后点击任意数字框会自动选中原值，直接输入即可替换；也可以先清空再输入，失去焦点时才校验范围。
-5. “每日最多数量”留空表示使用活动类型默认值，不再用 0 表示。
-6. Vercel 会在提交后自动重新部署。
+本版本新增任务顺序冲突检测与可选重新编号，不改变 Supabase 表结构、RLS、环境变量或同步数据边界。
 
-## 手机上传顺序
+## 手机上上传
 
-- 仓库根目录：`package.json`、`CHANGELOG.md`、`UPGRADE.md`、`IMPLEMENTATION_STATUS.md`
-- `src/`：`App.tsx`
-- `src/components/`：`NumericInput.tsx`、`TaskGroupDialog.tsx`、`ReplanDialog.tsx`、`FocusTimerPage.tsx`
+### 仓库根目录
 
-`NumericInput.tsx` 是新增文件，不要漏传。不要把 ZIP 文件直接上传到仓库。
+- `package.json`
+- `CHANGELOG.md`
+- `UPGRADE.md`
+- `IMPLEMENTATION_STATUS.md`
+
+### `src/`
+
+- `App.tsx`
+- `AppContext.tsx`
+- `styles.css`
+- `types.ts`
+
+### `src/lib/`
+
+- `sequence.ts`（新增）
+
+覆盖同名文件即可。不要上传 ZIP 文件本身，也不需要重新执行 Supabase SQL。
+
+## 行为变化
+
+- 手动或自动调整日期后，系统只检查本次发生日期变化的任务组。
+- 若任务编号与当前日期顺序冲突，会弹出预览并询问是否重新编号。
+- 可按组勾选；选择保留原编号不会修改数据。
+- 重新编号只修改 `index` 与显示标题，其他任务数据全部保留。
+- 同一天内按原编号排序，未安排任务放在已安排任务之后。
+- 重复任务保持原有“标题 · 日期”格式，不参与重新编号。

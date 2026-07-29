@@ -38,11 +38,11 @@ export function TaskGroupDialog({ open, onClose, initial, defaults, onSave }: {
       <label className="field span-2"><span>任务名称</span><input value={form.title} onChange={e => patch('title', e.target.value)} placeholder="例如：数学套卷" /></label>
       <label className="field"><span>科目</span><select value={form.subject} onChange={e => patch('subject', e.target.value as Subject)}>{subjects.map(s => <option key={s}>{s}</option>)}</select></label>
       <label className="field"><span>优先级</span><select value={form.priority} onChange={e => patch('priority', Number(e.target.value) as Priority)}>{priorities.map(p => <option key={p} value={p}>{p}</option>)}</select></label>
-      <label className="field"><span>数量</span><NumericInput min={1} value={form.quantity} onValueChange={value => patch('quantity', value)} /></label>
-      <label className="field"><span>单次预计（分钟）</span><NumericInput min={1} value={form.unitMinutes} onValueChange={value => patch('unitMinutes', value)} /></label>
+      <label className="field"><span>数量</span><NumericInput min={1} max={999} value={form.quantity} onValueChange={value => patch('quantity', value)} /></label>
+      <label className="field"><span>单次预计（分钟）</span><NumericInput min={1} max={1440} value={form.unitMinutes} onValueChange={value => patch('unitMinutes', value)} /></label>
       <label className="field"><span>阶段目标日期</span><input type="date" value={form.targetDate} onChange={e => patch('targetDate', e.target.value)} /></label>
       <label className="field"><span>最终截止日期</span><input type="date" value={form.dueDate} onChange={e => patch('dueDate', e.target.value)} /></label>
-      <label className="field"><span>每日最多数量</span><NumericInput min={1} value={form.dailyMax} placeholder="使用活动类型默认上限" onValueChange={value => patch('dailyMax', value)} onEmpty={() => patch('dailyMax', undefined)} /></label>
+      <label className="field"><span>每日最多数量</span><NumericInput min={1} max={99} value={form.dailyMax} placeholder="使用活动类型默认上限" onValueChange={value => patch('dailyMax', value)} onEmpty={() => patch('dailyMax', undefined)} /></label>
       <label className="field span-2"><span>任务活动类型</span><select value={form.activityType ?? 'normal'} onChange={e => patch('activityType', e.target.value as TaskActivityType)}>{activityOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select><small>用于重排时统计同类任务。默认上限可在冲突预览中单次放宽。</small></label>
       <label className="field checkbox-field"><input type="checkbox" checked={Boolean(form.highIntensity)} onChange={e => patch('highIntensity', e.target.checked)} /><span>属于高强度任务（默认每天最多2项）</span></label>
       <label className="field checkbox-field"><input type="checkbox" checked={form.countInStats} onChange={e => patch('countInStats', e.target.checked)} /><span>计入计划与统计时间</span></label>

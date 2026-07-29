@@ -219,12 +219,34 @@ export function buildBlankState(): AppState {
   }), [], 'blank')
 }
 
+function compactConflictBackup(item: unknown): string | undefined {
+  try {
+    const parsed = typeof item === 'string' ? JSON.parse(item) as AppState : item as AppState
+    if (!parsed || typeof parsed !== 'object') return undefined
+    const portable = {
+      ...parsed,
+      replanHistory: [],
+      conflictBackups: []
+    }
+    return JSON.stringify(portable)
+  } catch {
+    return typeof item === 'string' && item.length <= 1_000_000 ? item : undefined
+  }
+}
+
 export function normalizeState(raw: AppState): AppState {
-  const state = structuredClone(raw)
+  // Clone only the active plan. History snapshots are immutable strings and can be
+  // copied by reference; cloning them on every normalization caused large pauses.
+  const rawHistory = raw.replanHistory ?? []
+  const rawBackups = raw.conflictBackups ?? []
+  const state = structuredClone({ ...raw, replanHistory: [], conflictBackups: [] }) as AppState
   state.version = 4
   state.settings = defaultSettings(state.settings ?? {})
-  state.replanHistory = state.replanHistory ?? []
-  state.conflictBackups = ((state.conflictBackups ?? []) as unknown[]).map(item => typeof item === 'string' ? item : JSON.stringify(item))
+  state.replanHistory = [...rawHistory].slice(-10)
+  state.conflictBackups = (rawBackups as unknown[])
+    .map(compactConflictBackup)
+    .filter((item): item is string => Boolean(item))
+    .slice(-3)
   state.templateKind = state.templateKind ?? 'blank'
   state.dayConfigs = state.dayConfigs ?? {}
   for (const date of dateRange(state.settings.startDate, state.settings.endDate)) {

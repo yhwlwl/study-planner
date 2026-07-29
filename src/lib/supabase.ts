@@ -32,14 +32,34 @@ export async function signOut() {
   if (error) throw error
 }
 
-export async function uploadSnapshot(state: AppState): Promise<string> {
-  if (!supabase) throw new Error('Supabase 尚未配置')
+/**
+ * Replan snapshots and conflict backups are intentionally local-only. They can be
+ * several times larger than the active plan and previously made every cloud upsert
+ * resend megabytes of nested JSON. The active plan still syncs completely.
+ */
+export function preparePortableState(state: AppState): AppState {
+  return {
+    ...state,
+    replanHistory: [],
+    conflictBackups: []
+  }
+}
+
+async function resolveUserId(userId?: string): Promise<string> {
+  if (userId) return userId
   const session = await getSession()
   if (!session) throw new Error('请先登录')
+  return session.user.id
+}
+
+export async function uploadSnapshot(state: AppState, userId?: string): Promise<string> {
+  if (!supabase) throw new Error('Supabase 尚未配置')
+  const resolvedUserId = await resolveUserId(userId)
   const now = new Date().toISOString()
-  const payload = { ...state, lastCloudSyncAt: now, updatedAt: state.updatedAt }
+  const portable = preparePortableState(state)
+  const payload = { ...portable, lastCloudSyncAt: now, updatedAt: state.updatedAt }
   const { error } = await supabase.from('study_snapshots').upsert({
-    user_id: session.user.id,
+    user_id: resolvedUserId,
     data: payload,
     client_updated_at: state.updatedAt,
     updated_at: now
@@ -48,11 +68,10 @@ export async function uploadSnapshot(state: AppState): Promise<string> {
   return now
 }
 
-export async function downloadSnapshot(): Promise<AppState | undefined> {
+export async function downloadSnapshot(userId?: string): Promise<AppState | undefined> {
   if (!supabase) throw new Error('Supabase 尚未配置')
-  const session = await getSession()
-  if (!session) throw new Error('请先登录')
-  const { data, error } = await supabase.from('study_snapshots').select('data').eq('user_id', session.user.id).maybeSingle()
+  const resolvedUserId = await resolveUserId(userId)
+  const { data, error } = await supabase.from('study_snapshots').select('data').eq('user_id', resolvedUserId).maybeSingle()
   if (error) throw error
   return data?.data as AppState | undefined
 }
