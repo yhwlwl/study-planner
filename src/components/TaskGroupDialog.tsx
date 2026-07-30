@@ -33,7 +33,7 @@ export function TaskGroupDialog({ open, onClose, initial, defaults, onSave }: {
     onClose()
   }
 
-  return <Modal open={open} title={initial ? '编辑任务' : '新增任务'} onClose={onClose} wide>
+  return <Modal open={open} title={initial ? '编辑任务' : '新增任务'} onClose={onClose} wide mobileFullscreen>
     <div className="form-grid">
       <label className="field span-2"><span>任务名称</span><input value={form.title} onChange={e => patch('title', e.target.value)} placeholder="例如：数学套卷" /></label>
       <label className="field"><span>科目</span><select value={form.subject} onChange={e => patch('subject', e.target.value as Subject)}>{subjects.map(s => <option key={s}>{s}</option>)}</select></label>

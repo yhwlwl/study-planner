@@ -63,7 +63,7 @@ export function HistoryDiffDialog({ entry, onClose }: { entry?: ReplanHistoryEnt
     }).sort()
   }, [before, after])
 
-  return <Modal open={Boolean(entry)} title={entry ? `${entry.label} · 历史差异` : '历史差异'} onClose={onClose} wide>
+  return <Modal open={Boolean(entry)} title={entry ? `${entry.label} · 历史差异` : '历史差异'} onClose={onClose} wide mobileFullscreen>
     {!before || !after ? <p className="muted-text">这条历史来自旧版本，只保存了重排前快照，无法展示完整前后对比。</p> : <>
       <div className="history-audit-summary">
         <span>策略：{entry?.audit?.strategy ?? '旧版未记录'}</span>

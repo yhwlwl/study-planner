@@ -135,7 +135,7 @@ function DayDiffPanel({
         <div>{taskView(row.before, 'before', row)}</div>
         <div>{taskView(row.after, 'after', row)}</div>
         {changed && <div className="diff-row-actions">
-          {move && <div className="diff-reason-block"><span className="diff-reason" title={`${move.reason}；${move.impact}`}>{move.reason}</span>{move.rejectedAlternatives && move.rejectedAlternatives.length > 0 && <details><summary>为什么没有选其他日期</summary>{move.rejectedAlternatives.map(item => <div key={`${move.assignmentId}-${item.date}`}><strong>{item.date}</strong><span>{item.reasons.join('；')}</span></div>)}</details>}</div>}
+          {move && <div className="diff-reason-block"><div className="diff-reason"><span>{move.reason}</span>{move.impact && <span className="diff-impact">{move.impact}</span>}</div>{move.rejectedAlternatives && move.rejectedAlternatives.length > 0 && <details><summary>为什么没有选其他日期</summary>{move.rejectedAlternatives.map(item => <div key={`${move.assignmentId}-${item.date}`}><strong>{item.date}</strong><span>{item.reasons.join('；')}</span></div>)}</details>}</div>}
           <button className={decision.mode === 'accept' ? 'choice-active' : ''} onClick={() => onDecision(assignment.id, { ...decision, mode: 'accept', date: undefined, previewFixed: true })}>接受</button>
           <button className={decision.mode === 'keep' ? 'choice-active' : ''} onClick={() => onDecision(assignment.id, { ...decision, mode: 'keep', date: undefined, previewFixed: true })}>保留原日</button>
           <label className="inline-date-choice"><span>改到</span><input
@@ -386,7 +386,7 @@ export function ReplanDialog({
   const detailType = detailDate && editedState ? detailOverride?.type ?? editedState.dayConfigs[detailDate]?.type ?? 'regular' : 'regular'
 
   return <>
-    <Modal open={open} title="重排中心 · 先预览，再决定" onClose={onClose} wide>
+    <Modal open={open} title="重排中心 · 先预览，再决定" onClose={onClose} wide mobileFullscreen>
       <div className="replan-controls">
         <div className="segmented-control">
           <button className={request.mode === 'repair' ? 'active' : ''} onClick={() => onRequestChange({ ...request, mode: 'repair' })}>局部修复</button>
@@ -443,8 +443,37 @@ export function ReplanDialog({
         </div>
 
         <section className="replan-section">
-          <div className="replan-section-title"><SlidersHorizontal size={18}/><div><h3>方案后果</h3><p>这里只说明影响，不替你做决定。</p></div></div>
-          <div className="consequence-list">{result.consequences.map((item, index) => <div key={index}>{item}</div>)}</div>
+          <div className="replan-section-title"><SlidersHorizontal size={18}/><div><h3>方案后果</h3><p>保留完整信息；点击每一项可以展开查看问题、任务和日期变化。</p></div></div>
+          <div className="consequence-detail-list">
+            <details>
+              <summary><div><strong>检测到 {bundle?.issues.length ?? 0} 个待处理问题</strong><span>展开查看每一个问题的完整说明</span></div><ChevronDown size={17}/></summary>
+              <div className="consequence-detail-body issue-detail-body">
+                {(bundle?.issues.length ?? 0) === 0 ? <p className="muted-text">重排前没有检测到待处理问题。</p> : bundle?.issues.map((issue, index) => <article key={index}><strong>问题 {index + 1}</strong><p>{issue}</p></article>)}
+              </div>
+            </details>
+            <details>
+              <summary><div><strong>将移动 {result.moves.length} 项任务，涉及 {result.disturbance.changedDays} 天</strong><span>展开查看每项任务从哪天移到哪天，以及移动原因</span></div><ChevronDown size={17}/></summary>
+              <div className="consequence-detail-body move-detail-body">
+                {result.moves.length === 0 ? <p className="muted-text">该方案不需要移动任务。</p> : result.moves.map(move => <article key={move.assignmentId}>
+                  <div className="move-detail-title"><strong>{move.title}</strong><span>{move.subject}</span></div>
+                  <div className="move-date-route"><span>{move.from ? fmtDate(move.from) : '未安排'}</span><b>→</b><span>{move.to ? fmtDate(move.to) : '暂不安排'}</span></div>
+                  <p><strong>原因：</strong>{move.reason}</p>
+                  <p><strong>影响：</strong>{move.impact}</p>
+                </article>)}
+              </div>
+            </details>
+            <details>
+              <summary><div><strong>计划扰动与保留情况</strong><span>保留率 {Math.round(result.disturbance.originalDateRetentionRate * 100)}%，平均每日变化 {minutesText(result.disturbance.averageLoadDelta)}</span></div><ChevronDown size={17}/></summary>
+              <div className="consequence-detail-body disturbance-detail-body">
+                <article><strong>原计划日期保留率</strong><span>{Math.round(result.disturbance.originalDateRetentionRate * 100)}%</span></article>
+                <article><strong>改动日期</strong><span>{result.disturbance.changedDays} 天</span></article>
+                <article><strong>平均每日负载变化</strong><span>{minutesText(result.disturbance.averageLoadDelta)}</span></article>
+                <article><strong>最大单日负载变化</strong><span>{minutesText(result.disturbance.maximumLoadDelta)}</span></article>
+                <article><strong>保留原日任务组合</strong><span>{result.disturbance.preservedDailyBundles} 组</span></article>
+              </div>
+            </details>
+          </div>
+          {result.consequences.length > 0 && <div className="consequence-list consequence-full-text">{result.consequences.map((item, index) => <div key={index}>{item}</div>)}</div>}
         </section>
 
         {result.constraintConflicts.length > 0 && <section className="replan-section constraint-conflict-section">
