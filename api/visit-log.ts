@@ -24,7 +24,7 @@ type ServerConfig = {
   serviceKey: string
 }
 
-const API_VERSION = '0.6.6'
+const API_VERSION = '0.7.0'
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const LEGACY_JWT_RE = /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/
 const ALLOWED_EVENT_TYPES = new Set(['page_view'])
