@@ -386,17 +386,17 @@ export function ReplanDialog({
   const detailType = detailDate && editedState ? detailOverride?.type ?? editedState.dayConfigs[detailDate]?.type ?? 'regular' : 'regular'
 
   return <>
-    <Modal open={open} title="重排中心 · 先预览，再决定" onClose={onClose} wide mobileFullscreen>
+    <Modal open={open} title="计划调整 · 先预览，再决定" onClose={onClose} wide mobileFullscreen>
       <div className="replan-controls">
         <div className="segmented-control">
-          <button className={request.mode === 'repair' ? 'active' : ''} onClick={() => onRequestChange({ ...request, mode: 'repair' })}>局部修复</button>
-          <button className={request.mode === 'full' ? 'active' : ''} onClick={() => onRequestChange({ ...request, mode: 'full' })}>全面重排</button>
+          <button className={request.mode === 'repair' ? 'active' : ''} onClick={() => onRequestChange({ ...request, mode: 'repair' })}>解决当前问题</button>
+          <button className={request.mode === 'full' ? 'active' : ''} onClick={() => onRequestChange({ ...request, mode: 'full' })}>重新组织未来计划</button>
         </div>
         <label className="field compact-field"><span>从哪天开始</span><input type="date" value={request.fromDate} onChange={event => onRequestChange({ ...request, fromDate: event.target.value })}/></label>
         <label className="field compact-field"><span>冻结近期天数</span><NumericInput min={0} max={7} value={request.freezeDays ?? 2} onValueChange={value => onRequestChange({ ...request, freezeDays: value })}/></label>
         <button className="secondary-button" onClick={() => onRegenerate(request)}><RefreshCw size={16}/>重新计算</button>
         <button className="secondary-button" disabled={!undoStack.length} onClick={undoPreview}><Undo2 size={16}/>撤销预览操作</button>
-        <p className="replan-control-note">过去日期完全冻结；今天按真实学习时间半冻结。全面重排默认从明天开始，手动安排长期受到保护。</p>
+        <p className="replan-control-note">过去日期完全冻结；今天按真实学习时间半冻结。重新组织未来计划默认从明天开始，手动安排始终受到保护。</p>
       </div>
 
       {bundle?.todaySnapshot && <section className="today-replan-snapshot">
@@ -429,7 +429,7 @@ export function ReplanDialog({
         </div>
 
         {bundle && bundle.issues.length > 0 && <section className="replan-section detected-section">
-          <div className="replan-section-title"><AlertTriangle size={18}/><div><h3>系统检测到的问题</h3><p>这是重排前的现状；是否处理以及采用哪个方案由你决定。</p></div></div>
+          <div className="replan-section-title"><AlertTriangle size={18}/><div><h3>系统检测到的问题</h3><p>这是调整前的现状；是否处理以及采用哪个方案由你决定。</p></div></div>
           <div className="detected-issue-list">{bundle.issues.slice(0, 16).map((issue, index) => <div key={index}>{issue}</div>)}</div>
         </section>}
 

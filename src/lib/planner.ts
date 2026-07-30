@@ -2,11 +2,13 @@ import { differenceInCalendarDays, isAfter, isBefore, parseISO } from 'date-fns'
 import type {
   AppState, Assignment, DayTypeSuggestion, LoadChange, ReplanBundle, ReplanConstraintConflict,
   ReplanDisturbance, ReplanLimitOverride, ReplanMove, ReplanRejectedAlternative, ReplanRequest,
-  ReplanResult, ReplanStrategy, TaskActivityType, TaskGroup
+  ReplanResult, ReplanStrategy, ReplanMode, TaskActivityType, TaskGroup, PlanChangeEvent, SchedulingProposal,
+  ProposalIssue, TaskMovement, DateLoadChange, GoalImpact, AppStatePortable, SchedulingPreference
 } from '../types'
-import { dateRange, getBaseCapacity, getCapacity, getDayConfig, shiftDate, todayISO } from './date'
+import { dateRange, getBaseCapacity, getCapacity, getDayConfig, isDateProtected, shiftDate, todayISO } from './date'
 import { uid } from './id'
-import { cloneActiveState } from './state'
+import { cloneActiveState, portableState, stableSignature } from './state'
+import { goalNamesForAssignment, goalProgress, nearestRelevantGoalDate, nearestRelevantLatestDate } from './goals'
 
 const before = (a: string, b: string) => isBefore(parseISO(a), parseISO(b))
 const after = (a: string, b: string) => isAfter(parseISO(a), parseISO(b))
@@ -271,8 +273,13 @@ function validatePlacement(
     return violations
   }
   if (before(date, todayISO())) violations.push({ key: 'past', label: '过去日期已冻结', current: 1, limit: 0, hard: true })
-  if (after(date, group.dueDate)) violations.push({ key: 'due-date', label: `超过最终截止 ${group.dueDate}`, current: 1, limit: 0, hard: true })
-  if (config.type === 'travel' && originalDate !== date) violations.push({ key: 'travel-day', label: '旅游日不接收普通任务', current: 1, limit: 0, hard: true })
+  if (group.dueDate && after(date, group.dueDate)) violations.push({ key: 'due-date', label: `超过兼容截止 ${group.dueDate}`, current: 1, limit: 0, hard: true })
+  const goalLatest = nearestRelevantLatestDate(state, assignment)
+  if (goalLatest && after(date, goalLatest)) violations.push({ key: 'goal-latest', label: `超过相关目标最晚日期 ${goalLatest}`, current: 1, limit: 0, hard: true })
+  if (config.type === 'travel' && originalDate !== date) violations.push({ key: 'travel-day', label: '外出日不接收普通任务', current: 1, limit: 0, hard: true })
+  if (isDateProtected(state, date) && originalDate !== date && !request.allowBufferUseDates?.includes(date)) {
+    violations.push({ key: 'date-protection', label: '日期受到保护', current: 1, limit: 0, hard: true })
+  }
 
   const manualBufferProtected = Boolean(config.isBufferDay && (config.bufferProtected ?? config.userSet))
   if (manualBufferProtected && originalDate !== date && !request.allowBufferUseDates?.includes(date)) {
@@ -344,7 +351,8 @@ function candidateScore(
   }
   if (assignment.intentStrength === 'manual') score += date === originalDate ? -25000 : 18000
   if (assignment.status === 'partial') score += date === originalDate ? -15000 : 8000
-  if (after(date, group.targetDate)) score += (group.priority === 5 ? 36000 : 8000) + daysFrom(group.targetDate, date) * (group.priority === 5 ? 4500 : 1000)
+  const relevantGoalDate = nearestRelevantGoalDate(state, assignment) ?? group.targetDate
+  if (relevantGoalDate && after(date, relevantGoalDate)) score += (group.priority === 5 ? 36000 : 8000) + daysFrom(relevantGoalDate, date) * (group.priority === 5 ? 4500 : 1000)
 
   const target = targetUtilization(state, date, strategy)
   if (ratio > target) score += Math.pow(ratio - target, 2) * (strategy === 'goal' ? 3500 : 18000)
@@ -559,6 +567,10 @@ function assignmentCandidates(state: AppState, request: ReplanRequest, repair: R
     const group = groups.get(assignment.groupId)
     if (!group || group.recurring || assignment.status === 'done' || assignment.locked || state.timer.assignmentId === assignment.id) continue
     const date = assignment.scheduledDate
+    if (request.affectedAssignmentIds?.includes(assignment.id)) {
+      ids.add(assignment.id)
+      continue
+    }
     if (request.mode === 'repair') {
       if (repair.candidateIds.has(assignment.id)) ids.add(assignment.id)
       if (request.strategy !== 'preserve' && repair.softManualIds.has(assignment.id)) ids.add(assignment.id)
@@ -590,9 +602,11 @@ function assignmentCandidates(state: AppState, request: ReplanRequest, repair: R
   return ids
 }
 
-function possibleDateRange(state: AppState, request: ReplanRequest, group: TaskGroup, originalDate?: string) {
+function possibleDateRange(state: AppState, request: ReplanRequest, group: TaskGroup, originalDate?: string, assignment?: Assignment) {
   const start = planningStart(request)
-  const end = before(group.dueDate, state.settings.endDate) ? group.dueDate : state.settings.endDate
+  const goalLatest = assignment ? nearestRelevantLatestDate(state, assignment) : undefined
+  const candidates = [state.settings.endDate, group.dueDate, goalLatest].filter((item): item is string => Boolean(item)).sort()
+  const end = candidates[0] ?? state.settings.endDate
   const all = dateRange(start, end)
   if (request.mode !== 'repair' || !originalDate) return all
   const radius = Math.max(1, request.localRadius ?? state.settings.localRepairRadius)
@@ -728,7 +742,7 @@ function buildScenario(input: AppState, request: ReplanRequest, strategy: Replan
   for (const assignment of candidateItems) {
     const group = groups.get(assignment.groupId)!
     const originalDate = oldDates.get(assignment.id)
-    const dates = possibleDateRange(state, request, group, originalDate)
+    const dates = possibleDateRange(state, request, group, originalDate, assignment)
       .filter(date => forbiddenReturn.get(assignment.id) !== date)
     const legal: { date: string; score: number }[] = []
     const rejected: { date: string; violations: PlacementViolation[] }[] = []
@@ -832,8 +846,18 @@ function buildScenario(input: AppState, request: ReplanRequest, strategy: Replan
   }
 
   const disturbance = calculateDisturbance(input, state)
-  const coreBefore = predictCompletion(input, group => group.priority === 5 && !group.recurring && group.targetDate <= input.settings.coreTargetDate)
-  const coreAfter = predictCompletion(state, group => group.priority === 5 && !group.recurring && group.targetDate <= state.settings.coreTargetDate)
+  // ReplanSummary 的 core* 字段仅为 v0.7 兼容名称；v0.8 实际承载“最近活跃目标”的预计结果。
+  const nearestGoal = (source: AppState) => source.goals
+    .filter(goal => goal.status === 'active')
+    .sort((a, b) => (a.desiredDate ?? a.latestDate).localeCompare(b.desiredDate ?? b.latestDate))[0]
+  const goalSummary = (source: AppState) => {
+    const goal = nearestGoal(source)
+    if (!goal) return undefined
+    const progress = goalProgress(source, goal)
+    return progress.completed ? '已完成' : progress.expectedCompletion
+  }
+  const coreBefore = goalSummary(input)
+  const coreAfter = goalSummary(state)
   const chemistryBefore = predictCompletion(input, group => taskActivity(group) === 'chem-preview')
   const chemistryAfter = predictCompletion(state, group => taskActivity(group) === 'chem-preview')
   const allBefore = predictCompletion(input, group => !group.recurring && group.priority > 0)
@@ -1127,4 +1151,248 @@ export function actualLearningSnapshot(state: AppState, date = todayISO()) {
 
 export function planningDayLoad(state: AppState, date: string) {
   return Math.round(statsMap(state).get(date)?.totalMinutes ?? 0)
+}
+
+function proposalIssueFromText(text: string, event: PlanChangeEvent): ProposalIssue {
+  return {
+    id: uid('issue'),
+    type: 'unscheduled',
+    title: '计划影响',
+    detail: text,
+    assignmentIds: event.affectedAssignmentIds,
+    consequence: '若不处理，部分任务可能保持冲突或未安排。',
+    resolution: '查看候选方案并选择是否应用，或保留当前计划。',
+  }
+}
+
+function proposalIssuesFromScenario(event: PlanChangeEvent, bundleIssues: string[], scenario: ReplanResult): ProposalIssue[] {
+  const issues = bundleIssues.map(text => proposalIssueFromText(text, event))
+  for (const conflict of scenario.constraintConflicts) {
+    const type = conflict.key === 'long' ? 'long-task-max'
+      : conflict.key === 'high-intensity' ? 'high-intensity-max'
+        : conflict.key.startsWith('group:') ? 'group-daily-max'
+          : conflict.key.startsWith('activity:') ? 'activity-daily-max'
+            : 'capacity'
+    const groupId = conflict.key.startsWith('group:') ? conflict.key.slice('group:'.length) : undefined
+    const durationEvidence = groupId ? allDurationSuggestions(scenario.nextState).find(item => item.groupId === groupId) : undefined
+    const durationCapSuggestion = durationEvidence
+      ? `近期 ${durationEvidence.sampleCount} 个有效样本平均 ${Math.round(durationEvidence.recentAverage)} 分钟；可在此方案中考虑一次性放宽，或另行预览永久上限调整。系统只提出建议，不会自动提高上限。`
+      : ''
+    issues.push({
+      id: uid('issue'), type, title: conflict.label,
+      detail: `${conflict.date}：当前 ${Math.round(conflict.current)}，允许 ${Math.round(conflict.limit)}。`,
+      date: conflict.date, currentValue: String(conflict.current), allowedValue: String(conflict.limit),
+      assignmentIds: conflict.affectedAssignmentIds,
+      consequence: '当前规则下没有完全合法的放置方案。',
+      resolution: [conflict.options.join('；'), durationCapSuggestion].filter(Boolean).join('；'),
+    })
+  }
+  const unresolvedIds = scenario.nextState.assignments
+    .filter(item => event.affectedAssignmentIds.includes(item.id) && !item.scheduledDate)
+    .map(item => item.id)
+  if (unresolvedIds.length) issues.push({
+    id: uid('issue'), type: 'unscheduled', title: '仍有任务未安排',
+    detail: `${unresolvedIds.length} 项任务没有找到合法日期。`, assignmentIds: unresolvedIds,
+    currentValue: String(unresolvedIds.length), allowedValue: '0',
+    consequence: '这些任务不会被强行放入冲突日期。',
+    resolution: '调整目标、容量、规则，接受明确的一次性例外，或继续保持未安排。',
+  })
+  return issues
+}
+
+function proposalMovements(before: AppState, afterState: AppState, scenario: ReplanResult): TaskMovement[] {
+  const byId = new Map(before.assignments.map(item => [item.id, item]))
+  return scenario.moves.map(move => {
+    const beforeTask = byId.get(move.assignmentId)
+    const afterTask = afterState.assignments.find(item => item.id === move.assignmentId)
+    const goals = afterTask ? goalNamesForAssignment(afterState, afterTask) : []
+    return {
+      assignmentId: move.assignmentId,
+      fromDate: move.from,
+      toDate: move.to,
+      reason: move.reason,
+      beforeLoad: move.from ? planningDayLoad(before, move.from) : 0,
+      afterLoad: move.to ? planningDayLoad(afterState, move.to) : 0,
+      goalImpact: goals.length ? `关联目标：${goals.join('、')}` : '不直接关联目标',
+      manualIntentImpact: beforeTask?.locked ? 'locked-blocked'
+        : beforeTask?.intentStrength === 'manual' && move.from !== move.to ? 'moved-manual'
+          : beforeTask?.intentStrength === 'manual' ? 'preserved' : 'none',
+      rejectedAlternatives: (move.rejectedAlternatives ?? []).map(item => ({ date: item.date, reasons: item.reasons })),
+    }
+  })
+}
+
+function proposalDateChanges(before: AppState, afterState: AppState, scenario: ReplanResult): DateLoadChange[] {
+  const dates = new Set<string>([
+    ...scenario.loadChanges.map(item => item.date),
+    ...scenario.moves.flatMap(item => [item.from, item.to].filter((date): date is string => Boolean(date))),
+  ])
+  return [...dates].sort().map(date => ({
+    date,
+    beforeMinutes: planningDayLoad(before, date),
+    afterMinutes: planningDayLoad(afterState, date),
+    beforeTaskIds: before.assignments.filter(item => item.scheduledDate === date).map(item => item.id),
+    afterTaskIds: afterState.assignments.filter(item => item.scheduledDate === date).map(item => item.id),
+  })).filter(item => item.beforeMinutes !== item.afterMinutes || stableSignature(item.beforeTaskIds) !== stableSignature(item.afterTaskIds))
+}
+
+function proposalGoalImpacts(before: AppState, afterState: AppState): GoalImpact[] {
+  const ids = new Set([...before.goals.map(goal => goal.id), ...afterState.goals.map(goal => goal.id)])
+  return [...ids].flatMap(goalId => {
+    const beforeGoal = before.goals.find(goal => goal.id === goalId)
+    const afterGoal = afterState.goals.find(goal => goal.id === goalId)
+    if (!beforeGoal && !afterGoal) return []
+    const beforeProgress = beforeGoal ? goalProgress(before, beforeGoal) : undefined
+    const afterProgress = afterGoal ? goalProgress(afterState, afterGoal) : undefined
+    const changed = !beforeProgress || !afterProgress
+      || beforeProgress.expectedCompletion !== afterProgress.expectedCompletion
+      || beforeProgress.desiredRisk !== afterProgress.desiredRisk
+      || beforeProgress.latestRisk !== afterProgress.latestRisk
+      || Math.abs(beforeProgress.progress - afterProgress.progress) > 0.0001
+    if (!changed) return []
+    const title = afterGoal?.title ?? beforeGoal?.title ?? '目标'
+    return [{
+      goalId,
+      beforeProgress: beforeProgress?.progress ?? 0,
+      afterProgress: afterProgress?.progress ?? 0,
+      beforeExpectedCompletion: beforeProgress?.expectedCompletion,
+      afterExpectedCompletion: afterProgress?.expectedCompletion,
+      desiredRiskBefore: beforeProgress?.desiredRisk ?? false,
+      desiredRiskAfter: afterProgress?.desiredRisk ?? false,
+      latestRiskBefore: beforeProgress?.latestRisk ?? false,
+      latestRiskAfter: afterProgress?.latestRisk ?? false,
+      summary: `${title}：预计完成 ${beforeProgress?.expectedCompletion ?? '未确定'} → ${afterProgress?.expectedCompletion ?? '未确定'}；最晚期限风险 ${beforeProgress?.latestRisk ? '有' : '无'} → ${afterProgress?.latestRisk ? '有' : '无'}。`,
+    }]
+  })
+}
+
+function proposalMetrics(before: AppState, afterState: AppState, event: PlanChangeEvent, issues: ProposalIssue[], movements: TaskMovement[], dates: DateLoadChange[]) {
+  const existingBefore = before.assignments.filter(item => item.scheduledDate)
+  const retained = existingBefore.filter(item => afterState.assignments.find(next => next.id === item.id)?.scheduledDate === item.scheduledDate).length
+  const beforeLoads = dateRange(before.settings.startDate, before.settings.endDate).map(date => planningDayLoad(before, date))
+  const afterLoads = dateRange(afterState.settings.startDate, afterState.settings.endDate).map(date => planningDayLoad(afterState, date))
+  const manualMoves = movements.filter(item => item.manualIntentImpact === 'moved-manual').length
+  const protectedUse = movements.filter(item => item.toDate && isDateProtected(afterState, item.toDate)).length
+  const disturbance = movements.length * 8 + manualMoves * 22 + dates.length * 3 + protectedUse * 15
+  const stabilityScore = Math.max(0, Math.round(100 - disturbance))
+  const impactLevel = movements.length > 12 || dates.length > 7 || manualMoves > 0 ? 'large' : movements.length > 4 || dates.length > 3 ? 'medium' : 'small'
+  return {
+    newTaskCount: event.type === 'new-task-insertion' || event.type === 'task-group-size-increase' ? event.affectedAssignmentIds.length : 0,
+    movedTaskCount: movements.length,
+    affectedDateCount: dates.length,
+    issueCount: issues.length,
+    manualTaskMoveCount: manualMoves,
+    protectedDateUseCount: protectedUse,
+    beforeAverageLoad: beforeLoads.length ? beforeLoads.reduce((sum, value) => sum + value, 0) / beforeLoads.length : 0,
+    afterAverageLoad: afterLoads.length ? afterLoads.reduce((sum, value) => sum + value, 0) / afterLoads.length : 0,
+    beforeMaxLoad: Math.max(0, ...beforeLoads),
+    afterMaxLoad: Math.max(0, ...afterLoads),
+    originalDateRetention: existingBefore.length ? retained / existingBefore.length : 1,
+    stabilityScore,
+    impactLevel: impactLevel as 'small' | 'medium' | 'large',
+  }
+}
+
+export interface GenerateProposalOptions {
+  baseline?: AppState
+  preferences?: SchedulingPreference[]
+  signal?: AbortSignal
+  todayExtraMinutes?: number
+  allowProtectedDates?: string[]
+}
+
+/**
+ * v0.8 统一方案入口。事件说明“为什么变”，action 说明计算范围，preference 说明取舍。
+ * 继续复用 v0.7 经验证的同一约束/候选核心，不再创建第二套重排算法。
+ */
+export function generateSchedulingProposals(input: AppState, event: PlanChangeEvent, options: GenerateProposalOptions = {}): SchedulingProposal[] {
+  if (options.signal?.aborted) return []
+  const baseline = options.baseline ?? input
+  const mode: ReplanMode = event.action === 'optimize' || event.action === 'rebuild' ? 'full' : 'repair'
+  const fromDate = event.affectedDates.filter(Boolean).sort()[0] ?? todayISO()
+  const request: ReplanRequest = {
+    mode,
+    fromDate,
+    freezeDays: input.settings.freezeDays,
+    todayExtraMinutes: options.todayExtraMinutes ?? Number(event.metadata?.todayExtraMinutes ?? 0),
+    allowBufferUseDates: options.allowProtectedDates ?? [],
+    limitOverrides: [],
+    localRadius: event.action === 'rebuild' ? Math.max(14, input.settings.localRepairRadius) : input.settings.localRepairRadius,
+    affectedAssignmentIds: event.affectedAssignmentIds,
+    event,
+  }
+  const bundle = generateReplanBundle(input, request)
+  const preferred = options.preferences ?? ['preserve', 'balanced', 'goal', 'rest']
+  const proposals: SchedulingProposal[] = []
+  const signatures = new Set<string>()
+  for (const preference of preferred) {
+    if (options.signal?.aborted) break
+    const scenario = bundle.scenarios.find(item => item.strategy === preference)
+    if (!scenario) continue
+    const afterState = scenario.nextState
+    const issues = proposalIssuesFromScenario(event, bundle.issues, scenario)
+    const movements = proposalMovements(baseline, afterState, scenario)
+    const dateChanges = proposalDateChanges(baseline, afterState, scenario)
+    const goalImpacts = proposalGoalImpacts(baseline, afterState)
+    const excludedDates = movements.flatMap(item => item.rejectedAlternatives)
+    const metrics = proposalMetrics(baseline, afterState, event, issues, movements, dateChanges)
+    const signature = stableSignature({ moves: movements.map(item => [item.assignmentId, item.toDate]), dates: dateChanges.map(item => [item.date, item.afterMinutes]), goals: goalImpacts.map(item => [item.goalId, item.afterExpectedCompletion, item.latestRiskAfter]), protected: metrics.protectedDateUseCount })
+    if (signatures.has(signature)) continue
+    signatures.add(signature)
+    const unresolved = afterState.assignments.filter(item => event.affectedAssignmentIds.includes(item.id) && !item.scheduledDate)
+    proposals.push({
+      id: uid('proposal'), eventId: event.id,
+      title: scenario.title,
+      description: scenario.description,
+      action: event.action,
+      preference,
+      generatedAt: new Date().toISOString(),
+      stateBefore: portableState(baseline),
+      stateAfter: portableState(afterState),
+      issues,
+      movements,
+      dateChanges,
+      goalImpacts,
+      exceptions: [],
+      excludedDates,
+      metrics,
+      distinctSignature: signature,
+      infeasible: unresolved.length > 0,
+      infeasibleReason: unresolved.length ? `${unresolved.length} 项任务在当前硬约束下没有合法日期，系统未强行安排。` : undefined,
+    })
+  }
+  return proposals
+}
+
+export function allDurationSuggestions(state: AppState): import('../types').DurationSuggestion[] {
+  if (!state.settings.duration.enabled) return []
+  return state.taskGroups.flatMap(group => {
+    const completed = state.assignments
+      .filter(item => item.groupId === group.id && item.status === 'done' && item.actualMinutes > 0)
+      .sort((a, b) => (b.completedAt ?? b.updatedAt ?? '').localeCompare(a.completedAt ?? a.updatedAt ?? ''))
+      .slice(0, state.settings.duration.windowSize)
+    if (completed.length < state.settings.duration.minimumSamples) return []
+    const sorted = completed.map(item => item.actualMinutes).sort((a, b) => a - b)
+    let filtered = sorted
+    if (sorted.length >= 4) {
+      const q1 = sorted[Math.floor((sorted.length - 1) * 0.25)]
+      const q3 = sorted[Math.floor((sorted.length - 1) * 0.75)]
+      const iqr = q3 - q1
+      filtered = sorted.filter(value => value >= q1 - 1.5 * iqr && value <= q3 + 1.5 * iqr)
+    }
+    if (filtered.length < state.settings.duration.minimumSamples) return []
+    const average = filtered.reduce((sum, value) => sum + value, 0) / filtered.length
+    const deviationRatio = group.unitMinutes > 0 ? (average - group.unitMinutes) / group.unitMinutes : 0
+    if (Math.abs(deviationRatio) < state.settings.duration.deviationThreshold) return []
+    return [{
+      groupId: group.id,
+      currentEstimate: group.unitMinutes,
+      suggestedEstimate: Math.max(5, Math.round(average / 5) * 5),
+      recentAverage: Math.round(average * 10) / 10,
+      sampleCount: filtered.length,
+      deviationRatio,
+      eligibleAssignmentIds: state.assignments.filter(item => item.groupId === group.id && item.status === 'todo' && !item.durationCustomized && !item.manuallyEstimated).map(item => item.id),
+      samples: completed.map(item => ({ assignmentId: item.id, actualMinutes: item.actualMinutes, estimatedMinutes: item.estimatedMinutes, completionDate: item.completedAt?.slice(0, 10) })),
+    }]
+  })
 }

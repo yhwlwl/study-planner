@@ -6,6 +6,7 @@ const STORE = 'app'
 const keyFor = (namespace: string) => `state:${namespace}`
 const historyKeyFor = (namespace: string) => `history:${namespace}`
 const backupKeyFor = (namespace: string) => `backups:${namespace}`
+const versionsKeyFor = (namespace: string) => `versions:${namespace}`
 
 async function db() {
   return openDB(DB_NAME, 1, {
@@ -15,36 +16,27 @@ async function db() {
   })
 }
 
-/**
- * Large replan snapshots and conflict backups are local-only data. Keeping them in
- * separate IndexedDB records means ordinary edits only rewrite the active plan,
- * instead of cloning and persisting several megabytes of history every time.
- */
 function coreState(state: AppState): AppState {
-  return {
-    ...state,
-    replanHistory: [],
-    conflictBackups: []
-  }
+  return { ...state, replanHistory: [], conflictBackups: [], planVersions: [] }
 }
 
 export async function loadLocalState(namespace = 'guest'): Promise<AppState | undefined> {
   const database = await db()
   const transaction = database.transaction(STORE, 'readonly')
   const store = transaction.objectStore(STORE)
-  const [storedCore, storedHistory, storedBackups] = await Promise.all([
+  const [storedCore, storedHistory, storedBackups, storedVersions] = await Promise.all([
     store.get(keyFor(namespace)) as Promise<AppState | undefined>,
     store.get(historyKeyFor(namespace)) as Promise<AppState['replanHistory'] | undefined>,
-    store.get(backupKeyFor(namespace)) as Promise<string[] | undefined>
+    store.get(backupKeyFor(namespace)) as Promise<string[] | undefined>,
+    store.get(versionsKeyFor(namespace)) as Promise<AppState['planVersions'] | undefined>,
   ])
   await transaction.done
   if (!storedCore) return undefined
-
-  // Backward-compatible migration: older versions stored everything in one record.
   return {
     ...storedCore,
     replanHistory: storedHistory ?? storedCore.replanHistory ?? [],
-    conflictBackups: storedBackups ?? storedCore.conflictBackups ?? []
+    conflictBackups: storedBackups ?? storedCore.conflictBackups ?? [],
+    planVersions: storedVersions ?? storedCore.planVersions ?? [],
   }
 }
 
@@ -55,8 +47,8 @@ type SaveSlot = {
   waiters: SaveWaiter[]
   lastHistoryRef?: AppState['replanHistory']
   lastBackupRef?: string[]
+  lastVersionsRef?: AppState['planVersions']
 }
-
 const saveSlots = new Map<string, SaveSlot>()
 
 async function writeLatest(namespace: string, slot: SaveSlot, state: AppState) {
@@ -64,15 +56,17 @@ async function writeLatest(namespace: string, slot: SaveSlot, state: AppState) {
   const transaction = database.transaction(STORE, 'readwrite')
   const store = transaction.objectStore(STORE)
   const requests: Promise<unknown>[] = [store.put(coreState(state), keyFor(namespace))]
-
   if (slot.lastHistoryRef !== state.replanHistory) {
     requests.push(store.put(state.replanHistory, historyKeyFor(namespace)))
     slot.lastHistoryRef = state.replanHistory
   }
-  const backups = state.conflictBackups ?? []
-  if (slot.lastBackupRef !== backups) {
-    requests.push(store.put(backups, backupKeyFor(namespace)))
-    slot.lastBackupRef = backups
+  if (slot.lastBackupRef !== state.conflictBackups) {
+    requests.push(store.put(state.conflictBackups, backupKeyFor(namespace)))
+    slot.lastBackupRef = state.conflictBackups
+  }
+  if (slot.lastVersionsRef !== state.planVersions) {
+    requests.push(store.put(state.planVersions, versionsKeyFor(namespace)))
+    slot.lastVersionsRef = state.planVersions
   }
   await Promise.all(requests)
   await transaction.done
@@ -86,22 +80,15 @@ async function drainSaveQueue(namespace: string, slot: SaveSlot) {
       slot.pending = undefined
       await writeLatest(namespace, slot, latest)
     }
-    const waiters = slot.waiters.splice(0)
-    waiters.forEach(waiter => waiter.resolve())
+    slot.waiters.splice(0).forEach(waiter => waiter.resolve())
   } catch (error) {
-    const waiters = slot.waiters.splice(0)
-    waiters.forEach(waiter => waiter.reject(error))
+    slot.waiters.splice(0).forEach(waiter => waiter.reject(error))
   } finally {
     slot.running = false
     if (slot.pending) void drainSaveQueue(namespace, slot)
   }
 }
 
-/**
- * Coalesces rapid edits. If several state changes arrive while IndexedDB is still
- * writing, only the newest state is persisted next; obsolete intermediate writes
- * are skipped instead of forming a slow backlog.
- */
 export function saveLocalState(namespace: string, state: AppState): Promise<void> {
   const slot = saveSlots.get(namespace) ?? { running: false, waiters: [] }
   saveSlots.set(namespace, slot)
@@ -116,9 +103,7 @@ export async function clearLocalState(namespace: string): Promise<void> {
   const transaction = database.transaction(STORE, 'readwrite')
   const store = transaction.objectStore(STORE)
   await Promise.all([
-    store.delete(keyFor(namespace)),
-    store.delete(historyKeyFor(namespace)),
-    store.delete(backupKeyFor(namespace))
+    store.delete(keyFor(namespace)), store.delete(historyKeyFor(namespace)), store.delete(backupKeyFor(namespace)), store.delete(versionsKeyFor(namespace)),
   ])
   await transaction.done
   saveSlots.delete(namespace)

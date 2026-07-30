@@ -27,10 +27,25 @@ export function getBaseCapacity(state: AppState, date: string): number {
   return state.settings.regularMinutes
 }
 
+export function constraintsForDate(state: AppState, date: string) {
+  return state.calendarConstraints.filter(item => item.startDate <= date && item.endDate >= date)
+}
+
 export function getCapacity(state: AppState, date: string): number {
   const config = getDayConfig(state, date)
-  if (typeof config.availableMinutes === 'number') return Math.max(0, Math.round(config.availableMinutes))
-  return getBaseCapacity(state, date)
+  let capacity = typeof config.availableMinutes === 'number' ? Math.max(0, Math.round(config.availableMinutes)) : getBaseCapacity(state, date)
+  for (const constraint of constraintsForDate(state, date)) {
+    if (constraint.kind === 'unavailable') capacity = 0
+    else if (constraint.kind === 'reduced-capacity' || constraint.kind === 'special-capacity' || constraint.kind === 'protected-buffer') {
+      if (typeof constraint.capacityMinutes === 'number') capacity = Math.max(0, Math.round(constraint.capacityMinutes))
+    }
+  }
+  return capacity
+}
+
+export function isDateProtected(state: AppState, date: string): boolean {
+  const config = getDayConfig(state, date)
+  return Boolean(config.bufferProtected || constraintsForDate(state, date).some(item => item.protected))
 }
 
 export function minutesText(minutes: number): string {
