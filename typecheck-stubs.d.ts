@@ -1,9 +1,9 @@
 declare namespace JSX { interface IntrinsicAttributes { key?: any } interface IntrinsicElements { [elemName: string]: any } }
-declare namespace React { type ReactNode = any; interface DragEvent<T = any> { preventDefault(): void; stopPropagation(): void; dataTransfer: any; target: T; currentTarget: T } interface MouseEvent<T = any> { preventDefault(): void; stopPropagation(): void; target: T; currentTarget: T } }
+declare namespace React { type ReactNode = any; interface DragEvent<T = any> { preventDefault(): void; stopPropagation(): void; dataTransfer: any; target: T; currentTarget: T } interface MouseEvent<T = any> { preventDefault(): void; stopPropagation(): void; target: T; currentTarget: T } interface TouchEvent<T = any> { touches: any[]; changedTouches: any[]; target: T; currentTarget: T } }
 declare module 'react' {
   export type ReactNode = any
   export const StrictMode: any
-  export type DragEvent<T = any> = React.DragEvent<T>; export type MouseEvent<T = any> = React.MouseEvent<T>
+  export type DragEvent<T = any> = React.DragEvent<T>; export type MouseEvent<T = any> = React.MouseEvent<T>; export type TouchEvent<T = any> = React.TouchEvent<T>
   export function useState<T>(): [T | undefined, (value: T | undefined | ((prev: T | undefined) => T | undefined)) => void]
   export function useState<T>(initial: T | (() => T)): [T, (value: T | ((prev: T) => T)) => void]
   export function useEffect(effect: () => void | (() => void), deps?: readonly any[]): void
