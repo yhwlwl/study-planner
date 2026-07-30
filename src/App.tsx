@@ -53,6 +53,8 @@ export default function App() {
     dismissSequenceRenumberSuggestion, applySequenceRenumber
   } = useApp()
   const [page, setPage] = useState<Page>('today')
+  const [mobileQuickOpen, setMobileQuickOpen] = useState(false)
+  const [createTaskRequest, setCreateTaskRequest] = useState(0)
   const [mobileNav, setMobileNav] = useState(false)
   const [replan, setReplan] = useState<ReplanBundle>()
   const [replanOpen, setReplanOpen] = useState(false)
@@ -396,11 +398,20 @@ export default function App() {
         <div className="page-content">
           {page === 'today' && <TodayPage onNavigate={setPage} onReplan={date => openReplan({ mode: 'repair', fromDate: date })}/>} 
           {page === 'calendar' && <CalendarPage onReplan={(date, baseState) => openReplan({ mode: 'repair', fromDate: date }, baseState)}/>} 
-          {page === 'tasks' && <TasksPage/>}
+          {page === 'tasks' && <TasksPage createRequest={createTaskRequest}/>}
           {page === 'stats' && <StatsPage onOpenReplan={date => openReplan({ mode: 'repair', fromDate: date })}/>}
           {page === 'settings' && <SettingsPage sessionUserId={sessionUser?.id} sessionEmail={sessionUser?.email} cloudMessage={cloudMessage} onCloudUpload={uploadCloudNow}/>} 
         </div>
       </main>
+      {page === 'today' && <button className="mobile-quick-fab" onClick={() => setMobileQuickOpen(true)} aria-label="快速操作"><Plus size={22}/></button>}
+      <Modal open={mobileQuickOpen} title="快速操作" onClose={() => setMobileQuickOpen(false)} mobileSheet>
+        <div className="mobile-quick-actions">
+          <button onClick={() => { setMobileQuickOpen(false); setCreateTaskRequest(value => value + 1); setPage('tasks') }}><Plus size={19}/><div><strong>新增任务</strong><span>直接打开新增任务表单</span></div></button>
+          <button onClick={() => { setMobileQuickOpen(false); setPage('timer') }}><Clock3 size={19}/><div><strong>开始专注</strong><span>进入沉浸计时页面</span></div></button>
+          <button onClick={() => { setMobileQuickOpen(false); setPage('calendar') }}><CalendarDays size={19}/><div><strong>查看日历</strong><span>查看今天附近的计划</span></div></button>
+          <button onClick={() => { setMobileQuickOpen(false); openReplan({ mode: 'repair', fromDate: todayISO() }) }}><RefreshCw size={19}/><div><strong>修复今日计划</strong><span>先预览，再决定是否应用</span></div></button>
+        </div>
+      </Modal>
       <SequenceRenumberDialog
         suggestion={sequenceRenumberSuggestion}
         onKeep={dismissSequenceRenumberSuggestion}
@@ -449,7 +460,7 @@ function SequenceRenumberDialog({
       ? '本次调整后'
       : '手动调整后'
 
-  return <Modal open={Boolean(suggestion)} title="任务编号顺序发生变化" onClose={onKeep} wide>
+  return <Modal open={Boolean(suggestion)} title="任务编号顺序发生变化" onClose={onKeep} wide mobileFullscreen>
     {suggestion && <>
       <p className="onboarding-copy">
         {sourceLabel}，系统发现部分同组任务的日期顺序与编号顺序不一致。重新编号只修改编号和标题，不会移动任务，也不会改变进度、计时、备注或锁定状态。
@@ -677,12 +688,12 @@ function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void;
       </div>
       <div className="modal-actions"><button className="secondary-button" onClick={() => saveCompletion(false)}>保存为部分完成</button><button className="primary-button" onClick={() => saveCompletion(true)}>标记完成</button></div>
     </Modal>
-    <Modal open={endTodayOpen} title="结束今天 · 处理未完成任务" onClose={()=>setEndTodayOpen(false)} wide>
+    <Modal open={endTodayOpen} title="结束今天 · 处理未完成任务" onClose={()=>setEndTodayOpen(false)} wide mobileFullscreen>
       <p className="muted-text">系统给出推荐日期，你可以逐项修改、保留为逾期，或进入重排中心比较完整方案。</p>
       <div className="carryover-list">{tasks.filter(t=>t.status!== 'done'&&!groups.get(t.groupId)?.recurring).map(a=><div key={a.id} className="carryover-row"><div><strong>{a.title}</strong><span>{groups.get(a.groupId)?.subject} · 当前安排 {a.scheduledDate}</span></div><select value={carryDates[a.id]??''} onChange={e=>setCarryDates(prev=>({...prev,[a.id]:e.target.value}))}><option value="">保留在原日并标记逾期</option>{suggestMoveDates(state,a.id,8).filter(d=>d>date).slice(0,5).map(d=><option key={d} value={d}>{moveImpactLabel(a,d)}</option>)}</select></div>)}</div>
       <div className="modal-actions"><button className="secondary-button" onClick={()=>{setEndTodayOpen(false);onReplan(date)}}>比较完整方案</button><button className="primary-button" onClick={()=>{for(const [id,target] of Object.entries(carryDates))if(target)moveAssignments([id],target,'carryover');setEndTodayOpen(false)}}>应用这些选择</button></div>
     </Modal>
-    <Modal open={shiftOpen} title="整体顺延 · 先看影响再应用" onClose={()=>setShiftOpen(false)} wide>
+    <Modal open={shiftOpen} title="整体顺延 · 先看影响再应用" onClose={()=>setShiftOpen(false)} wide mobileFullscreen>
       <p className="muted-text">适合“今天完全没时间”的情况。每日重复任务不会移动；你的选择会被记录为手动意图，之后自动重排会优先保留。</p>
       <div className="replan-controls">
         <div className="segmented-control">
@@ -710,7 +721,10 @@ function TodayPage({ onNavigate, onReplan }: { onNavigate: (page: Page) => void;
 
 function CalendarPage({ onReplan }: { onReplan: (date: string, baseState?: AppState) => void }) {
   const { state, commit, updateAssignment, updateDayConfig, moveAssignments } = useApp()
-  const [month, setMonth] = useState(startOfMonth(parseISO(state.settings.startDate)))
+  const initialCalendarDate = todayISO() >= state.settings.startDate && todayISO() <= state.settings.endDate ? todayISO() : state.settings.startDate
+  const [month, setMonth] = useState(startOfMonth(parseISO(initialCalendarDate)))
+  const [viewMode, setViewMode] = useState<'month' | 'week'>('month')
+  const [weekStart, setWeekStart] = useState(() => shiftDate(initialCalendarDate, -getDay(parseISO(initialCalendarDate))))
   const [dayOpen, setDayOpen] = useState<string>()
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [overflowSelectedIds, setOverflowSelectedIds] = useState<string[]>([])
@@ -725,6 +739,9 @@ function CalendarPage({ onReplan }: { onReplan: (date: string, baseState?: AppSt
   const [pendingBufferPreference, setPendingBufferPreference] = useState<BufferPreference>('preserve')
   const [dragAssignmentId, setDragAssignmentId] = useState<string>()
   const [dragTargetDate, setDragTargetDate] = useState<string>()
+  const [moveModeTaskId, setMoveModeTaskId] = useState<string>()
+  const longPressActivated = useRef(false)
+  const touchStartX = useRef<number>()
   const [calendarTaskLimit, setCalendarTaskLimit] = useState(() => window.innerWidth >= 1400 ? 4 : window.innerWidth >= 900 ? 3 : 2)
   const longPressTimer = useRef<number>()
   const groups = useMemo(() => new Map(state.taskGroups.map(group => [group.id, group])), [state.taskGroups])
@@ -747,8 +764,10 @@ function CalendarPage({ onReplan }: { onReplan: (date: string, baseState?: AppSt
   }, [overflowPanel])
   const monthStart = startOfMonth(month)
   const monthEnd = endOfMonth(month)
-  const days = dateRange(format(monthStart, 'yyyy-MM-dd'), format(monthEnd, 'yyyy-MM-dd'))
-  const blanks = Array.from({ length: getDay(monthStart) })
+  const monthDays = dateRange(format(monthStart, 'yyyy-MM-dd'), format(monthEnd, 'yyyy-MM-dd'))
+  const weekDays = dateRange(weekStart, shiftDate(weekStart, 6))
+  const days = viewMode === 'month' ? monthDays : weekDays
+  const blanks = viewMode === 'month' ? Array.from({ length: getDay(monthStart) }) : []
   const planInterval = { start: parseISO(state.settings.startDate), end: parseISO(state.settings.endDate) }
 
   const sortTasks = (items: Assignment[]) => [...items].sort((a, b) => {
@@ -823,13 +842,53 @@ ${risks.join('\n')}
   }
 
   const startLongPress = (assignmentId: string) => {
+    const candidate = state.assignments.find(item => item.id === assignmentId)
+    if (!candidate || candidate.locked) return
     window.clearTimeout(longPressTimer.current)
-    longPressTimer.current = window.setTimeout(() => setTaskOpenId(assignmentId), 350)
+    longPressActivated.current = false
+    longPressTimer.current = window.setTimeout(() => {
+      longPressActivated.current = true
+      setMoveModeTaskId(assignmentId)
+      setTaskOpenId(undefined)
+      setDayOpen(undefined)
+      if (navigator.vibrate) navigator.vibrate(35)
+    }, 460)
   }
   const cancelLongPress = () => window.clearTimeout(longPressTimer.current)
+  const openTaskUnlessLongPressed = (assignmentId: string) => {
+    if (longPressActivated.current) { longPressActivated.current = false; return }
+    setTaskOpenId(assignmentId)
+  }
+  const chooseCalendarDate = (date: string) => {
+    if (moveModeTaskId) {
+      if (moveWithValidation(moveModeTaskId, date)) setMoveModeTaskId(undefined)
+      return
+    }
+    setDayOpen(date)
+    const current = getDayConfig(state, date)
+    setPendingDayType(current.type)
+    setPendingCustomMinutes(current.customMinutes)
+    setPendingAvailabilityMode(current.isBufferDay ? (current.availableMinutes === 0 ? 'rest' : 'reduced') : 'default')
+    setPendingAvailableMinutes(current.availableMinutes ?? 60)
+    setPendingBufferReason(current.bufferReason ?? '')
+    setPendingBufferPreference(current.bufferPreference ?? 'preserve')
+  }
+  const moveCalendarWindow = (direction: -1 | 1) => {
+    if (viewMode === 'month') setMonth(addMonths(month, direction))
+    else setWeekStart(previous => shiftDate(previous, direction * 7))
+  }
+  const handleCalendarTouchStart = (event: React.TouchEvent) => { touchStartX.current = event.touches[0]?.clientX }
+  const handleCalendarTouchEnd = (event: React.TouchEvent) => {
+    if (moveModeTaskId || touchStartX.current === undefined) return
+    const delta = event.changedTouches[0]?.clientX - touchStartX.current
+    touchStartX.current = undefined
+    if (Math.abs(delta) < 55) return
+    moveCalendarWindow(delta < 0 ? 1 : -1)
+  }
 
   const openOverflow = (date: string, event: React.MouseEvent) => {
     event.stopPropagation()
+    if (window.innerWidth <= 760) { chooseCalendarDate(date); return }
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
     const width = 380
     setOverflowSelectedIds([])
@@ -924,61 +983,72 @@ ${risks.join('\n')}
   }
 
   return <>
-    <section className="calendar-toolbar"><div><h2>{format(month, 'yyyy年M月')}</h2><p>拖拽任务可改期；点击日期管理全天，点击“+N 项”只展开被折叠任务。</p></div><div><button className="icon-button" onClick={() => setMonth(addMonths(month, -1))}><ChevronLeft size={19}/></button><button className="secondary-button" onClick={() => setMonth(startOfMonth(parseISO(state.settings.startDate)))}>计划开始</button><button className="icon-button" onClick={() => setMonth(addMonths(month, 1))}><ChevronRight size={19}/></button></div></section>
+    <section className="calendar-toolbar"><div><h2>{viewMode === 'month' ? format(month, 'yyyy年M月') : `${fmtDate(weekStart)}－${fmtDate(shiftDate(weekStart, 6))}`}</h2><p>月视图看全局，周视图处理任务。手机上长按任务后，再点击目标日期即可移动。</p></div><div className="calendar-toolbar-actions"><div className="segmented-control calendar-view-toggle"><button className={viewMode === 'month' ? 'active' : ''} onClick={() => setViewMode('month')}>月</button><button className={viewMode === 'week' ? 'active' : ''} onClick={() => setViewMode('week')}>周</button></div><button className="icon-button" onClick={() => moveCalendarWindow(-1)}><ChevronLeft size={19}/></button><button className="secondary-button" onClick={() => { const date = initialCalendarDate; setMonth(startOfMonth(parseISO(date))); setWeekStart(shiftDate(date, -getDay(parseISO(date)))) }}>今天附近</button><button className="icon-button" onClick={() => moveCalendarWindow(1)}><ChevronRight size={19}/></button></div></section>
     {moveNotice && <div className="manual-move-notice"><div><strong>已记录你的手动安排</strong><span>「{moveNotice.title}」已移到 {moveNotice.date}，自动重排会优先保留，也不会近期拉回原日期。</span></div><div className="button-wrap"><button className="secondary-button" onClick={() => { updateAssignment(moveNotice.id, { locked: true }); setMoveNotice(undefined) }}><Lock size={15}/>同时锁定</button><button className="text-button" onClick={() => setMoveNotice(undefined)}>知道了</button></div></div>}
-    <section className="calendar-card">
-      <div className="weekday-row">{['日', '一', '二', '三', '四', '五', '六'].map(label => <div key={label}>周{label}</div>)}</div>
-      <div className="calendar-grid">
-        {blanks.map((_, index) => <div className="calendar-cell outside" key={`b${index}`}/>)}
-        {days.map(date => {
-          const inPlan = isWithinInterval(parseISO(date), planInterval)
-          const tasks = tasksFor(date)
-          const visibleTasks = tasks.slice(0, calendarTaskLimit)
-          const load = loadFor(date)
-          const capacity = inPlan ? getCapacity(state, date) : 0
-          const ratio = capacity ? load / capacity : 0
-          const config = inPlan ? getDayConfig(state, date) : undefined
-          const dragged = dragAssignmentId ? state.assignments.find(item => item.id === dragAssignmentId) : undefined
-          const projected = dragged ? load + (dragged.scheduledDate === date ? 0 : countedMinutes(dragged)) : load
-          return <div
-            key={date}
-            className={`calendar-cell ${!inPlan ? 'outside' : ''} ${config ? `day-${config.type}` : ''} ${config?.isBufferDay ? 'day-buffer' : ''} ${ratio > 1 ? 'load-over' : ratio > .8 ? 'load-near' : ''} ${dragTargetDate === date ? 'calendar-drag-target' : ''}`}
-            onDragOver={event => { if (!inPlan) return; event.preventDefault(); setDragTargetDate(date) }}
-            onDrop={event => inPlan && drop(date, event)}
-            onClick={() => {
-              if (!inPlan) return
-              setDayOpen(date)
-              const current = getDayConfig(state, date)
-              setPendingDayType(current.type)
-              setPendingCustomMinutes(current.customMinutes)
-              setPendingAvailabilityMode(current.isBufferDay ? (current.availableMinutes === 0 ? 'rest' : 'reduced') : 'default')
-              setPendingAvailableMinutes(current.availableMinutes ?? 60)
-              setPendingBufferReason(current.bufferReason ?? '')
-              setPendingBufferPreference(current.bufferPreference ?? 'preserve')
-            }}
-          >
-            <div className="calendar-date"><span>{Number(date.slice(-2))}</span>{config && <small>{config.isBufferDay ? `缓冲 · ${minutesText(config.availableMinutes ?? capacity)}` : dayTypeLabel[config.type]}</small>}</div>
-            {inPlan && <div className="load-line"><i style={{ width: `${Math.min(100, ratio * 100)}%` }}/></div>}
-            <div className="calendar-tasks">
-              {visibleTasks.map(assignment => <div
-                key={assignment.id}
-                draggable={!assignment.locked}
-                onDragStart={event => beginDrag(assignment, event)}
-                onDragEnd={() => { setDragAssignmentId(undefined); setDragTargetDate(undefined) }}
-                onPointerDown={() => startLongPress(assignment.id)}
-                onPointerUp={cancelLongPress}
-                onPointerCancel={cancelLongPress}
-                onPointerMove={cancelLongPress}
-                onClick={event => { event.stopPropagation(); setTaskOpenId(assignment.id) }}
-                className={assignment.status === 'done' ? 'mini-done' : ''}
-              ><span className={`subject-dot subject-${groups.get(assignment.groupId)?.subject}`}/><span>{assignment.title}</span><em>{minutesText(assignment.estimatedMinutes)}</em></div>)}
-              {tasks.length > calendarTaskLimit && <button className="calendar-more-button" onClick={event => openOverflow(date, event)}>+{tasks.length - calendarTaskLimit} 项</button>}
+    {moveModeTaskId && <div className="calendar-move-mode"><div><strong>正在移动：{state.assignments.find(item => item.id === moveModeTaskId)?.title}</strong><span>点击月历或周视图中的目标日期。再次长按其他任务可更换对象。</span></div><button className="secondary-button" onClick={() => setMoveModeTaskId(undefined)}>取消移动</button></div>}
+    <section className={`calendar-card ${viewMode === 'week' ? 'calendar-week-view' : 'calendar-month-view'}`} onTouchStart={handleCalendarTouchStart} onTouchEnd={handleCalendarTouchEnd}>
+      {viewMode === 'month' ? <>
+        <div className="weekday-row">{['日', '一', '二', '三', '四', '五', '六'].map(label => <div key={label}>周{label}</div>)}</div>
+        <div className="calendar-grid">
+          {blanks.map((_, index) => <div className="calendar-cell outside" key={`b${index}`}/>)}
+          {days.map(date => {
+            const inPlan = isWithinInterval(parseISO(date), planInterval)
+            const tasks = tasksFor(date)
+            const visibleTasks = tasks.slice(0, calendarTaskLimit)
+            const load = loadFor(date)
+            const capacity = inPlan ? getCapacity(state, date) : 0
+            const ratio = capacity ? load / capacity : 0
+            const config = inPlan ? getDayConfig(state, date) : undefined
+            const dragged = dragAssignmentId ? state.assignments.find(item => item.id === dragAssignmentId) : undefined
+            const projected = dragged ? load + (dragged.scheduledDate === date ? 0 : countedMinutes(dragged)) : load
+            return <div
+              key={date}
+              className={`calendar-cell ${!inPlan ? 'outside' : ''} ${config ? `day-${config.type}` : ''} ${config?.isBufferDay ? 'day-buffer' : ''} ${ratio > 1 ? 'load-over' : ratio > .8 ? 'load-near' : ''} ${dragTargetDate === date ? 'calendar-drag-target' : ''} ${moveModeTaskId ? 'calendar-date-selectable' : ''}`}
+              onDragOver={event => { if (!inPlan) return; event.preventDefault(); setDragTargetDate(date) }}
+              onDrop={event => inPlan && drop(date, event)}
+              onClick={() => inPlan && chooseCalendarDate(date)}
+            >
+              <div className="calendar-date"><span>{Number(date.slice(-2))}</span>{config && <small>{config.isBufferDay ? `缓冲 · ${minutesText(config.availableMinutes ?? capacity)}` : dayTypeLabel[config.type]}</small>}</div>
+              {inPlan && <div className="load-line"><i style={{ width: `${Math.min(100, ratio * 100)}%` }}/></div>}
+              <div className="calendar-tasks">
+                {visibleTasks.map(assignment => <div
+                  key={assignment.id}
+                  draggable={!assignment.locked}
+                  onDragStart={event => beginDrag(assignment, event)}
+                  onDragEnd={() => { setDragAssignmentId(undefined); setDragTargetDate(undefined) }}
+                  onPointerDown={() => startLongPress(assignment.id)}
+                  onPointerUp={cancelLongPress}
+                  onPointerCancel={cancelLongPress}
+                  onPointerMove={cancelLongPress}
+                  onClick={event => { event.stopPropagation(); openTaskUnlessLongPressed(assignment.id) }}
+                  className={assignment.status === 'done' ? 'mini-done' : ''}
+                ><span className={`subject-dot subject-${groups.get(assignment.groupId)?.subject}`}/><span>{assignment.title}</span><em>{minutesText(assignment.estimatedMinutes)}</em></div>)}
+                {tasks.length > calendarTaskLimit && <button className="calendar-more-button" onClick={event => openOverflow(date, event)}>+{tasks.length - calendarTaskLimit} 项</button>}
+              </div>
+              {dragTargetDate === date && dragged && <div className={`calendar-drop-preview ${projected > capacity ? 'over' : ''}`}><strong>放入后 {minutesText(projected)}</strong><span>{projected > capacity ? `超载 ${minutesText(projected - capacity)}` : `剩余 ${minutesText(capacity - projected)}`}</span></div>}
+              {inPlan && <footer>{minutesText(load)} / {minutesText(capacity)}</footer>}
             </div>
-            {dragTargetDate === date && dragged && <div className={`calendar-drop-preview ${projected > capacity ? 'over' : ''}`}><strong>放入后 {minutesText(projected)}</strong><span>{projected > capacity ? `超载 ${minutesText(projected - capacity)}` : `剩余 ${minutesText(capacity - projected)}`}</span></div>}
-            {inPlan && <footer>{minutesText(load)} / {minutesText(capacity)}</footer>}
-          </div>
+          })}
+        </div>
+      </> : <div className="calendar-week-list">
+        {days.map(date => {
+          const inPlan = date >= state.settings.startDate && date <= state.settings.endDate
+          const tasks = tasksFor(date)
+          const load = inPlan ? loadFor(date) : 0
+          const capacity = inPlan ? getCapacity(state, date) : 0
+          const config = inPlan ? getDayConfig(state, date) : undefined
+          return <article key={date} className={`calendar-week-day ${!inPlan ? 'outside' : ''} ${config ? `day-${config.type}` : ''} ${load > capacity ? 'load-over' : load > capacity * .8 ? 'load-near' : ''} ${moveModeTaskId ? 'calendar-date-selectable' : ''}`}>
+            <button className="calendar-week-head" disabled={!inPlan} onClick={() => inPlan && chooseCalendarDate(date)}>
+              <div><strong>{fmtDate(date)} · {fmtWeekday(date)}</strong><span>{config?.isBufferDay ? `缓冲日 · ${minutesText(capacity)}` : config ? dayTypeLabel[config.type] : '计划外'}</span></div>
+              <div><strong>{minutesText(load)}</strong><span>/ {minutesText(capacity)}</span></div>
+            </button>
+            <div className="calendar-week-tasks">
+              {tasks.length === 0 && <button className="calendar-week-empty" onClick={() => inPlan && chooseCalendarDate(date)}>当天没有任务</button>}
+              {tasks.map(assignment => <button key={assignment.id} className={assignment.status === 'done' ? 'mini-done' : ''} onPointerDown={() => startLongPress(assignment.id)} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress} onClick={() => openTaskUnlessLongPressed(assignment.id)}><span className={`subject-dot subject-${groups.get(assignment.groupId)?.subject}`}/><div><strong>{assignment.title}</strong><span>{groups.get(assignment.groupId)?.subject} · {minutesText(assignment.estimatedMinutes)}</span></div>{assignment.locked && <Lock size={13}/>}</button>)}
+            </div>
+          </article>
         })}
-      </div>
+      </div>}
     </section>
 
     {overflowPanel && <div className="calendar-overflow-backdrop" onMouseDown={() => setOverflowPanel(undefined)}>
@@ -999,14 +1069,14 @@ ${risks.join('\n')}
             onPointerMove={cancelLongPress}
           >
             <input type="checkbox" checked={overflowSelectedIds.includes(assignment.id)} onChange={event => setOverflowSelectedIds(previous => event.target.checked ? [...previous, assignment.id] : previous.filter(id => id !== assignment.id))}/>
-            <button className="overflow-task-content" onClick={() => setTaskOpenId(assignment.id)}><span className={`subject-dot subject-${groups.get(assignment.groupId)?.subject}`}/><div><strong>{assignment.title}</strong><span>{groups.get(assignment.groupId)?.subject} · {minutesText(assignment.estimatedMinutes)}</span></div></button>
+            <button className="overflow-task-content" onClick={() => openTaskUnlessLongPressed(assignment.id)}><span className={`subject-dot subject-${groups.get(assignment.groupId)?.subject}`}/><div><strong>{assignment.title}</strong><span>{groups.get(assignment.groupId)?.subject} · {minutesText(assignment.estimatedMinutes)}</span></div></button>
             {assignment.locked ? <small>已锁定</small> : <button className="text-button" onClick={() => setTaskOpenId(assignment.id)}>移动</button>}
           </div>)}
         </div>
       </section>
     </div>}
 
-    <Modal open={Boolean(dayOpen)} title={dayOpen ? `${fmtDate(dayOpen)} · ${fmtWeekday(dayOpen)}` : '日期'} onClose={() => { setDayOpen(undefined); setSelectedIds([]); setPendingDayType(undefined); setPendingCustomMinutes(undefined); setPendingAvailabilityMode('default'); setPendingAvailableMinutes(60); setPendingBufferReason(''); setPendingBufferPreference('preserve') }} wide>
+    <Modal open={Boolean(dayOpen)} title={dayOpen ? `${fmtDate(dayOpen)} · ${fmtWeekday(dayOpen)}` : '日期'} mobileSheet onClose={() => { setDayOpen(undefined); setSelectedIds([]); setPendingDayType(undefined); setPendingCustomMinutes(undefined); setPendingAvailabilityMode('default'); setPendingAvailableMinutes(60); setPendingBufferReason(''); setPendingBufferPreference('preserve') }} wide>
       {dayOpen && dayCfg && dayPreviewState && <>
         <div className="day-settings-row">
           <label className="field"><span>日期类型</span><select value={pendingDayType ?? dayCfg.type} onChange={event => setPendingDayType(event.target.value as DayType)}>{(['regular', 'study', 'travel', 'custom'] as DayType[]).map(type => <option key={type} value={type}>{dayTypeLabel[type]}</option>)}</select></label>
@@ -1038,7 +1108,7 @@ ${risks.join('\n')}
           }}>预览缓冲日调整</button> : <button className="secondary-button" onClick={() => onReplan(dayOpen)}>预览局部修复</button>}
           <button className="secondary-button" disabled={!selectedIds.length} onClick={() => bulkMove()}>批量移动</button>
         </div></div>
-        <div className="day-task-list">{dayTasks.map(assignment => <label key={assignment.id} className="select-task-row"><input type="checkbox" checked={selectedIds.includes(assignment.id)} onChange={event => setSelectedIds(previous => event.target.checked ? [...previous, assignment.id] : previous.filter(id => id !== assignment.id))}/><button className="select-task-content" onClick={event => { event.preventDefault(); setTaskOpenId(assignment.id) }}><strong>{assignment.title}</strong><span>{groups.get(assignment.groupId)?.subject} · {minutesText(assignment.estimatedMinutes)}</span></button>{assignment.locked && <small>已锁定</small>}</label>)}</div>
+        <div className="day-task-list">{dayTasks.map(assignment => <label key={assignment.id} className="select-task-row" onPointerDown={() => startLongPress(assignment.id)} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress}><input type="checkbox" checked={selectedIds.includes(assignment.id)} onChange={event => setSelectedIds(previous => event.target.checked ? [...previous, assignment.id] : previous.filter(id => id !== assignment.id))}/><button className="select-task-content" onClick={event => { event.preventDefault(); openTaskUnlessLongPressed(assignment.id) }}><strong>{assignment.title}</strong><span>{groups.get(assignment.groupId)?.subject} · {minutesText(assignment.estimatedMinutes)}</span></button>{assignment.locked && <small>已锁定</small>}</label>)}</div>
       </>}
     </Modal>
 
@@ -1053,7 +1123,7 @@ ${risks.join('\n')}
   </>
 }
 
-function TasksPage() {
+function TasksPage({ createRequest = 0 }: { createRequest?: number }) {
   const { state, addTaskGroup, editTaskGroup, deleteTaskGroup, moveAssignments } = useApp()
   const [search, setSearch] = useState('')
   const [priority, setPriority] = useState<'all'|Priority>('all')
@@ -1061,6 +1131,13 @@ function TasksPage() {
   const [showHidden, setShowHidden] = useState(false)
   const [dialog, setDialog] = useState(false)
   const [editing, setEditing] = useState<TaskGroup>()
+  const lastCreateRequest = useRef(0)
+  useEffect(() => {
+    if (!createRequest || createRequest === lastCreateRequest.current) return
+    lastCreateRequest.current = createRequest
+    setEditing(undefined)
+    setDialog(true)
+  }, [createRequest])
   const assignmentsByGroup = useMemo(() => new Map(state.taskGroups.map(g=>[g.id,state.assignments.filter(a=>a.groupId===g.id)])),[state])
   const groups = state.taskGroups.filter(g => (showHidden || !g.hidden) && (priority==='all'||g.priority===priority) && (subject==='all'||g.subject===subject) && (`${g.subject}${g.title}${g.notes??''}`.toLowerCase().includes(search.toLowerCase())))
   const save = (g: TaskGroup) => editing ? editTaskGroup(g) : addTaskGroup(g)
