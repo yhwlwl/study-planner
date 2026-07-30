@@ -13,7 +13,7 @@
 - 统计：四页签数据中心、学习热力图、计划与实际趋势、双完成率、科目投入、预计准确度、执行质量和专注分析。
 - 数据：IndexedDB 离线保存、JSON/CSV 导出、最近 10 次重排历史及可查看的前后差异。
 - 隐私：游客、不同账号数据空间完全隔离；个人计划不内置在公开源码中。
-- 访问日志：可选的 Vercel 服务端日志，记录访问时间、IP 与 IP 推断位置，不调用 GPS。
+- 访问日志：可选的 Vercel 服务端日志，记录访问时间、IP 与 IP 推断位置，并提供独立健康检查。
 
 ## 技术栈
 
@@ -42,9 +42,10 @@ VITE_SUPABASE_ANON_KEY=sb_publishable_xxx
 2. 在 Vercel 导入仓库，框架选择 Vite。
 3. Build Command：`npm run build`。
 4. Output Directory：`dist`。
-5. 添加浏览器端两个环境变量；启用访问日志时另外添加服务端 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY`。
+5. 添加浏览器端两个环境变量；启用访问日志时另外添加服务端 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY`。修改环境变量后重新部署。
 6. 在 Supabase SQL Editor 执行 `supabase-schema.sql`。
 7. 在 Supabase Authentication → URL Configuration 中设置正式域名和 Vercel 域名。
+8. 部署后打开 `/api/visit-log`，确认返回 `ok: true` 和 `tableReady: true`。
 
 ## 数据安全说明
 

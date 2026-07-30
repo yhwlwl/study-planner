@@ -383,7 +383,6 @@ export default function App() {
         </nav>
         <div className="sidebar-bottom">
           <div className={`sync-status ${sessionUser ? 'online' : ''} ${syncStatus === 'error' ? 'sync-error' : ''}`}>{sessionUser ? <Cloud size={16}/> : <CloudOff size={16}/>}<span>{!sessionUser ? '游客演示 · 仅本地保存' : syncStatus === 'restoring' ? '正在从云端恢复' : syncStatus === 'queued' ? '已保存到本机 · 等待云同步' : syncStatus === 'saving' ? '正在同步到云端' : syncStatus === 'error' ? '云同步失败' : cloudReady ? '已自动保存到云端' : '等待初始化个人计划'}</span></div>
-          <small className="access-log-note">访问会记录时间、IP及IP推断的城市/地区，不使用GPS。</small>
           <button className="collapse-button" onClick={() => updateSettings({ sidebarCollapsed: !state.settings.sidebarCollapsed })}><ChevronLeft size={18}/><span>收起侧边栏</span></button>
         </div>
       </aside>

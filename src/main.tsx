@@ -13,9 +13,6 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>
 )
 
-// Access logging is deliberately deferred until after the first paint so it
-// never competes with plan restoration, rendering, or Supabase cloud sync.
-const logVisit = () => { void recordPageVisit() }
-const idleWindow = window as Window & { requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number }
-if (idleWindow.requestIdleCallback) idleWindow.requestIdleCallback(logVisit, { timeout: 3000 })
-else globalThis.setTimeout(logVisit, 1200)
+// Log shortly after the first paint. A deterministic timer is more reliable on
+// mobile/PWA browsers than waiting indefinitely for an idle callback.
+globalThis.setTimeout(() => { void recordPageVisit() }, 700)

@@ -56,4 +56,6 @@ http://localhost:5173/**
 
 ## 6. 访问日志
 
-部署后访问 `/api/visit-log` 由 Vercel Function 处理。`SUPABASE_SECRET_KEY` 绝不能加 `VITE_` 前缀，也不能写入源码。位置来自 Vercel 的 IP 地理请求头，不是 GPS，可能存在误差。
+部署后访问 `/api/visit-log` 由 Vercel Function 处理。直接在浏览器打开该地址会执行安全健康检查；正常返回 `ok: true` 与 `tableReady: true`。`SUPABASE_SECRET_KEY` 绝不能加 `VITE_` 前缀，也不能写入源码。位置来自 Vercel 的 IP 地理请求头，不是 GPS，可能存在误差。
+
+若环境变量只配置在 Production，使用 Preview 部署地址测试时函数会报告缺少环境变量；修改变量后必须重新部署。

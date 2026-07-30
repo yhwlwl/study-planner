@@ -1,6 +1,6 @@
-# 从 V0.6.3 升级到 V0.6.4
+# 从 v0.6.5 升级到 v0.6.6
 
-本版本新增任务顺序冲突检测与可选重新编号，不改变 Supabase 表结构、RLS、环境变量或同步数据边界。
+本版本修复访问日志诊断与触发可靠性，并移除侧边栏中的访问日志提示。
 
 ## 手机上上传
 
@@ -10,34 +10,49 @@
 - `CHANGELOG.md`
 - `UPGRADE.md`
 - `IMPLEMENTATION_STATUS.md`
+- `DEPLOYMENT.md`
+
+### `api/`
+
+- `visit-log.ts`
 
 ### `src/`
 
 - `App.tsx`
-- `AppContext.tsx`
+- `main.tsx`
 - `styles.css`
-- `types.ts`
 
 ### `src/lib/`
 
-- `sequence.ts`（新增）
+- `analytics.ts`
 
-覆盖同名文件即可。不要上传 ZIP 文件本身，也不需要重新执行 Supabase SQL。
+覆盖后在 Vercel 重新部署。数据库结构未变化；已经执行过 v0.6.5 的 `supabase-schema.sql` 时不必再次执行。若尚未创建 `visit_logs` 表，仍需执行最新版 `supabase-schema.sql`。
 
-## 行为变化
+## 部署后检查
 
-- 手动或自动调整日期后，系统只检查本次发生日期变化的任务组。
-- 若任务编号与当前日期顺序冲突，会弹出预览并询问是否重新编号。
-- 可按组勾选；选择保留原编号不会修改数据。
-- 重新编号只修改 `index` 与显示标题，其他任务数据全部保留。
-- 同一天内按原编号排序，未安排任务放在已安排任务之后。
-- 重复任务保持原有“标题 · 日期”格式，不参与重新编号。
+打开：
 
-## v0.6.4 → v0.6.5
+```text
+https://你的域名/api/visit-log
+```
 
-1. 覆盖补丁中的源码文件，并新增 `api/visit-log.ts` 与 `src/lib/analytics.ts`。
-2. 在 Supabase SQL Editor 重新执行 `supabase-schema.sql`，创建受保护的 `visit_logs` 表。
-3. 在 Vercel 项目环境变量中新增：
-   - `SUPABASE_URL`：与 `VITE_SUPABASE_URL` 相同。
-   - `SUPABASE_SECRET_KEY`：Supabase 的新 Secret key（`sb_secret_...`），仅服务端使用，绝不能加 `VITE_` 前缀。旧项目也兼容 `SUPABASE_SERVICE_ROLE_KEY`。
-4. 重新部署。访问日志可在 Supabase Table Editor 的 `visit_logs` 表查看。
+正常应返回：
+
+```json
+{
+  "ok": true,
+  "version": "0.6.6",
+  "configured": true,
+  "tableReady": true
+}
+```
+
+常见诊断代码：
+
+- `missing_environment`：Vercel 缺少 URL 或 Secret key。
+- `invalid_supabase_url`：URL 格式错误。
+- `visit_logs_table_missing`：尚未执行创建日志表的 SQL。
+- `supabase_key_rejected`：Secret/service-role key 不正确或环境范围未覆盖当前部署。
+- `supabase_timeout` / `supabase_unreachable`：Vercel 到 Supabase 的请求超时或暂时不可达。
+
+环境变量修改后必须重新部署；同时确认变量至少勾选 Production，预览域名测试时还需勾选 Preview。
