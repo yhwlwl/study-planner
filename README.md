@@ -13,6 +13,7 @@
 - 统计：四页签数据中心、学习热力图、计划与实际趋势、双完成率、科目投入、预计准确度、执行质量和专注分析。
 - 数据：IndexedDB 离线保存、JSON/CSV 导出、最近 10 次重排历史及可查看的前后差异。
 - 隐私：游客、不同账号数据空间完全隔离；个人计划不内置在公开源码中。
+- 访问日志：可选的 Vercel 服务端日志，记录访问时间、IP 与 IP 推断位置，不调用 GPS。
 
 ## 技术栈
 
@@ -33,7 +34,7 @@ VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=sb_publishable_xxx
 ```
 
-不要使用 `service_role` 或 `sb_secret_...`。
+浏览器端不要使用 `service_role` 或 `sb_secret_...`。访问日志的 service role 只允许配置在 Vercel 服务端环境变量，且不能使用 `VITE_` 前缀。
 
 ## Vercel 部署
 
@@ -41,7 +42,7 @@ VITE_SUPABASE_ANON_KEY=sb_publishable_xxx
 2. 在 Vercel 导入仓库，框架选择 Vite。
 3. Build Command：`npm run build`。
 4. Output Directory：`dist`。
-5. 添加上述两个环境变量。
+5. 添加浏览器端两个环境变量；启用访问日志时另外添加服务端 `SUPABASE_URL` 和 `SUPABASE_SECRET_KEY`。
 6. 在 Supabase SQL Editor 执行 `supabase-schema.sql`。
 7. 在 Supabase Authentication → URL Configuration 中设置正式域名和 Vercel 域名。
 
@@ -57,3 +58,8 @@ VITE_SUPABASE_ANON_KEY=sb_publishable_xxx
 ## 验证
 
 当前代码通过严格 TypeScript 静态检查；排期核心另有运行时回归测试，覆盖手动延期不回退、每日上限、记忆任务分散和游客数据隔离。
+
+
+## 访问日志隐私说明
+
+访问日志用于安全排查和基础使用统计。记录服务器时间、IP 地址、IP 推断的国家/地区/城市、页面路径、浏览器与屏幕信息。不会请求 GPS 权限。IP 定位是近似结果，可能受 VPN、代理和运营商出口影响。建议设置合理保留期限，并在对外使用前准备符合所在地要求的隐私说明。

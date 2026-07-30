@@ -383,6 +383,7 @@ export default function App() {
         </nav>
         <div className="sidebar-bottom">
           <div className={`sync-status ${sessionUser ? 'online' : ''} ${syncStatus === 'error' ? 'sync-error' : ''}`}>{sessionUser ? <Cloud size={16}/> : <CloudOff size={16}/>}<span>{!sessionUser ? '游客演示 · 仅本地保存' : syncStatus === 'restoring' ? '正在从云端恢复' : syncStatus === 'queued' ? '已保存到本机 · 等待云同步' : syncStatus === 'saving' ? '正在同步到云端' : syncStatus === 'error' ? '云同步失败' : cloudReady ? '已自动保存到云端' : '等待初始化个人计划'}</span></div>
+          <small className="access-log-note">访问会记录时间、IP及IP推断的城市/地区，不使用GPS。</small>
           <button className="collapse-button" onClick={() => updateSettings({ sidebarCollapsed: !state.settings.sidebarCollapsed })}><ChevronLeft size={18}/><span>收起侧边栏</span></button>
         </div>
       </aside>
@@ -419,8 +420,8 @@ export default function App() {
       <Modal open={firstLoginOpen} title="欢迎使用 · 选择个人计划起点" onClose={() => {}}>
         <p className="onboarding-copy">云端还没有你的计划。游客演示数据不会上传，也不会包含其他账号的计划。请选择一个独立的个人空间起点。</p>
         <div className="template-options">
+          <button onClick={() => void initializeAccount('demo')}><strong>使用完整演示计划（推荐）</strong><span>获得与游客相同量级的独立演示计划，随后可自由修改。</span></button>
           <button onClick={() => void initializeAccount('blank')}><strong>从空白开始</strong><span>创建一个长期使用的新计划。</span></button>
-          <button onClick={() => void initializeAccount('demo')}><strong>使用功能演示模板</strong><span>先体验任务、月历、计时和重排。</span></button>
         </div>
       </Modal>
     </div>
