@@ -1,21 +1,28 @@
-# Study Planner v0.8.6 完成性与验证报告
+# Study Planner v0.8.7 完成性与验证报告
 
 ## 结论
 
-v0.8.6 修复手机 Today 首页大块空白，并把“硬冲突导致所有按钮禁用”升级为完整的逐项冲突决策闭环。
+v0.8.7 修复复盘中用户已经作出安排后仍进入完整重排，以及已完成超载/超次数历史被误列为待处理冲突的问题。
 
 ## 已执行验证
 
 | 命令 | 结果 |
 |---|---|
 | `npm run typecheck` | 通过 |
-| `npm run test:adjustment` | 通过：部分接受/拒绝例外、从已选候选重算、最小任务授权 |
-| `npm run test:scenarios` | 33 / 33 |
+| `npm run test:adjustment` | 通过：历史排除、非恶化旧超载、进入历史超载日的新任务、部分例外和最小授权 |
+| `npm run test:scenarios` | 36 / 36 |
 | `npm run test:scale` | 通过 |
-| `npm run validate:v08` | 68 / 68 |
+| `npm run validate:v08` | 71 / 71 |
 
 规模夹具包含 20 个目标、50 个任务组、500 项任务、30 个日期约束和 10 个本地计划版本。
 
+## 关键运行结果
+
+- 已完成 5 套数学卷子和约 9 小时学习不生成待处理冲突。
+- 原计划已有超载、当前方案降低负载但仍超载时，不会被误判为新冲突。
+- 向历史已经超载的日期加入新的未完成任务时，仍会正确阻止，并只把该未完成任务列为涉及任务。
+- 当前复盘方案合法时直接应用；获取更多方案才进入完整候选比较。
+
 ## 生产构建说明
 
-当前环境的 npm 内部镜像缺少 `@supabase/supabase-js`，依赖安装返回 404，因此无法完成真实 Vite 构建。严格 TypeScript 检查使用项目存根配置通过，构建尝试日志位于 `validation/生产构建尝试_v0.8.6.log`。请在正常 npm 网络环境执行 `npm install && npm run build`。
+当前容器没有安装 React、Vite、date-fns、Supabase 等真实 npm 依赖，因此无法完成真实 Vite 生产构建。严格 TypeScript 检查使用项目存根配置通过。请在正常 npm 网络环境执行 `npm install && npm run build`。

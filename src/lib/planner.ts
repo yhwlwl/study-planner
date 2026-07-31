@@ -1198,58 +1198,160 @@ export interface PlanIssue {
   message: string
 }
 
-export function analyzePlan(state: AppState, fromDate = state.settings.startDate): PlanIssue[] {
+/**
+ * 可执行计划中的“硬约束事实”。
+ *
+ * 这里刻意把已经完成的真实执行和仍可调整的剩余计划分开：
+ * - 已经完成/已经发生的用时与任务数量只作为历史基线；
+ * - 只有当天仍存在未完成任务，且这些任务继续保留会超过约束时，才形成待处理事实；
+ * - 已完成历史不会独自生成硬冲突，也不会阻止其他合法改动应用。
+ */
+interface HardConstraintFact {
+  id: string
+  date?: string
+  key: string
+  current: number
+  limit: number
+  adjustableAssignmentIds: string[]
+  message: string
+}
+
+function hardConstraintFacts(state: AppState, fromDate = state.settings.startDate): HardConstraintFact[] {
   const groups = groupMap(state)
   const stats = statsMap(state)
-  const issues: PlanIssue[] = []
-  let highStreak = 0
+  const facts: HardConstraintFact[] = []
   const start = before(fromDate, todayISO()) ? fromDate : fromDate
+
   for (const date of dateRange(start, state.settings.endDate)) {
     const day = stats.get(date) ?? blankStats()
+    const unfinished = state.assignments.filter(item => item.scheduledDate === date && item.status !== 'done')
+    const ordinaryUnfinished = unfinished.filter(item => !groups.get(item.groupId)?.recurring)
     const capacity = acceptedLimit(state, date, 'capacity', getCapacity(state, date)) ?? getCapacity(state, date)
-    const config = getDayConfig(state, date)
-    if (day.totalMinutes > capacity) issues.push({ level: 'danger', date, message: `${date} 的真实执行与剩余任务合计约 ${Math.round(day.totalMinutes)} 分钟，超过容量 ${Math.round(day.totalMinutes - capacity)} 分钟。` })
-    else if (capacity > 0 && day.totalMinutes / capacity > state.settings.nearFullThreshold) issues.push({ level: 'warning', date, message: `${date} 已接近满载（${Math.round(day.totalMinutes / capacity * 100)}%），建议保留缓冲。` })
-    const maxTasks = config.type === 'study' ? state.settings.studyMaxTasks : state.settings.regularMaxTasks
-    if (day.taskCount > maxTasks) issues.push({ level: 'warning', date, message: `${date} 有 ${day.taskCount} 项活动，超过建议上限 ${maxTasks}。` })
+    const actualHistory = day.actualMinutes + day.inferredMinutes
+
+    if (ordinaryUnfinished.length > 0 && day.plannedMinutes > 0 && day.totalMinutes > capacity) {
+      const remaining = Math.max(0, day.plannedMinutes)
+      const historyText = actualHistory > 0
+        ? `已完成或已记录的 ${Math.round(actualHistory)} 分钟作为历史保留，不参与重排；`
+        : ''
+      facts.push({
+        id: `${date}:capacity`, date, key: 'capacity', current: day.totalMinutes, limit: capacity,
+        adjustableAssignmentIds: ordinaryUnfinished.map(item => item.id),
+        message: `${date} ${historyText}仍有约 ${Math.round(remaining)} 分钟未完成任务。继续保留会使当天合计约 ${Math.round(day.totalMinutes)} 分钟，超过容量 ${Math.round(day.totalMinutes - capacity)} 分钟。`,
+      })
+    }
 
     const keys = new Set(day.counts.keys())
     for (const key of keys) {
-      const sample = state.assignments.find(item => {
+      const contributors = ordinaryUnfinished.filter(item => {
+        const group = groups.get(item.groupId)
+        return Boolean(group && activityKeys(group, item).includes(key))
+      })
+      if (!contributors.length) continue
+      const sample = contributors[0] ?? state.assignments.find(item => {
         const group = groups.get(item.groupId)
         return Boolean(group && activityKeys(group, item).includes(key))
       })
       const group = sample ? groups.get(sample.groupId) : undefined
       const baseLimit = defaultLimit(state, date, key, group)
       const limit = acceptedLimit(state, date, key, baseLimit)
-      if (limit !== undefined && (day.counts.get(key) ?? 0) > limit) {
-        issues.push({ level: 'danger', date, message: `${date} 的${limitLabel(key, group)}为 ${day.counts.get(key)}，超过默认上限 ${limit}。` })
-      }
+      const current = day.counts.get(key) ?? 0
+      if (limit === undefined || current <= limit) continue
+      const historicalCount = Math.max(0, current - contributors.length)
+      const historyText = historicalCount > 0 ? `其中 ${historicalCount} 项已经完成或已发生，作为历史保留；` : ''
+      facts.push({
+        id: `${date}:${key}`, date, key, current, limit,
+        adjustableAssignmentIds: contributors.map(item => item.id),
+        message: `${date} 的${limitLabel(key, group)}为 ${current}，超过上限 ${limit}。${historyText}仍需决定 ${contributors.length} 项未完成任务的安排。`,
+      })
     }
 
-    const subjectOver = [...day.subjectMinutes.entries()].find(([, minutes]) => day.totalMinutes > 90 && minutes / day.totalMinutes > state.settings.subjectShareLimit)
-    if (subjectOver) issues.push({ level: 'info', date, message: `${date} 的${subjectOver[0]}占比偏高，建议与其他科目搭配。` })
-    if (config.type === 'travel') {
-      const ordinary = state.assignments.filter(item => item.scheduledDate === date && item.status !== 'done' && !groups.get(item.groupId)?.recurring)
-      if (ordinary.length) issues.push({ level: 'warning', date, message: `${date} 是旅游日，但仍有 ${ordinary.length} 项普通任务。` })
-    }
+    const config = getDayConfig(state, date)
     const isBufferDay = Boolean(config.isBufferDay || constraintsForDate(state, date).some(item => item.kind === 'protected-buffer'))
-    if (isBufferDay && day.totalMinutes > capacity) issues.push({ level: 'danger', date, message: `${date} 是缓冲日，但任务超过你设置的可用时间。` })
-    if (isBufferDay && day.longCount > 0) issues.push({ level: 'danger', date, message: `${date} 是缓冲日，但仍安排了 ${day.longCount} 项长任务。缓冲日只保留轻量任务。` })
-    if (isBufferDay && day.highIntensityCount > 0) issues.push({ level: 'danger', date, message: `${date} 是缓冲日，但仍安排了 ${day.highIntensityCount} 项高强度任务。` })
-    const ratio = capacity > 0 ? day.totalMinutes / capacity : 0
+    if (isBufferDay) {
+      const longTasks = ordinaryUnfinished.filter(item => isLongTask(item))
+      if (longTasks.length) facts.push({
+        id: `${date}:buffer-long-task`, date, key: 'buffer-long-task', current: longTasks.length, limit: 0,
+        adjustableAssignmentIds: longTasks.map(item => item.id),
+        message: `${date} 是缓冲日，仍有 ${longTasks.length} 项未完成长任务需要处理。已经完成的长任务记录不参与重排。`,
+      })
+      const highTasks = ordinaryUnfinished.filter(item => {
+        const group = groups.get(item.groupId)
+        return Boolean(group && isHighIntensity(group, item))
+      })
+      if (highTasks.length) facts.push({
+        id: `${date}:buffer-high-intensity`, date, key: 'buffer-high-intensity', current: highTasks.length, limit: 0,
+        adjustableAssignmentIds: highTasks.map(item => item.id),
+        message: `${date} 是缓冲日，仍有 ${highTasks.length} 项未完成高强度任务需要处理。已经完成的高强度任务记录不参与重排。`,
+      })
+    }
+  }
+
+  for (const assignment of state.assignments.filter(item => item.status !== 'done' && item.scheduledDate)) {
+    const group = groups.get(assignment.groupId)
+    const latest = nearestRelevantLatestDate(state, assignment)
+    if (!group || !latest || !after(assignment.scheduledDate!, latest)) continue
+    facts.push({
+      id: `${assignment.scheduledDate}:goal-latest:${assignment.id}`, date: assignment.scheduledDate,
+      key: 'goal-latest', current: 1, limit: 0, adjustableAssignmentIds: [assignment.id],
+      message: `${group.subject}「${assignment.title}」晚于相关目标最晚日期 ${latest}。`,
+    })
+  }
+
+  return [...new Map(facts.map(fact => [fact.id, fact])).values()]
+}
+
+/**
+ * 只返回相对基线“新增或恶化”的硬约束事实。
+ * 使用约束身份与超额值比较，而不是比较带数字的提示文案，避免把“609 分钟降到 594 分钟”
+ * 误判成一个全新的冲突。若非法占用中出现了新的任务，即使超额相同，也仍视为新增使用。
+ */
+function worsenedHardConstraintFacts(baseline: AppState, candidate: AppState, fromDate: string) {
+  const beforeFacts = new Map(hardConstraintFacts(baseline, fromDate).map(item => [item.id, item]))
+  return hardConstraintFacts(candidate, fromDate).filter(item => {
+    const beforeFact = beforeFacts.get(item.id)
+    if (!beforeFact) return true
+    const beforeExcess = Math.max(0, beforeFact.current - beforeFact.limit)
+    const afterExcess = Math.max(0, item.current - item.limit)
+    if (afterExcess > beforeExcess + 1e-6) return true
+    const oldAssignments = new Set(beforeFact.adjustableAssignmentIds)
+    return item.adjustableAssignmentIds.some(id => !oldAssignments.has(id))
+  })
+}
+
+export function analyzePlan(state: AppState, fromDate = state.settings.startDate): PlanIssue[] {
+  const groups = groupMap(state)
+  const stats = statsMap(state)
+  const issues: PlanIssue[] = hardConstraintFacts(state, fromDate).map(fact => ({ level: 'danger', date: fact.date, message: fact.message }))
+  let highStreak = 0
+  const start = before(fromDate, todayISO()) ? fromDate : fromDate
+  for (const date of dateRange(start, state.settings.endDate)) {
+    const day = stats.get(date) ?? blankStats()
+    const capacity = acceptedLimit(state, date, 'capacity', getCapacity(state, date)) ?? getCapacity(state, date)
+    const config = getDayConfig(state, date)
+    const unfinished = state.assignments.filter(item => item.scheduledDate === date && item.status !== 'done' && !groups.get(item.groupId)?.recurring)
+
+    // 已完成的真实执行可能远高于计划容量，但它是历史事实，不再作为计划冲突或满载提醒展示。
+    if (unfinished.length > 0 && capacity > 0 && day.totalMinutes <= capacity && day.totalMinutes / capacity > state.settings.nearFullThreshold) {
+      issues.push({ level: 'warning', date, message: `${date} 的剩余计划使当天接近满载（${Math.round(day.totalMinutes / capacity * 100)}%），建议保留缓冲。` })
+    }
+    const maxTasks = config.type === 'study' ? state.settings.studyMaxTasks : state.settings.regularMaxTasks
+    if (unfinished.length > 0 && day.taskCount > maxTasks) issues.push({ level: 'warning', date, message: `${date} 合计有 ${day.taskCount} 项活动，其中仍有 ${unfinished.length} 项未完成；超过建议上限 ${maxTasks}。` })
+
+    const subjectOver = unfinished.length > 0
+      ? [...day.subjectMinutes.entries()].find(([, minutes]) => day.totalMinutes > 90 && minutes / day.totalMinutes > state.settings.subjectShareLimit)
+      : undefined
+    if (subjectOver) issues.push({ level: 'info', date, message: `${date} 的${subjectOver[0]}占比偏高，建议与其他科目搭配。` })
+    if (config.type === 'travel' && unfinished.length) issues.push({ level: 'warning', date, message: `${date} 是旅游日，但仍有 ${unfinished.length} 项普通任务。` })
+
+    const ratio = capacity > 0 && unfinished.length > 0 ? day.totalMinutes / capacity : 0
     highStreak = ratio >= state.settings.highLoadThreshold ? highStreak + 1 : 0
     if (highStreak >= state.settings.highLoadStreak) {
       issues.push({ level: 'info', date, message: `截至 ${date} 已连续 ${highStreak} 天高负载，建议下一天设置为轻量缓冲日。` })
       highStreak = 0
     }
   }
-  for (const assignment of state.assignments.filter(item => item.status !== 'done' && item.scheduledDate)) {
-    const group = groups.get(assignment.groupId)
-    const latest = nearestRelevantLatestDate(state, assignment)
-    if (group && latest && after(assignment.scheduledDate!, latest)) issues.push({ level: 'danger', date: assignment.scheduledDate, message: `${group.subject}「${assignment.title}」晚于相关目标最晚日期 ${latest}。` })
-  }
-  return [...new Map(issues.map(issue => [`${issue.date ?? ''}:${issue.message}`, issue])).values()]
+  return [...new Map(issues.map(issue => [`${issue.level}:${issue.date ?? ''}:${issue.message}`, issue])).values()]
 }
 
 export function predictCompletion(state: AppState, predicate?: (group: TaskGroup) => boolean): string | undefined {
@@ -1736,13 +1838,8 @@ function proposalFromScenario(
     ...effectiveExceptions.map(item => ({ ...item, id: uid('preview-exception'), eventId: event.id, accepted: true as const, createdAt: acceptedAt })),
   ]
   const analysisFrom = proposalPlanningStart(afterState, event)
-  const baselineDanger = new Set(analyzePlan(baseline, analysisFrom).filter(item => item.level === 'danger').map(item => `${item.date ?? ''}:${item.message}`))
-  const newDangers = analyzePlan(analysisState, analysisFrom).filter(item => item.level === 'danger' && !baselineDanger.has(`${item.date ?? ''}:${item.message}`))
-  for (const danger of newDangers) issues.push({
-    id: uid('issue'), type: 'capacity', title: '草稿仍产生新的硬冲突', detail: danger.message,
-    date: danger.date, assignmentIds: danger.date ? afterState.assignments.filter(item => item.scheduledDate === danger.date && item.status !== 'done').map(item => item.id) : event.affectedAssignmentIds,
-    consequence: '直接应用会让本次变化产生新的不可执行位置。', resolution: '选择其他候选、接受明确列出的一次性例外，或保留为未安排。',
-  })
+  const newDangers = worsenedHardConstraintFacts(baseline, analysisState, analysisFrom)
+  for (const danger of newDangers) issues.push(issueFromHardConstraintFact(danger, '草稿仍产生新的硬冲突'))
   const protectedMoveViolations = movements.filter(move => move.toDate && move.fromDate !== move.toDate && isDateProtected(afterState, move.toDate)
     && !effectiveExceptions.some(item => item.date === move.toDate && item.key === 'date-protection'))
   for (const move of protectedMoveViolations) issues.push({
@@ -1802,6 +1899,29 @@ function directIssueType(key: string): ProposalIssue['type'] {
   if (key === 'past' || key === 'plan-range') return 'past-freeze'
   if (key === 'goal-latest') return 'goal-risk'
   return 'unscheduled'
+}
+
+function issueFromHardConstraintFact(fact: HardConstraintFact, title: string): ProposalIssue {
+  const waivable = fact.key === 'capacity' || fact.key.startsWith('group:') || fact.key.startsWith('activity:') || fact.key === 'long' || fact.key === 'high-intensity'
+  const goal = fact.key === 'goal-latest'
+  return {
+    id: uid('issue'), type: directIssueType(fact.key), title, detail: fact.message, date: fact.date,
+    currentValue: String(Math.round(fact.current)), allowedValue: String(Math.round(fact.limit)),
+    assignmentIds: [...fact.adjustableAssignmentIds], rawConstraintKey: fact.key,
+    suggestedLimit: waivable ? fact.current : undefined,
+    consequence: '只有仍未完成、仍可调整的任务需要处理；已经完成的真实记录保持不变。',
+    resolution: waivable
+      ? '可仅本次接受最小范围例外、只让系统为涉及任务换日，或明确暂不安排。'
+      : goal
+        ? '修改任务日期、保留为未安排，或返回调整目标定义。'
+        : '仅调整涉及的未完成任务，或返回修改相关条件。',
+    conflictCategory: waivable ? 'waivable-rule' : 'structural-conflict',
+    allowedResolutions: waivable
+      ? ['accept-once', 'system-find-another-date', 'leave-unscheduled']
+      : goal
+        ? ['system-find-another-date', 'leave-unscheduled', 'change-goal', 'cancel-change']
+        : ['system-find-another-date', 'leave-unscheduled', 'change-capacity', 'cancel-change'],
+  }
 }
 
 /**
@@ -1953,7 +2073,6 @@ export function previewPreparedChange(
 
   // 预计时长、容量和规则变化可能没有移动日期，但仍可能让现有日期新增硬冲突。
   const fromDate = proposalPlanningStart(preparedState, event)
-  const baselineDangers = new Set(analyzePlan(baseline, fromDate).filter(item => item.level === 'danger').map(item => `${item.date ?? ''}:${item.message}`))
   const analysisPreparedState = cloneActiveState(preparedState)
   analysisPreparedState.acceptedConstraintExceptions = [
     ...grandfatheredAcceptedExceptions(baseline),
@@ -1962,15 +2081,9 @@ export function previewPreparedChange(
     })),
   ]
   const specificallyValidatedDates = new Set([...issuesByKey.values()].flatMap(item => item.date ? [item.date] : []))
-  for (const danger of analyzePlan(analysisPreparedState, fromDate).filter(item => item.level === 'danger')) {
-    const signature = `${danger.date ?? ''}:${danger.message}`
-    if (baselineDangers.has(signature) || (danger.date && specificallyValidatedDates.has(danger.date))) continue
-    addIssue(`analysis:${signature}`, {
-      id: uid('issue'), type: 'capacity', title: '变化后出现新的硬冲突', detail: danger.message, date: danger.date,
-      assignmentIds: danger.date ? preparedState.assignments.filter(item => item.scheduledDate === danger.date && item.status !== 'done').map(item => item.id) : event.affectedAssignmentIds,
-      consequence: '当前日期安排不再完全可执行。', resolution: '保持基础变化，并只对新增冲突生成最小修复方案。',
-      conflictCategory: 'structural-conflict', allowedResolutions: ['system-find-another-date', 'keep-original', 'change-capacity', 'cancel-change'],
-    })
+  for (const danger of worsenedHardConstraintFacts(baseline, analysisPreparedState, fromDate)) {
+    if (danger.date && specificallyValidatedDates.has(danger.date)) continue
+    addIssue(`analysis:${danger.id}`, issueFromHardConstraintFact(danger, '变化后出现新的硬冲突'))
   }
 
   const issues = [...issuesByKey.values()]
@@ -2242,13 +2355,8 @@ export function reviseSchedulingProposal(
     })),
   ]
   const analysisFrom = proposalPlanningStart(afterState, event)
-  const baselineDanger = new Set(analyzePlan(baseline, analysisFrom).filter(item => item.level === 'danger').map(item => `${item.date ?? ''}:${item.message}`))
-  const newDangers = analyzePlan(analysisState, analysisFrom).filter(item => item.level === 'danger' && !baselineDanger.has(`${item.date ?? ''}:${item.message}`))
-  for (const danger of newDangers) issues.push({
-    id: uid('issue'), type: 'capacity', title: '逐项微调产生冲突', detail: danger.message,
-    date: danger.date, assignmentIds: danger.date ? afterState.assignments.filter(item => item.scheduledDate === danger.date && item.status !== 'done').map(item => item.id) : [assignment.id],
-    consequence: '应用后会产生新的不可执行位置。', resolution: '调整该任务日期或恢复原候选。',
-  })
+  const newDangers = worsenedHardConstraintFacts(baseline, analysisState, analysisFrom)
+  for (const danger of newDangers) issues.push(issueFromHardConstraintFact(danger, '逐项微调产生冲突'))
 
   const leaveUnscheduled = new Set(Array.isArray(event.metadata?.leaveUnscheduledIds) ? event.metadata?.leaveUnscheduledIds.filter((item): item is string => typeof item === 'string') : [])
   const unresolved = afterState.assignments.filter(item => event.affectedAssignmentIds.includes(item.id) && !item.scheduledDate && !leaveUnscheduled.has(item.id))

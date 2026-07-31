@@ -15,7 +15,7 @@ const source = {
   single: read('src/components/SingleTaskDialog.tsx'), group: read('src/components/TaskGroupDialog.tsx'), versions: read('src/lib/versions.ts'), conflicts: read('src/lib/conflicts.ts'),
 }
 const pkg = JSON.parse(read('package.json'))
-add('版本与迁移', '发布版本为 0.8.6', pkg.version === '0.8.6', `package.json: ${pkg.version}`)
+add('版本与迁移', '发布版本为 0.8.7', pkg.version === '0.8.7', `package.json: ${pkg.version}`)
 add('版本与迁移', '状态架构版本已提升（当前为 9）', /SCHEMA_VERSION\s*=\s*(?:8|9|[1-9]\d+)/.test(source.types), 'src/types.ts')
 add('版本与迁移', '存在确定性 v0.7→v0.8 迁移', /migrat|迁移/.test(source.seed) && /coreTargetDate/.test(source.seed) && /calendarConstraints/.test(source.seed), 'src/lib/seed.ts')
 add('版本与迁移', '旧全局目标日期不再出现在当前界面与当前调度计算', !/settings\.coreTargetDate|settings\.chemistryTargetDate/.test(source.app + source.stats + source.planner), '仅 seed/types 保留迁移兼容字段')
@@ -46,6 +46,8 @@ add('可解释方案', '推荐与备选预先计算但默认只展示推荐', /\
 add('可解释方案', '系统将执行的全部变化都经过预览', /previewPreparedChange/.test(source.app) && /计划调整预览/.test(source.proposal) && /应用预览中的改动/.test(source.proposal), 'App + ProposalDialog')
 add('可解释方案', '负载增减使用红绿方向提示', /load-delta-up/.test(source.proposal) && /load-delta-down/.test(source.proposal) && /\.load-delta-up/.test(source.styles) && /\.load-delta-down/.test(source.styles), 'ProposalDialog + styles')
 add('事件编排', '复盘已选日期只校验不二次重排', /requestedCarryDates/.test(source.context) && /validate-and-commit/.test(source.adjustmentPolicy) && !/比较完整调整方案/.test(source.review), 'Review + policy')
+add('事件编排', '复盘完成页提供直接执行、更多方案和仅保存三条路径', /完成复盘，并按当前方案顺延/.test(source.review) && /获取更多方案/.test(source.review) && /仅保存复盘，暂不顺延/.test(source.review) && /forceAlternatives/.test(source.app), 'Review + App orchestration')
+add('调度核心', '已完成历史不会单独生成待处理硬冲突', /已经完成\/已经发生的用时与任务数量只作为历史基线/.test(source.planner) && /ordinaryUnfinished\.length > 0 && day\.plannedMinutes > 0/.test(source.planner) && /worsenedHardConstraintFacts/.test(source.planner), 'planner historical/adjustable split')
 add('事件编排', '合法精确选择在冲突修复中保持固定', /fixedAssignmentIds/.test(source.app) && /fixedAssignmentIds\(request\)/.test(source.planner), 'App + planner')
 add('事件编排', '目标放宽和容量增加默认为保持现状', /optional-optimization/.test(source.adjustmentPolicy) && /保存目标变化并保持当前排期/.test(source.adjustmentPolicy) && /保存新的可用时间并保持当前排期/.test(source.adjustmentPolicy), 'adjustment policy')
 add('复盘与时长', '复盘默认摘要优先，图表按需展开', /review-hero/.test(source.review) && /review-summary-grid/.test(source.review) && /chartsOpen/.test(source.review) && /展开图表/.test(source.review), 'ReviewDialog')
@@ -65,6 +67,7 @@ add('移动端/PWA', '复杂预览采用 100dvh 弹性全屏且正文独立滚�
 add('移动端/PWA', '选择状态具有明显视觉反馈', /choice-indicator/.test(source.adjustment) && /\.adjustment-outcome-grid button\.selected/.test(source.styles) && /\.proposal-choice\.selected/.test(source.styles), 'dialogs + styles')
 add('移动端/PWA', 'Today 头部手机端按内容高度布局', /today-hero-main/.test(source.app) && /\.today-hero\{display:grid!important/.test(source.styles) && /height:auto!important;min-height:0!important/.test(source.styles) && /flex:none!important/.test(source.styles), 'App + styles')
 add('冲突决策', '硬冲突可逐项查看并选择处理方式', /ConflictDecisionPanel/.test(source.proposal) && /conflictProfile/.test(source.conflicts) && /allowedResolutions/.test(source.types), 'ProposalDialog + conflicts')
+add('冲突决策', '换日、修改条件和撤销调整按用途分层', /处理当前任务/.test(source.proposal) && /修改产生冲突的条件/.test(source.proposal) && /不继续这部分调整/.test(source.proposal), 'ProposalDialog')
 add('冲突决策', '部分接受例外后带条件重新计算', /applyConflictDecisions/.test(source.app) && /exceptionDecisions/.test(source.conflicts) && /disableAutomaticExceptions:\s*true/.test(source.app), 'App + conflicts + planner')
 add('冲突决策', '一次性例外精确到日期规则和任务', /affectedAssignmentIds/.test(source.types) && /mergeConstraintExceptions/.test(source.conflicts) && /候选任务不在授权范围内时/.test(source.planner), 'types + conflicts + planner')
 add('冲突决策', '冲突状态不再简单禁用应用按钮', /按这些选择重新计算/.test(source.proposal) && /处理 \$\{unresolvedCount\} 个待决定问题/.test(source.proposal) && !/disabled=\{selected\?\.infeasible/.test(source.proposal), 'ProposalDialog')
@@ -86,10 +89,10 @@ const tsc = spawnSync('tsc', ['-p', 'tsconfig.check.json', '--pretty', 'false'],
 add('自动验证', '严格 TypeScript 静态检查', tsc.status === 0, (tsc.stdout + tsc.stderr).trim() || '通过')
 const scale = spawnSync(process.execPath, ['scripts/performance-v08.mjs'], { cwd: root, encoding: 'utf8' })
 add('自动验证', '20目标/50组/500任务/30约束/10版本规模验证', scale.status === 0, scale.status === 0 ? '通过，详见 validation/500任务规模验证.json' : (scale.stdout + scale.stderr).trim())
-const adjustmentRuntime = spawnSync(process.execPath, ['scripts/runtime-adjustment-v086.mjs'], { cwd: root, encoding: 'utf8' })
-add('自动验证', '复盘精确校验与冲突项隔离运行验证', adjustmentRuntime.status === 0, adjustmentRuntime.status === 0 ? '通过，合法选择在冲突修复中保持不变' : (adjustmentRuntime.stdout + adjustmentRuntime.stderr).trim())
-const scenarios = spawnSync(process.execPath, ['scripts/scenario-v086.mjs'], { cwd: root, encoding: 'utf8' })
-add('自动验证', '核心场景与三大系统架构验证', scenarios.status === 0, scenarios.status === 0 ? '全部通过，详见 validation/v0.8.6场景架构验证.md' : (scenarios.stdout + scenarios.stderr).trim())
+const adjustmentRuntime = spawnSync(process.execPath, ['scripts/runtime-adjustment-v087.mjs'], { cwd: root, encoding: 'utf8' })
+add('自动验证', '复盘、已完成历史与冲突项隔离运行验证', adjustmentRuntime.status === 0, adjustmentRuntime.status === 0 ? '通过；已完成历史被排除，合法选择和非恶化既有超载均保持不变' : (adjustmentRuntime.stdout + adjustmentRuntime.stderr).trim())
+const scenarios = spawnSync(process.execPath, ['scripts/scenario-v087.mjs'], { cwd: root, encoding: 'utf8' })
+add('自动验证', '核心场景与三大系统架构验证', scenarios.status === 0, scenarios.status === 0 ? '全部通过，详见 validation/v0.8.7场景架构验证.md' : (scenarios.stdout + scenarios.stderr).trim())
 
 const passed = checks.filter(item => item.pass).length
 const result = { generatedAt: new Date().toISOString(), passed, total: checks.length, failed: checks.filter(item => !item.pass), checks }

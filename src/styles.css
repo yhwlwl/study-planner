@@ -463,3 +463,39 @@ html,body,#root{min-height:100%;overflow-x:hidden}.app-shell{min-height:100dvh}.
 @media(max-width:390px){.conflict-values{grid-template-columns:1fr}.today-hero-actions{grid-template-columns:1fr 1fr}}
 .proposal-no-solution{scroll-margin-top:80px;text-align:left}.proposal-no-solution-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.proposal-no-solution-actions button{min-width:0}
 @media(max-width:760px){.proposal-no-solution-actions{display:grid;grid-template-columns:1fr}.proposal-no-solution-actions button{width:100%}}
+
+/* v0.8.7 review completion: current user choice first, broader planning only on request */
+.review-finish-plan{margin-top:14px;border:1px solid #cfdcf1;border-radius:17px;background:linear-gradient(145deg,#f7faff,#fff);padding:15px;box-shadow:0 8px 24px rgba(37,99,235,.045);min-width:0}
+.review-finish-plan-summary{display:flex;flex-direction:column;gap:4px;margin-bottom:11px;min-width:0}
+.review-finish-plan-summary>span{font-size:9px;font-weight:850;color:var(--primary);letter-spacing:.06em}
+.review-finish-plan-summary>strong{font-size:15px;line-height:1.35}
+.review-finish-plan-summary>p{margin:0;color:var(--muted);font-size:10px;line-height:1.55;overflow-wrap:anywhere}
+.review-finish-options{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr) minmax(0,1fr);gap:9px}
+.review-finish-option{border:1px solid var(--line);background:#fff;color:inherit;border-radius:13px;padding:12px;text-align:left;display:flex;flex-direction:column;gap:5px;min-width:0;min-height:92px;cursor:pointer;transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease}
+.review-finish-option:hover{border-color:#9ebbea;box-shadow:0 5px 15px rgba(37,99,235,.08);transform:translateY(-1px)}
+.review-finish-option:disabled{opacity:.52;cursor:not-allowed;transform:none;box-shadow:none}
+.review-finish-option strong{font-size:11px;line-height:1.45;overflow-wrap:anywhere}
+.review-finish-option span{font-size:9px;color:var(--muted);line-height:1.55;overflow-wrap:anywhere}
+.review-finish-option.primary-option{border:2px solid var(--primary);background:#edf4ff;box-shadow:0 0 0 2px rgba(37,99,235,.08)}
+.review-finish-option.primary-option strong{color:#144da4}
+.review-finish-option.quiet-option{background:#fbfcfe}
+
+/* v0.8.7 conflict choices: separate task handling, condition edits and withdrawal */
+.conflict-resolution-sections{display:flex;flex-direction:column;gap:10px;margin-top:10px}
+.conflict-resolution-sections>section{border-top:1px dashed #dfe5ee;padding-top:9px;min-width:0}
+.conflict-resolution-sections>section:first-child{border-top:0;padding-top:0}
+.conflict-resolution-sections header{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:7px;min-width:0}
+.conflict-resolution-sections header strong{font-size:9px;color:#354258}
+.conflict-resolution-sections header span{font-size:8px;color:var(--muted);text-align:right;line-height:1.4}
+.conflict-resolution-sections .conflict-resolution-grid{margin-top:0}
+.conflict-resolution-withdraw .conflict-resolution-grid button{background:#fffafa;border-color:#ead8d6}
+
+@media(max-width:900px){
+  .review-finish-options{grid-template-columns:1fr}
+  .review-finish-option{min-height:76px}
+}
+@media(max-width:760px){
+  .review-finish-plan{padding:12px;border-radius:14px;margin-bottom:calc(8px + env(safe-area-inset-bottom))}
+  .conflict-resolution-sections header{align-items:flex-start;flex-direction:column;gap:2px}
+  .conflict-resolution-sections header span{text-align:left}
+}

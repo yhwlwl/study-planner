@@ -238,7 +238,7 @@ function ConflictDecisionPanel({ proposal, assignmentMap, issueDecisions, except
 
   return <section id="proposal-conflict-decisions" className="conflict-decision-panel">
     <div className="conflict-decision-heading">
-      <div><span>需要你决定</span><h3>{unresolved ? `还有 ${unresolved} 个问题未处理` : '所有问题均已作出选择'}</h3><p>每项选择只影响对应任务或规则。完成选择后，系统会使用新的条件重新计算并再次展示完整预览。</p></div>
+      <div><span>需要你决定</span><h3>{unresolved ? `还有 ${unresolved} 个问题未处理` : '所有问题均已作出选择'}</h3><p>每项选择只影响对应任务或规则。已完成的真实记录已自动排除，只列出仍可调整的任务。不同问题只显示适用方式，并按“处理任务、修改条件、撤销调整”分层；完成后会重新计算并再次预览。</p></div>
       <div className="conflict-category-chips">{[...categoryCounts].map(([label, count]) => <span key={label}>{label} {count}</span>)}</div>
     </div>
 
@@ -251,7 +251,11 @@ function ConflictDecisionPanel({ proposal, assignmentMap, issueDecisions, except
         {(issue.currentValue != null || issue.allowedValue != null) && <div className="conflict-values"><span><small>调整后</small>{issue.currentValue ?? '—'}</span><span><small>当前允许</small>{issue.allowedValue ?? '—'}</span></div>}
         {issue.assignmentIds.length > 0 && <details><summary>涉及任务（{issue.assignmentIds.length}）</summary><ul>{issue.assignmentIds.map(id => <li key={id}>{assignmentMap.get(id)?.title ?? id}</li>)}</ul></details>}
         <div className="conflict-impact"><span>{profile.description}</span><small>后果：{issue.consequence}</small></div>
-        <div className="conflict-resolution-grid">{profile.allowedResolutions.map(action => <button type="button" className={selected === action ? 'selected' : ''} key={action} onClick={() => onIssueDecision(issue.id, action)}><strong>{resolutionLabel(action)}</strong><small>{resolutionDescription(action)}</small></button>)}</div>
+        <ConflictResolutionChoices
+          actions={profile.allowedResolutions}
+          selected={selected}
+          onSelect={action => onIssueDecision(issue.id, action)}
+        />
       </article>
     })}
 
@@ -267,16 +271,38 @@ function ConflictDecisionPanel({ proposal, assignmentMap, issueDecisions, except
   </section>
 }
 
+function ConflictResolutionChoices({ actions, selected, onSelect }: {
+  actions: ConflictResolutionAction[]
+  selected?: ConflictResolutionAction
+  onSelect: (action: ConflictResolutionAction) => void
+}) {
+  const direct = actions.filter(action => ['accept-once', 'system-find-another-date', 'keep-original', 'leave-unscheduled', 'unlock-and-move'].includes(action))
+  const condition = actions.filter(action => action === 'change-goal' || action === 'change-capacity')
+  const withdraw = actions.filter(action => action === 'cancel-change')
+  const render = (items: ConflictResolutionAction[]) => <div className="conflict-resolution-grid">{items.map(action => <button
+    type="button"
+    className={selected === action ? 'selected' : ''}
+    key={action}
+    onClick={() => onSelect(action)}
+  ><strong>{resolutionLabel(action)}</strong><small>{resolutionDescription(action)}</small></button>)}</div>
+
+  return <div className="conflict-resolution-sections">
+    {direct.length > 0 && <section><header><strong>处理当前任务</strong><span>选择这些未完成任务接下来怎么办</span></header>{render(direct)}</section>}
+    {condition.length > 0 && <section><header><strong>修改产生冲突的条件</strong><span>离开预览修改后，系统会重新检查</span></header>{render(condition)}</section>}
+    {withdraw.length > 0 && <section className="conflict-resolution-withdraw"><header><strong>不继续这部分调整</strong><span>只撤销与本问题相关的变化</span></header>{render(withdraw)}</section>}
+  </div>
+}
+
 function resolutionDescription(action: ConflictResolutionAction) {
   const descriptions: Record<ConflictResolutionAction, string> = {
-    'accept-once': '只对本次、对应日期和涉及任务授权。',
-    'system-find-another-date': '坚持原规则，把冲突任务交给系统另找位置。',
-    'keep-original': '恢复该任务原来的日期和保护状态。',
-    'leave-unscheduled': '明确允许该任务暂时没有日期，不强塞。',
-    'unlock-and-move': '由你明确解除锁定，再让系统重新计算。',
-    'change-goal': '离开预览，回到目标页修改日期或完成条件。',
-    'change-capacity': '离开预览，修改相关日期的可用时间。',
-    'cancel-change': '撤销当前变化中涉及这项任务的部分。',
+    'accept-once': '只对本次、对应日期、规则和涉及任务授权，不修改永久设置。',
+    'system-find-another-date': '坚持原规则，只释放这里列出的未完成任务重新找日期。',
+    'keep-original': '撤销本方案对这些任务日期和保护状态的修改。',
+    'leave-unscheduled': '任务继续保留，但暂时不指定日期，也不会被强塞。',
+    'unlock-and-move': '把解除锁定作为明确改动，再按新条件重新计算。',
+    'change-goal': '回到目标页修改日期或完成条件，之后重新生成预览。',
+    'change-capacity': '修改相关日期的可用时间，之后重新生成预览。',
+    'cancel-change': '放弃本次变化中仅与这些任务有关的部分，不影响其他合法改动。',
   }
   return descriptions[action]
 }

@@ -5,11 +5,13 @@ import { actualMinutesForAssignmentOnDate, allDurationSuggestions, effectiveMinu
 import { fmtDate, getCapacity, minutesText, todayISO } from '../lib/date'
 import { Modal } from './Modal'
 
-export function ReviewDialog({ open, date, onClose, onPreparedDuration }: {
+export function ReviewDialog({ open, date, onClose, onPreparedDuration, onApplyCurrentPlan, onRequestMorePlans }: {
   open: boolean
   date: string
   onClose: () => void
   onPreparedDuration: (state: AppState, event: PlanChangeEvent) => void
+  onApplyCurrentPlan: (state: AppState, event: PlanChangeEvent) => void
+  onRequestMorePlans: (state: AppState, event: PlanChangeEvent) => void
 }) {
   const { state, completeReview, prepareDurationChange, prepareReviewCompletion } = useApp()
   const snapshot = useMemo(() => reviewDaySnapshot(state, date), [state, date])
@@ -46,6 +48,7 @@ export function ReviewDialog({ open, date, onClose, onPreparedDuration }: {
   const displayTotalCount = useSavedHistory && savedRecord ? savedRecord.totalCount : plannedTasks.length
   const completionRate = displayTotalCount ? Math.round(displayCompletedCount / displayTotalCount * 100) : 100
   const selectedCarryCount = Object.values(carryDates).filter(Boolean).length
+  const selectedCarryDates = Array.from(new Set(Object.values(carryDates).filter(Boolean))).sort()
 
   useEffect(() => {
     if (!open) return
@@ -99,15 +102,20 @@ export function ReviewDialog({ open, date, onClose, onPreparedDuration }: {
     return `${fmtDate(targetDate)} · ${minutesText(projected)} / ${minutesText(capacity)}${projected > capacity ? ' · 超载' : ''}`
   }
 
-  const finishReview = () => {
-    if (selectedCarryCount > 0) {
-      const prepared = prepareReviewCompletion(date, carryDates)
+  const applyCurrentReviewPlan = () => {
+    if (selectedCarryCount <= 0) {
+      completeReview(date)
       onClose()
-      onPreparedDuration(prepared.state, prepared.event)
       return
     }
-    completeReview(date)
+    const prepared = prepareReviewCompletion(date, carryDates)
     onClose()
+    onApplyCurrentPlan(prepared.state, prepared.event)
+  }
+  const requestMoreReviewPlans = () => {
+    const prepared = prepareReviewCompletion(date, carryDates)
+    onClose()
+    onRequestMorePlans(prepared.state, prepared.event)
   }
   const closeAndRecord = () => {
     completeReview(date)
@@ -197,7 +205,14 @@ export function ReviewDialog({ open, date, onClose, onPreparedDuration }: {
       </div>}
     </section>
 
-    <div className="modal-actions review-sticky-actions"><button className="secondary-button" onClick={closeAndRecord}>仅保存复盘，暂不顺延</button><button className="primary-button" onClick={finishReview}>完成复盘{selectedCarryCount > 0 ? `并预览顺延 ${selectedCarryCount} 项` : ''}</button></div>
+    <section className="review-finish-plan">
+      <div className="review-finish-plan-summary"><span>当前顺延方案</span><strong>{selectedCarryCount > 0 ? `移动 ${selectedCarryCount} 项任务` : '不移动任务'}</strong><p>{selectedCarryCount > 0 ? `安排到 ${selectedCarryDates.length} 个目标日期；这里只执行你在上方逐项选定的结果，不重新决定其他任务。` : '未选择顺延日期；完成后只保存本次复盘。'}</p></div>
+      <div className="review-finish-options">
+        <button className="review-finish-option primary-option" onClick={applyCurrentReviewPlan}><strong>{selectedCarryCount > 0 ? `完成复盘，并按当前方案顺延 ${selectedCarryCount} 项` : '完成复盘'}</strong><span>{selectedCarryCount > 0 ? '快速校验通过后直接提交；若发现真正新增的冲突，只处理冲突项。' : '保存今日完成状态、实际时间和复盘记录。'}</span></button>
+        <button className="review-finish-option" onClick={requestMoreReviewPlans} disabled={unfinished.length === 0}><strong>获取更多方案</strong><span>把当前逐项选择作为方案 A，再生成可比较的其他顺延方案。</span></button>
+        <button className="review-finish-option quiet-option" onClick={closeAndRecord}><strong>仅保存复盘，暂不顺延</strong><span>保留未完成任务当前日期，之后可从计划调整中继续处理。</span></button>
+      </div>
+    </section>
   </Modal>
 }
 

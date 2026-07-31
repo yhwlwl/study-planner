@@ -386,7 +386,7 @@ export default function App() {
     setCloudMessage(kind === 'import' ? '已把游客计划复制到个人账号；游客本地数据仍独立保留。' : kind === 'separate' ? '已创建独立空白账号计划；游客数据继续保留在本机游客空间。' : '个人计划已初始化。')
   }
 
-  const openPrepared = (prepared: AppState, event: PlanChangeEvent) => {
+  const openPrepared = (prepared: AppState, event: PlanChangeEvent, options?: { forceAlternatives?: boolean }) => {
     const baseline = stateRef.current
     const policy = adjustmentPolicyForEvent(event)
     const directPreview = previewPreparedChange(baseline, prepared, event, policy.directPreviewLabel)
@@ -394,7 +394,7 @@ export default function App() {
 
     // 用户已经明确指定结果，或变化只是放宽约束时，合法结果立即进入精确预览。
     // 其他优化方案仍可由用户在预览中主动生成，不让“保持现状”也先等待一轮重排。
-    if (useDirectFirst && !directPreview.infeasible) {
+    if (useDirectFirst && !directPreview.infeasible && !options?.forceAlternatives) {
       setProposalSession({ baseline, prepared, event, policy, proposals: [directPreview], expansionLevel: 0, calculationRevision: 0 })
       return
     }
@@ -454,6 +454,23 @@ export default function App() {
   const cancelProposalGeneration = () => {
     proposalGeneration?.worker?.terminate()
     setProposalGeneration(undefined)
+  }
+
+  const applyCurrentReviewPlan = (prepared: AppState, event: PlanChangeEvent) => {
+    const baseline = stateRef.current
+    const policy = adjustmentPolicyForEvent(event)
+    const directPreview = previewPreparedChange(baseline, prepared, event, policy.directPreviewLabel)
+    if (!directPreview.infeasible) {
+      applyPreparedWithoutScheduling(prepared, event, `完成复盘并按当前方案顺延 ${directPreview.movements.length} 项`)
+      return
+    }
+    // 复盘中用户已逐项决定日期。发现冲突时只打开精确冲突预览，
+    // 不自动耗时生成其他方案；用户仍可在页面中主动“生成更多不同方案”。
+    setProposalSession({ baseline, prepared, event, policy, proposals: [directPreview], expansionLevel: 0, calculationRevision: 0 })
+  }
+
+  const openMoreReviewPlans = (prepared: AppState, event: PlanChangeEvent) => {
+    openPrepared(prepared, event, { forceAlternatives: true })
   }
 
   const openSingleTask = (date?: string, intent: 'system'|'prefer-date'|'lock-date' = date ? 'prefer-date' : 'system') => {
@@ -593,7 +610,14 @@ export default function App() {
         }}
         onApply={proposal => { applySchedulingProposal(proposal, proposalSession.event); setProposalSession(undefined) }}
       />} 
-      <ReviewDialog open={Boolean(reviewDate)} date={reviewDate ?? todayISO()} onClose={() => setReviewDate(undefined)} onPreparedDuration={openPrepared}/>
+      <ReviewDialog
+        open={Boolean(reviewDate)}
+        date={reviewDate ?? todayISO()}
+        onClose={() => setReviewDate(undefined)}
+        onPreparedDuration={openPrepared}
+        onApplyCurrentPlan={applyCurrentReviewPlan}
+        onRequestMorePlans={openMoreReviewPlans}
+      />
       <SequenceRenumberDialog
         suggestion={sequenceRenumberSuggestion}
         onKeep={dismissSequenceRenumberSuggestion}

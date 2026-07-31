@@ -123,13 +123,13 @@ function categoryDescription(category: ConflictCategory) {
 export function resolutionLabel(action: ConflictResolutionAction) {
   const labels: Record<ConflictResolutionAction, string> = {
     'accept-once': '接受本次例外',
-    'system-find-another-date': '不接受，让系统换日',
-    'keep-original': '保留原安排',
-    'leave-unscheduled': '明确保留为未安排',
-    'unlock-and-move': '解除锁定并重新计算',
-    'change-goal': '返回修改目标',
-    'change-capacity': '返回修改可用时间',
-    'cancel-change': '取消涉及这项的改动',
+    'system-find-another-date': '让系统仅为这些任务换日',
+    'keep-original': '恢复这些任务原来的日期',
+    'leave-unscheduled': '暂不安排这些任务',
+    'unlock-and-move': '解除锁定后重新计算',
+    'change-goal': '修改相关目标',
+    'change-capacity': '修改相关日期的可用时间',
+    'cancel-change': '放弃本次对这些任务的调整',
   }
   return labels[action]
 }
