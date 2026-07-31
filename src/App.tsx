@@ -7,10 +7,10 @@ import {
 } from 'lucide-react'
 import { addMonths, endOfMonth, format, getDay, isWithinInterval, parseISO, startOfMonth } from 'date-fns'
 import { useApp } from './AppContext'
-import type { AppState, Assignment, BufferPreference, DayType, PlanChangeEvent, Priority, ReplanBundle, ReplanRequest, SchedulingProposal, SequenceRenumberSuggestion, Subject, TaskGroup } from './types'
-import { clampDate, dateRange, dayTypeLabel, fmtDate, fmtWeekday, getCapacity, getDayConfig, minutesText, shiftDate, todayISO } from './lib/date'
-import { analyzePlan, checkAssignmentPlacement, effectiveMinutes, getDurationSuggestion, planningDayLoad, predictCompletion, suggestMoveDates } from './lib/planner'
-import { allGoalProgress } from './lib/goals'
+import type { AppState, Assignment, BufferPreference, DayType, PlanChangeEvent, Priority, SchedulingProposal, SequenceRenumberSuggestion, Subject, TaskGroup } from './types'
+import { clampDate, constraintsForDate, dateRange, dayTypeLabel, fmtDate, fmtWeekday, getCapacity, getDayConfig, isDateProtected, minutesText, shiftDate, todayISO } from './lib/date'
+import { actualLearningSnapshot, allDurationSuggestions, analyzePlan, checkAssignmentPlacement, effectiveMinutes, planningDayLoad, predictCompletion } from './lib/planner'
+import { allGoalProgress, nearestRelevantGoalDate } from './lib/goals'
 import { uid } from './lib/id'
 import { cloneActiveState } from './lib/state'
 import { buildBlankState, buildGuestDemoState, normalizeState } from './lib/seed'
@@ -18,9 +18,10 @@ import { loadLocalState } from './lib/db'
 import { Modal } from './components/Modal'
 import { Drawer } from './components/Drawer'
 import { TaskCard } from './components/TaskCard'
-import { ReplanDialog } from './components/ReplanDialog'
+import { AdjustmentIntentDialog } from './components/AdjustmentIntentDialog'
 import { TaskGroupDialog } from './components/TaskGroupDialog'
 import { SingleTaskDialog } from './components/SingleTaskDialog'
+import { AssignmentGroupChangeDialog } from './components/AssignmentGroupChangeDialog'
 import { ProposalDialog } from './components/ProposalDialog'
 import { GoalsPage } from './components/GoalsPage'
 import { CalendarConstraintManager } from './components/CalendarConstraintManager'
@@ -55,9 +56,9 @@ const navItems: { id: Page; label: string; icon: typeof LayoutDashboard }[] = [
 
 export default function App() {
   const {
-    state, namespace, ready, updateSettings, previewReplan, applyReplan, prepareSingleAssignment, prepareTaskGroup,
+    state, namespace, ready, updateSettings, prepareSingleAssignment, prepareTaskGroup,
     generateProposals, applySchedulingProposal, applyPreparedWithoutScheduling, replaceState, loadDataSpace, setDataSpace, clearDataSpace, sequenceRenumberSuggestion,
-    dismissSequenceRenumberSuggestion, applySequenceRenumber
+    dismissSequenceRenumberSuggestion, applySequenceRenumber, completeReview
   } = useApp()
   const [page, setPage] = useState<Page>('today')
   const [singleTaskOpen, setSingleTaskOpen] = useState(false)
@@ -65,13 +66,12 @@ export default function App() {
   const [singleTaskIntent, setSingleTaskIntent] = useState<'system'|'prefer-date'|'lock-date'>('system')
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
   const [reviewDate, setReviewDate] = useState<string>()
-  const [proposalSession, setProposalSession] = useState<{ baseline: AppState; prepared: AppState; event: PlanChangeEvent; proposals: SchedulingProposal[] }>()
+  const [proposalSession, setProposalSession] = useState<{ baseline: AppState; prepared: AppState; event: PlanChangeEvent; proposals: SchedulingProposal[]; expansionLevel: number; moreExhausted?: boolean }>()
   const [proposalGeneration, setProposalGeneration] = useState<{ baseline: AppState; prepared: AppState; event: PlanChangeEvent; worker?: Worker; error?: string }>()
   const [mobileNav, setMobileNav] = useState(false)
-  const [replan, setReplan] = useState<ReplanBundle>()
-  const [replanOpen, setReplanOpen] = useState(false)
-  const [replanRequest, setReplanRequest] = useState<ReplanRequest>({ mode: 'repair', fromDate: todayISO(), freezeDays: 2, todayExtraMinutes: 0, allowBufferUseDates: [], limitOverrides: [] })
-  const [replanBaseState, setReplanBaseState] = useState<AppState>()
+  const [adjustmentOpen, setAdjustmentOpen] = useState(false)
+  const [adjustmentDate, setAdjustmentDate] = useState<string>()
+  const [adjustmentReason, setAdjustmentReason] = useState<'current-conflicts' | 'too-tiring' | 'future-replan' | 'execution-difference'>('current-conflicts')
   const [sessionUser, setSessionUser] = useState<{ id: string; email?: string }>()
   const [cloudReady, setCloudReady] = useState(false)
   const [syncStatus, setSyncStatus] = useState<CloudSyncStatus>('local')
@@ -357,22 +357,10 @@ export default function App() {
     }
   }, [])
 
-  const openReplan = (patch?: Partial<ReplanRequest>, baseState?: AppState) => {
-    const source = baseState ?? state
-    const request: ReplanRequest = {
-      mode: 'repair',
-      fromDate: todayISO(),
-      freezeDays: source.settings.freezeDays,
-      todayExtraMinutes: 0,
-      allowBufferUseDates: [],
-      limitOverrides: [],
-      localRadius: source.settings.localRepairRadius,
-      ...patch
-    }
-    setReplanRequest(request)
-    setReplanBaseState(baseState)
-    setReplan(previewReplan(request, baseState))
-    setReplanOpen(true)
+  const openAdjustment = (date?: string, reason: 'current-conflicts' | 'too-tiring' | 'future-replan' | 'execution-difference' = 'current-conflicts') => {
+    setAdjustmentDate(date)
+    setAdjustmentReason(reason)
+    setAdjustmentOpen(true)
   }
 
   const initializeAccount = async (kind: 'blank' | 'demo' | 'import' | 'separate') => {
@@ -400,7 +388,7 @@ export default function App() {
     const baseline = stateRef.current
     if (typeof Worker === 'undefined') {
       const proposals = generateProposals(prepared, event, baseline)
-      setProposalSession({ baseline, prepared, event, proposals })
+      setProposalSession({ baseline, prepared, event, proposals, expansionLevel: 0 })
       return
     }
     const worker = new Worker(new URL('./workers/proposal.worker.ts', import.meta.url), { type: 'module' })
@@ -409,7 +397,7 @@ export default function App() {
       worker.terminate()
       if (message.data.ok) {
         setProposalGeneration(undefined)
-        setProposalSession({ baseline, prepared, event, proposals: message.data.proposals ?? [] })
+        setProposalSession({ baseline, prepared, event, proposals: message.data.proposals ?? [], expansionLevel: 0 })
       } else setProposalGeneration({ baseline, prepared, event, error: message.data.message ?? '方案计算失败' })
     }
     worker.onerror = eventValue => {
@@ -454,21 +442,22 @@ export default function App() {
         <header className="topbar">
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)}><Menu size={21}/></button>
           <div className="page-heading"><h1>{navItems.find(n => n.id === page)?.label}</h1><span>{format(new Date(), 'yyyy年M月d日')}</span></div>
-          <div className="topbar-actions"><ActiveTimerReturnButton onOpen={() => setPage('timer')}/><button className="secondary-button" onClick={() => openReplan()}><RefreshCw size={16}/>计划调整</button></div>
+          <div className="topbar-actions"><ActiveTimerReturnButton onOpen={() => setPage('timer')}/><button className="secondary-button" onClick={() => openAdjustment()}><RefreshCw size={16}/>计划调整</button></div>
         </header>
         <div className="page-content">
-          {page === 'today' && <TodayPage onNavigate={setPage} onReplan={date => openReplan({ mode: 'repair', fromDate: date })} onAddTask={() => openSingleTask(clampDate(todayISO(), state.settings.startDate, state.settings.endDate), 'prefer-date')} onReview={setReviewDate}/>} 
-          {page === 'calendar' && <CalendarPage onReplan={(date, baseState) => openReplan({ mode: 'repair', fromDate: date }, baseState)} onAddTask={date => openSingleTask(date, 'prefer-date')}/>} 
+          {page === 'today' && <TodayPage onNavigate={setPage} onPrepared={openPrepared} onAddTask={() => openSingleTask(clampDate(todayISO(), state.settings.startDate, state.settings.endDate), 'prefer-date')} onReview={setReviewDate}/>} 
+          {page === 'calendar' && <CalendarPage onPrepared={openPrepared} onOpenAdjustment={date => openAdjustment(date, 'current-conflicts')} onAddTask={date => openSingleTask(date, 'prefer-date')}/>} 
           {page === 'tasks' && <TasksPage onAddSingle={() => openSingleTask()} onCreateGroup={() => setGroupDialogOpen(true)} onPrepared={openPrepared}/>} 
           {page === 'goals' && <GoalsPage onPrepared={openPrepared}/>} 
-          {page === 'stats' && <StatsPage onOpenReplan={date => openReplan({ mode: 'repair', fromDate: date })}/>} 
+          {page === 'stats' && <StatsPage onOpenReplan={date => openAdjustment(date, 'current-conflicts')}/>} 
           {page === 'settings' && <SettingsPage sessionUserId={sessionUser?.id} sessionEmail={sessionUser?.email} cloudMessage={cloudMessage} onCloudUpload={uploadCloudNow} onPrepared={openPrepared}/>} 
         </div>
       </main>
-      <SingleTaskDialog open={singleTaskOpen} state={state} defaultDate={singleTaskDate} defaultIntent={singleTaskIntent} onClose={() => setSingleTaskOpen(false)} onSubmit={draft => {
+      <SingleTaskDialog open={singleTaskOpen} state={state} defaultDate={singleTaskDate} defaultIntent={singleTaskIntent} onClose={() => setSingleTaskOpen(false)} onSubmit={(draft, schedule) => {
         const prepared = prepareSingleAssignment(draft)
         setSingleTaskOpen(false)
-        openPrepared(prepared.state, prepared.event)
+        if (schedule) openPrepared(prepared.state, prepared.event)
+        else applyPreparedWithoutScheduling(prepared.state, prepared.event, '仅保存为待安排任务')
       }}/>
       <TaskGroupDialog open={groupDialogOpen} state={state} onClose={() => setGroupDialogOpen(false)} onCreate={(draft, schedule) => {
         const prepared = prepareTaskGroup(draft)
@@ -478,24 +467,59 @@ export default function App() {
       }}/>
       {proposalGeneration && <Modal open title="正在生成计划调整方案" onClose={cancelProposalGeneration}>
         <div className="proposal-generation-state"><div className={proposalGeneration.error ? 'proposal-generation-error' : 'spinner'}/><h3>{proposalGeneration.error ? '方案计算未完成' : proposalGeneration.event.title}</h3><p>{proposalGeneration.error ?? '正在独立线程中核对容量、上限、目标期限、手动安排和日期保护。取消不会修改当前计划。'}</p></div>
-        <div className="modal-actions"><button className="secondary-button" onClick={cancelProposalGeneration}>{proposalGeneration.error ? '关闭' : '取消计算'}</button>{proposalGeneration.error && <button className="primary-button" onClick={() => { const { prepared, event, baseline } = proposalGeneration; setProposalGeneration(undefined); const proposals = generateProposals(prepared, event, baseline); setProposalSession({ baseline, prepared, event, proposals }) }}>在当前线程重试</button>}</div>
+        <div className="modal-actions"><button className="secondary-button" onClick={cancelProposalGeneration}>{proposalGeneration.error ? '关闭' : '取消计算'}</button>{proposalGeneration.error && <button className="primary-button" onClick={() => { const { prepared, event, baseline } = proposalGeneration; setProposalGeneration(undefined); const proposals = generateProposals(prepared, event, baseline); setProposalSession({ baseline, prepared, event, proposals, expansionLevel: 0 }) }}>在当前线程重试</button>}</div>
       </Modal>}
-      {proposalSession && <ProposalDialog open baseline={proposalSession.baseline} preparedState={proposalSession.prepared} event={proposalSession.event} proposals={proposalSession.proposals} onClose={() => setProposalSession(undefined)} onKeep={() => { applyPreparedWithoutScheduling(proposalSession.prepared, proposalSession.event, '保持现有日期或保留为未安排'); setProposalSession(undefined) }} onApply={proposal => { applySchedulingProposal(proposal, proposalSession.event); setProposalSession(undefined) }}/>} 
-      <ReviewDialog open={Boolean(reviewDate)} date={reviewDate ?? todayISO()} onClose={() => setReviewDate(undefined)} onPreparedDuration={openPrepared}/>
+      {proposalSession && <ProposalDialog
+        open baseline={proposalSession.baseline} preparedState={proposalSession.prepared} event={proposalSession.event}
+        proposals={proposalSession.proposals} moreExhausted={proposalSession.moreExhausted}
+        onClose={() => setProposalSession(undefined)}
+        onKeep={() => {
+          const type = proposalSession.event.type
+          const reviewDate = typeof proposalSession.event.metadata?.reviewDate === 'string' ? proposalSession.event.metadata.reviewDate : undefined
+          if (reviewDate && proposalSession.event.metadata?.containsReviewRecord) {
+            const isDurationEstimateChange = type === 'rule-change' && proposalSession.event.metadata?.currentEstimate != null
+            if (isDurationEstimateChange) {
+              // The Review already asked the user to accept the new estimate. “Keep dates” must
+              // apply that estimate plus the Review record, not silently discard the accepted change.
+              applyPreparedWithoutScheduling(proposalSession.prepared, proposalSession.event, '只应用新预计，日期保持不变')
+            } else completeReview(reviewDate)
+            setProposalSession(undefined)
+            return
+          }
+          if (type === 'bulk-move' || type === 'execution-difference' || type === 'load-preference-change' || type === 'future-replanning') {
+            setProposalSession(undefined)
+            return
+          }
+          applyPreparedWithoutScheduling(proposalSession.prepared, proposalSession.event, '保留本次基础变化，不调整现有日期')
+          setProposalSession(undefined)
+        }}
+        onGenerateMore={() => {
+          setProposalSession(current => {
+            if (!current || current.moreExhausted) return current
+            const nextLevel = Math.min(2, current.expansionLevel + 1)
+            const extra = generateProposals(current.prepared, current.event, current.baseline, undefined, nextLevel)
+            const merged = [...current.proposals]
+            const signatures = new Set(merged.map(item => item.distinctSignature))
+            for (const proposal of extra) if (!signatures.has(proposal.distinctSignature)) { signatures.add(proposal.distinctSignature); merged.push(proposal) }
+            const added = merged.length - current.proposals.length
+            return { ...current, proposals: merged, expansionLevel: nextLevel, moreExhausted: added === 0 && nextLevel >= 2 }
+          })
+        }}
+        onApply={proposal => { applySchedulingProposal(proposal, proposalSession.event); setProposalSession(undefined) }}
+      />} 
+      <ReviewDialog open={Boolean(reviewDate)} date={reviewDate ?? todayISO()} onClose={() => setReviewDate(undefined)} onPreparedDuration={openPrepared} onOpenAdjustment={date => openAdjustment(date, 'execution-difference')}/>
       <SequenceRenumberDialog
         suggestion={sequenceRenumberSuggestion}
         onKeep={dismissSequenceRenumberSuggestion}
         onApply={applySequenceRenumber}
       />
-      <ReplanDialog
-        bundle={replan}
-        currentState={replanBaseState ?? state}
-        open={replanOpen}
-        request={replanRequest}
-        onRequestChange={setReplanRequest}
-        onRegenerate={nextRequest => setReplan(previewReplan(nextRequest ?? replanRequest, replanBaseState))}
-        onClose={() => { setReplanOpen(false); setReplanBaseState(undefined) }}
-        onApply={(result, editedState, audit) => { applyReplan(result, editedState, audit); setReplanOpen(false); setReplanBaseState(undefined) }}
+      <AdjustmentIntentDialog
+        open={adjustmentOpen}
+        state={state}
+        initialDate={adjustmentDate}
+        initialReason={adjustmentReason}
+        onClose={() => setAdjustmentOpen(false)}
+        onPrepared={(prepared, event) => { setAdjustmentOpen(false); openPrepared(prepared, event) }}
       />
       <Modal open={firstLoginOpen} title="欢迎使用 · 选择个人计划起点" onClose={() => {}}>
         <p className="onboarding-copy">云端还没有你的计划。游客数据不会被静默上传；请选择个人账号的独立起点。</p>
@@ -527,7 +551,7 @@ function SequenceRenumberDialog({
   }, [suggestion])
 
   const sourceLabel = suggestion?.source === 'automatic'
-    ? '自动重排后'
+    ? '后续自动调整后'
     : suggestion?.source === 'mixed'
       ? '本次调整后'
       : '手动调整后'
@@ -590,25 +614,23 @@ function ActiveTimerReturnButton({ onOpen }: { onOpen: () => void }) {
   return <button className={`active-timer-return ${state.timer.running ? 'running' : 'paused'}`} onClick={onOpen}><Clock3 size={16}/><span><strong>{state.timer.running ? '正在计时' : '计时暂停'}</strong><small>{elapsed}</small></span></button>
 }
 
-function TodayPage({ onNavigate, onReplan, onAddTask, onReview }: { onNavigate: (page: Page) => void; onReplan: (date: string) => void; onAddTask: () => void; onReview: (date: string) => void }) {
-  const { state, namespace, commit, moveAssignments } = useApp()
+function TodayPage({ onNavigate, onPrepared, onAddTask, onReview }: { onNavigate: (page: Page) => void; onPrepared: (state: AppState, event: PlanChangeEvent) => void; onAddTask: () => void; onReview: (date: string) => void }) {
+  const { state, namespace, commit } = useApp()
   const rawToday = todayISO()
   const defaultDate = clampDate(rawToday, state.settings.startDate, state.settings.endDate)
   const [date, setDate] = useState(defaultDate)
   const [completeTarget, setCompleteTarget] = useState<Assignment>()
   const [actual, setActual] = useState('')
   const [progress, setProgress] = useState(100)
-  const [endTodayOpen, setEndTodayOpen] = useState(false)
-  const [carryDates, setCarryDates] = useState<Record<string,string>>({})
   const [shiftOpen, setShiftOpen] = useState(false)
   const [shiftScope, setShiftScope] = useState<ShiftScope>('future')
   const [shiftDays, setShiftDays] = useState(1)
-  const [shiftLocked, setShiftLocked] = useState(false)
+  const [reviewReminderDate, setReviewReminderDate] = useState<string>()
   const groups = useMemo(() => new Map(state.taskGroups.map(g => [g.id, g])), [state.taskGroups])
   const tasks = state.assignments.filter(a => a.scheduledDate === date).sort((a,b) => (groups.get(b.groupId)?.priority ?? 0) - (groups.get(a.groupId)?.priority ?? 0) || a.status.localeCompare(b.status))
   const counted = tasks.filter(a => groups.get(a.groupId)?.countInStats || state.settings.countWordsTime)
   const planned = counted.reduce((sum,a) => sum + effectiveMinutes(a), 0)
-  const actualTotal = counted.reduce((sum,a) => sum + a.actualMinutes, 0)
+  const actualTotal = actualLearningSnapshot(state, date).actualMinutes
   const done = tasks.filter(a => a.status === 'done').length
   const capacity = getCapacity(state, date)
   const config = getDayConfig(state, date)
@@ -616,8 +638,12 @@ function TodayPage({ onNavigate, onReplan, onAddTask, onReview }: { onNavigate: 
   const firstRiskGoal = goalRisks.length ? state.goals.find(goal => goal.id === goalRisks[0].goalId) : undefined
   const risk = planned > capacity ? `今日计划超过容量 ${minutesText(planned - capacity)}` : firstRiskGoal ? `目标“${firstRiskGoal.title}”存在${goalRisks[0].latestRisk ? '最晚日期' : '期望日期'}风险` : undefined
   useEffect(() => {
-    if (tasks.length > 0 && tasks.every(item => item.status === 'done') && !state.reviewRecords.some(item => item.date === date)) onReview(date)
-  }, [tasks.length, done, date, state.reviewRecords, onReview])
+    if (!state.settings.optionalReview || date !== todayISO() || !tasks.length || !tasks.every(item => item.status === 'done') || state.reviewRecords.some(item => item.date === date)) return
+    const key = `study-planner:auto-review:${namespace}:${date}`
+    if (window.sessionStorage.getItem(key)) return
+    window.sessionStorage.setItem(key, '1')
+    onReview(date)
+  }, [tasks.length, done, date, state.reviewRecords, state.settings.optionalReview, onReview, namespace])
 
   const shiftPreview = useMemo(() => {
     if (!shiftOpen) return { next: undefined, changes: [], ignoredLocked: 0, stayedAtEnd: 0, issues: [] }
@@ -632,7 +658,7 @@ function TodayPage({ onNavigate, onReplan, onAddTask, onReview }: { onNavigate: 
       if (!assignment.scheduledDate || assignment.status === 'done' || group?.recurring) continue
       const inScope = shiftScope === 'today' ? assignment.scheduledDate === date : assignment.scheduledDate >= date
       if (!inScope) continue
-      if (assignment.locked && !shiftLocked) { ignoredLocked += 1; continue }
+      if (assignment.locked || next.timer.assignmentId === assignment.id) { ignoredLocked += 1; continue }
       const from = assignment.scheduledDate
       const rawTarget = shiftDate(from, days)
       const to = rawTarget > next.settings.endDate ? next.settings.endDate : rawTarget
@@ -652,59 +678,36 @@ function TodayPage({ onNavigate, onReplan, onAddTask, onReview }: { onNavigate: 
       stayedAtEnd,
       issues: analyzePlan(next, date).slice(0, 10)
     }
-  }, [state, groups, date, shiftScope, shiftDays, shiftLocked, shiftOpen])
+  }, [state, groups, date, shiftScope, shiftDays, shiftOpen])
 
   const applyShift = () => {
-    const days = Math.max(1, Math.min(14, Math.round(shiftDays || 1)))
-    commit(draft => {
-      const movedAt = new Date().toISOString()
-      for (const assignment of draft.assignments) {
-        const group = draft.taskGroups.find(g => g.id === assignment.groupId)
-        if (!assignment.scheduledDate || assignment.status === 'done' || group?.recurring) continue
-        const inScope = shiftScope === 'today' ? assignment.scheduledDate === date : assignment.scheduledDate >= date
-        if (!inScope || (assignment.locked && !shiftLocked)) continue
-        const from = assignment.scheduledDate
-        const rawTarget = shiftDate(from, days)
-        const to = rawTarget > draft.settings.endDate ? draft.settings.endDate : rawTarget
-        if (to === from) continue
-        assignment.previousDate = from
-        assignment.scheduledDate = to
-        assignment.lastManualMoveAt = movedAt
-        assignment.scheduleSource = 'carryover'
-        assignment.intentStrength = assignment.locked ? 'locked' : 'manual'
-      }
-    })
+    if (!shiftPreview.next || !shiftPreview.changes.length) return
+    const next = shiftPreview.next
+    const now = new Date().toISOString()
+    const affectedAssignmentIds = shiftPreview.changes.map(item => item.id)
+    const affectedDates = Array.from(new Set(shiftPreview.changes.flatMap(item => [item.from, item.to]))).sort()
+    const affectedGroupIds = Array.from(new Set(next.assignments.filter(item => affectedAssignmentIds.includes(item.id)).map(item => item.groupId)))
+    const affectedGoalIds = next.goals.filter(goal => goal.linkedTaskGroupIds.some(id => affectedGroupIds.includes(id)) || goal.linkedAssignmentIds.some(id => affectedAssignmentIds.includes(id)) || goal.completionConditions.some(condition => affectedGroupIds.includes(condition.groupId))).map(goal => goal.id)
+    const event: PlanChangeEvent = {
+      id: uid('event'), type: 'bulk-move', action: 'repair',
+      title: shiftScope === 'today' ? `顺延 ${fmtDate(date)} 的未完成任务` : `从 ${fmtDate(date)} 起批量顺延`,
+      description: `用户希望将符合条件的任务顺延 ${Math.max(1, Math.min(14, Math.round(shiftDays || 1)))} 天。锁定任务、已完成任务和每日重复任务保持不变；系统会先验证并展示替代方案。`,
+      affectedGoalIds, affectedGroupIds, affectedAssignmentIds, affectedDates, createdAt: now,
+      metadata: { shiftScope, shiftDays: Math.max(1, Math.min(14, Math.round(shiftDays || 1))), preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'] },
+    }
+    next.changeEvents = [...next.changeEvents, event].slice(-100)
+    next.updatedAt = now
     setShiftOpen(false)
+    onPrepared(next, event)
   }
 
-  const moveImpactLabel = (assignment: Assignment, targetDate: string) => {
-    const targetLoad = state.assignments
-      .filter(item => item.id !== assignment.id && item.scheduledDate === targetDate && item.status !== 'done')
-      .reduce((sum, item) => {
-        const group = groups.get(item.groupId)
-        return sum + ((group?.countInStats || state.settings.countWordsTime) ? effectiveMinutes(item) : 0)
-      }, 0)
-    const group = groups.get(assignment.groupId)
-    const own = group && (group.countInStats || state.settings.countWordsTime) ? effectiveMinutes(assignment) : 0
-    const projected = targetLoad + own
-    const targetCapacity = getCapacity(state, targetDate)
-    return `${targetDate} · ${minutesText(projected)} / ${minutesText(targetCapacity)}${projected > targetCapacity ? '（超载）' : ''}`
-  }
-
-  const prepareCarryover = (sourceDate: string) => {
-    const sourceTasks = state.assignments.filter(a => a.scheduledDate === sourceDate && a.status !== 'done' && !groups.get(a.groupId)?.recurring)
-    const initial: Record<string,string> = {}
-    for (const assignment of sourceTasks) initial[assignment.id] = suggestMoveDates(state, assignment.id, 8).find(candidate => candidate > sourceDate) ?? assignment.scheduledDate ?? sourceDate
-    setDate(sourceDate)
-    setCarryDates(initial)
-    setEndTodayOpen(true)
-  }
 
   useEffect(() => {
     const current = todayISO()
     if (current <= state.settings.startDate) return
+    const reviewedDates = new Set(state.reviewRecords.map(record => record.date))
     const previousDate = state.assignments
-      .filter(a => a.status !== 'done' && a.scheduledDate && a.scheduledDate < current && !groups.get(a.groupId)?.recurring)
+      .filter(a => a.scheduledDate && a.scheduledDate < current && !groups.get(a.groupId)?.recurring && !reviewedDates.has(a.scheduledDate))
       .map(a => a.scheduledDate!)
       .sort()
       .at(-1)
@@ -712,9 +715,8 @@ function TodayPage({ onNavigate, onReplan, onAddTask, onReview }: { onNavigate: 
     const promptKey = `study-planner:carryover-prompt:${namespace}:${current}`
     if (window.sessionStorage.getItem(promptKey)) return
     window.sessionStorage.setItem(promptKey, '1')
-    const id = window.setTimeout(() => prepareCarryover(previousDate), 350)
-    return () => window.clearTimeout(id)
-  }, [namespace, state.settings.startDate, state.assignments, groups])
+    setReviewReminderDate(previousDate)
+  }, [namespace, state.settings.startDate, state.assignments, state.reviewRecords, groups])
 
   const openComplete = (a: Assignment) => { setCompleteTarget(a); setActual(''); setProgress(100) }
   const saveCompletion = (finish: boolean) => {
@@ -742,8 +744,9 @@ function TodayPage({ onNavigate, onReplan, onAddTask, onReview }: { onNavigate: 
         <div className="date-switcher"><button className="icon-button" onClick={() => setDate(clampDate(format(new Date(parseISO(date).getTime()-86400000),'yyyy-MM-dd'), state.settings.startDate,state.settings.endDate))}><ChevronLeft size={19}/></button><div><h2>{fmtDate(date, 'M月d日')} · {fmtWeekday(date)}</h2><span className={`day-badge day-${config.type}`}>{dayTypeLabel[config.type]}</span></div><button className="icon-button" onClick={() => setDate(clampDate(format(new Date(parseISO(date).getTime()+86400000),'yyyy-MM-dd'), state.settings.startDate,state.settings.endDate))}><ChevronRight size={19}/></button></div>
         <p>{tasks.length ? `今天有 ${tasks.length} 项任务，预计 ${minutesText(planned)}。` : '今天暂时没有安排任务。'}</p>
       </div>
-      <div className="button-wrap"><button className="primary-button subtle-action" onClick={onAddTask}><Plus size={16}/>添加任务</button><button className="secondary-button" onClick={() => onNavigate('calendar')}><CalendarDays size={16}/>打开月历</button><button className="secondary-button" onClick={()=>setShiftOpen(true)}>整体顺延</button><button className="secondary-button" onClick={() => onReview(date)}>结束学习并复盘</button>{tasks.some(t=>t.status!=='done'&&!groups.get(t.groupId)?.recurring)&&<button className="secondary-button" onClick={()=>prepareCarryover(date)}>结束今天</button>}</div>
+      <div className="button-wrap today-hero-actions"><button className="primary-button subtle-action" onClick={onAddTask}><Plus size={16}/>添加任务</button><button className="secondary-button" onClick={() => onNavigate('calendar')}><CalendarDays size={16}/>打开月历</button><button className="secondary-button" onClick={()=>setShiftOpen(true)}>批量顺延</button><button className="secondary-button today-review-button" onClick={() => onReview(date)}>结束今天并复盘</button></div>
     </section>
+    {reviewReminderDate && <div className="review-reminder-banner"><div><strong>{fmtDate(reviewReminderDate)} 还有未完成的复盘</strong><span>这是轻量提醒，不会自动弹窗或反复打断。</span></div><div><button className="secondary-button" onClick={() => setReviewReminderDate(undefined)}>稍后</button><button className="primary-button" onClick={() => { setDate(reviewReminderDate); onReview(reviewReminderDate); setReviewReminderDate(undefined) }}>打开复盘</button></div></div>}
     <section className="compact-metrics">
       <div><span>预计时间</span><strong>{minutesText(planned)}</strong></div>
       <div><span>实际记录</span><strong>{minutesText(actualTotal)}</strong></div>
@@ -762,20 +765,15 @@ function TodayPage({ onNavigate, onReplan, onAddTask, onReview }: { onNavigate: 
       </div>
       <div className="modal-actions"><button className="secondary-button" onClick={() => saveCompletion(false)}>保存为部分完成</button><button className="primary-button" onClick={() => saveCompletion(true)}>标记完成</button></div>
     </Modal>
-    <Modal open={endTodayOpen} title="结束今天 · 处理未完成任务" onClose={()=>setEndTodayOpen(false)} wide mobileFullscreen>
-      <p className="muted-text">系统给出推荐日期，你可以逐项修改、保留为逾期，或进入计划调整，比较对当前安排影响不同的方案。</p>
-      <div className="carryover-list">{tasks.filter(t=>t.status!== 'done'&&!groups.get(t.groupId)?.recurring).map(a=><div key={a.id} className="carryover-row"><div><strong>{a.title}</strong><span>{groups.get(a.groupId)?.subject} · 当前安排 {a.scheduledDate}</span></div><select value={carryDates[a.id]??''} onChange={e=>setCarryDates(prev=>({...prev,[a.id]:e.target.value}))}><option value="">保留在原日并标记逾期</option>{suggestMoveDates(state,a.id,8).filter(d=>d>date).slice(0,5).map(d=><option key={d} value={d}>{moveImpactLabel(a,d)}</option>)}</select></div>)}</div>
-      <div className="modal-actions"><button className="secondary-button" onClick={()=>{setEndTodayOpen(false);onReplan(date)}}>比较完整方案</button><button className="primary-button" onClick={()=>{for(const [id,target] of Object.entries(carryDates))if(target)moveAssignments([id],target,'carryover');setEndTodayOpen(false)}}>应用这些选择</button></div>
-    </Modal>
-    <Modal open={shiftOpen} title="整体顺延 · 先看影响再应用" onClose={()=>setShiftOpen(false)} wide mobileFullscreen>
-      <p className="muted-text">适合“今天完全没时间”的情况。每日重复任务不会移动；你的选择会被记录为手动意图，之后自动重排会优先保留。</p>
+    <Modal open={shiftOpen} title="批量顺延 · 先看影响再应用" onClose={()=>setShiftOpen(false)} wide mobileFullscreen>
+      <p className="muted-text">适合“今天完全没时间”的情况。每日重复任务不会移动；你的选择会被记录为手动意图，之后后续自动调整会优先保留。</p>
       <div className="replan-controls">
         <div className="segmented-control">
           <button className={shiftScope==='today'?'active':''} onClick={()=>setShiftScope('today')}>仅今日未完成</button>
           <button className={shiftScope==='future'?'active':''} onClick={()=>setShiftScope('future')}>从今天起全部</button>
         </div>
         <label className="field compact-field"><span>顺延天数</span><NumericInput min={1} max={14} value={shiftDays} onValueChange={setShiftDays}/></label>
-        <label className="lock-choice"><input type="checkbox" checked={shiftLocked} onChange={e=>setShiftLocked(e.target.checked)}/><Lock size={14}/>同时移动已锁定任务</label>
+        <div className="lock-choice static"><Lock size={14}/>锁定任务始终不移动</div>
       </div>
       <div className="summary-grid replan-summary-grid">
         <div className="metric-card"><span>将移动</span><strong>{shiftPreview.changes.length}</strong><small>项任务</small></div>
@@ -788,13 +786,13 @@ function TodayPage({ onNavigate, onReplan, onAddTask, onReview }: { onNavigate: 
         <div className="carryover-list">{shiftPreview.changes.slice(0,16).map(change=><div className="carryover-row" key={change.id}><div><strong>{change.title}</strong><span>{change.from} → {change.to}</span></div></div>)}</div>
       </section>
       {shiftPreview.issues.length>0&&<section className="replan-section warning-section"><div className="replan-section-title"><Sparkles size={18}/><div><h3>应用后的影响</h3><p>系统只提示后果，不替你取消本次顺延。</p></div></div><div className="warning-list">{shiftPreview.issues.map((issue,index)=><div key={index} className={`warning-item issue-${issue.level}`}>{issue.message}</div>)}</div></section>}
-      <div className="modal-actions"><button className="secondary-button" onClick={()=>setShiftOpen(false)}>取消</button><button className="primary-button" disabled={!shiftPreview.changes.length} onClick={applyShift}>应用整体顺延</button></div>
+      <div className="modal-actions"><button className="secondary-button" onClick={()=>setShiftOpen(false)}>取消</button><button className="primary-button" disabled={!shiftPreview.changes.length} onClick={applyShift}>应用批量顺延</button></div>
     </Modal>
   </>
 }
 
-function CalendarPage({ onReplan, onAddTask }: { onReplan: (date: string, baseState?: AppState) => void; onAddTask: (date: string) => void }) {
-  const { state, commit, updateAssignment, updateDayConfig, moveAssignments, removeAssignment, moveAssignmentToGroup, reopenAssignment } = useApp()
+function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask }: { onPrepared: (state: AppState, event: PlanChangeEvent) => void; onOpenAdjustment: (date: string) => void; onAddTask: (date: string) => void }) {
+  const { state, commit, updateAssignment, updateDayConfig, moveAssignments, removeAssignment, reopenAssignment, prepareDurationChange, prepareAssignmentGroupChange } = useApp()
   const initialCalendarDate = todayISO() >= state.settings.startDate && todayISO() <= state.settings.endDate ? todayISO() : state.settings.startDate
   const [month, setMonth] = useState(startOfMonth(parseISO(initialCalendarDate)))
   const [viewMode, setViewMode] = useState<'month' | 'week'>('month')
@@ -804,6 +802,7 @@ function CalendarPage({ onReplan, onAddTask }: { onReplan: (date: string, baseSt
   const [overflowSelectedIds, setOverflowSelectedIds] = useState<string[]>([])
   const [overflowPanel, setOverflowPanel] = useState<{ date: string; top: number; left: number }>()
   const [taskOpenId, setTaskOpenId] = useState<string>()
+  const [groupChangeTargetId, setGroupChangeTargetId] = useState<string>()
   const [moveNotice, setMoveNotice] = useState<{ id: string; title: string; date: string }>()
   const [pendingDayType, setPendingDayType] = useState<DayType>()
   const [pendingCustomMinutes, setPendingCustomMinutes] = useState<number>()
@@ -860,6 +859,37 @@ function CalendarPage({ onReplan, onAddTask }: { onReplan: (date: string, baseSt
     return effectiveMinutes(b) - effectiveMinutes(a)
   })
 
+  const prepareCalendarDayChange = (date: string, prepared: AppState) => {
+    const now = new Date().toISOString()
+    const before = getDayConfig(state, date)
+    const after = getDayConfig(prepared, date)
+    const affectedAssignmentIds = prepared.assignments.filter(item => item.scheduledDate === date && item.status !== 'done').map(item => item.id)
+    const affectedGroupIds = Array.from(new Set(prepared.assignments.filter(item => affectedAssignmentIds.includes(item.id)).map(item => item.groupId)))
+    const affectedGoalIds = prepared.goals.filter(goal => goal.linkedTaskGroupIds.some(id => affectedGroupIds.includes(id)) || goal.linkedAssignmentIds.some(id => affectedAssignmentIds.includes(id)) || goal.completionConditions.some(condition => affectedGroupIds.includes(condition.groupId))).map(goal => goal.id)
+    const availabilityBefore = getCapacity(state, date)
+    const availabilityAfter = getCapacity(prepared, date)
+    const protectionBefore = isDateProtected(state, date)
+    const protectionAfter = isDateProtected(prepared, date)
+    const tightening = availabilityAfter < availabilityBefore || (!protectionBefore && protectionAfter)
+    const event: PlanChangeEvent = {
+      id: uid('event'), type: 'availability-change', action: tightening ? 'repair' : 'optimize',
+      title: tightening ? `处理 ${fmtDate(date)} 的可用时间减少` : `评估 ${fmtDate(date)} 新增的可用时间`,
+      description: tightening
+        ? `日期容量从 ${minutesText(availabilityBefore)} 调整为 ${minutesText(availabilityAfter)}；日期类型 ${dayTypeLabel[before.type]} → ${dayTypeLabel[after.type]}。系统会列出受影响任务和目标，并优先给出最少扰动修复方案。`
+        : `日期容量从 ${minutesText(availabilityBefore)} 调整为 ${minutesText(availabilityAfter)}；日期类型 ${dayTypeLabel[before.type]} → ${dayTypeLabel[after.type]}。当前排期不会自动提前，系统会同时提供“保持原计划”和“利用新增空间减负”等可选方案。`,
+      affectedGoalIds, affectedGroupIds, affectedAssignmentIds, affectedDates: [date], createdAt: now,
+      metadata: {
+        preferredPreferences: tightening
+          ? [after.bufferPreference === 'goal' ? 'goal' : after.bufferPreference === 'spread' ? 'balanced' : 'preserve', 'balanced', 'goal', 'rest']
+          : ['preserve', 'rest', 'balanced', 'goal'],
+        availabilityBefore, availabilityAfter, protectionBefore, protectionAfter, availabilityRelaxed: !tightening,
+      },
+    }
+    prepared.changeEvents = [...prepared.changeEvents, event].slice(-100)
+    prepared.updatedAt = now
+    onPrepared(prepared, event)
+  }
+
   const tasksFor = (date: string) => sortTasks(state.assignments.filter(assignment => assignment.scheduledDate === date))
   const countedMinutes = (assignment: Assignment) => effectiveMinutes(assignment)
   const loadFor = (date: string) => planningDayLoad(state, date)
@@ -867,33 +897,61 @@ function CalendarPage({ onReplan, onAddTask }: { onReplan: (date: string, baseSt
   const moveWithValidation = (assignmentId: string, targetDate: string) => {
     const assignment = state.assignments.find(item => item.id === assignmentId)
     const group = assignment && groups.get(assignment.groupId)
-    if (!assignment || !group || assignment.locked || assignment.scheduledDate === targetDate) return false
-    if (targetDate < state.settings.startDate || targetDate > state.settings.endDate) {
+    if (!assignment || !group || assignment.scheduledDate === targetDate) return false
+    if (assignment.status === 'done') { window.alert('已完成任务属于历史执行记录，不能直接移动。请先在任务详情中重新打开。'); return false }
+    if (assignment.locked) { window.alert('该任务已锁定。请先明确解锁，再重新选择日期。'); return false }
+    if (state.timer.assignmentId === assignment.id) { window.alert('该任务正在计时，当前不能移动。请先暂停或结束计时。'); return false }
+    if (!targetDate || targetDate < state.settings.startDate || targetDate > state.settings.endDate) {
       window.alert('目标日期超出当前计划范围。')
       return false
     }
-    const targetConfig = getDayConfig(state, targetDate)
-    if (targetConfig.isBufferDay && (targetConfig.bufferProtected ?? targetConfig.userSet) && assignment.scheduledDate !== targetDate) {
-      window.alert(`“${targetDate}”是受保护的缓冲日。请先在日期详情中修改可用时间，或在重排预览里明确允许使用。`)
-      return false
-    }
-    const targetLoad = loadFor(targetDate) - (assignment.scheduledDate === targetDate ? countedMinutes(assignment) : 0)
-    const projected = targetLoad + countedMinutes(assignment)
-    const capacity = getCapacity(state, targetDate)
+
     const placementChecks = checkAssignmentPlacement(state, assignmentId, targetDate)
-    const nonOverrideable = placementChecks.filter(item => ['plan-range', 'past', 'protected-buffer', 'travel-day'].includes(item.key))
+    const overrideable = (key: string) => key === 'capacity' || key.startsWith('group:') || key.startsWith('activity:') || key === 'long' || key === 'high-intensity' || key === 'date-protection' || key === 'protected-buffer'
+    const nonOverrideable = placementChecks.filter(item => item.hard && !overrideable(item.key))
     if (nonOverrideable.length) {
       window.alert(nonOverrideable.map(item => item.label).join('；'))
       return false
     }
-    const risks = placementChecks.map(item => item.limit > 0 ? `${item.label}：${Math.round(item.current)}/${Math.round(item.limit)}` : item.label)
-    if (targetDate > group.targetDate && !risks.some(item => item.includes('目标日期'))) risks.push(`会越过目标日期 ${group.targetDate}`)
-    if (projected > capacity && !risks.some(item => item.includes('容量'))) risks.push(`将从 ${minutesText(targetLoad)} 增至 ${minutesText(projected)}，超过容量 ${minutesText(projected - capacity)}`)
-    if (risks.length && !window.confirm(`移动“${assignment.title}”到 ${targetDate}？
 
-${risks.join('\n')}
+    const sourceProtected = Boolean(assignment.scheduledDate && isDateProtected(state, assignment.scheduledDate))
+    const targetProtected = isDateProtected(state, targetDate)
+    const hardOverrideable = placementChecks.filter(item => item.hard && overrideable(item.key))
+    if (sourceProtected || targetProtected || hardOverrideable.length) {
+      const prepared = cloneActiveState(state)
+      const draftTask = prepared.assignments.find(item => item.id === assignment.id)
+      if (!draftTask) return false
+      const movedAt = new Date().toISOString()
+      const oldDate = draftTask.scheduledDate
+      draftTask.previousDate = oldDate
+      draftTask.scheduledDate = targetDate
+      draftTask.lastManualMoveAt = movedAt
+      draftTask.scheduleSource = 'manual'
+      draftTask.intentStrength = 'manual'
+      draftTask.updatedAt = movedAt
+      const affectedGoalIds = prepared.goals.filter(goal => goal.linkedAssignmentIds.includes(draftTask.id) || goal.linkedTaskGroupIds.includes(draftTask.groupId) || goal.completionConditions.some(condition => condition.groupId === draftTask.groupId)).map(goal => goal.id)
+      const event: PlanChangeEvent = {
+        id: uid('event'), type: 'bulk-move', action: 'repair', title: `移动任务：${draftTask.title}`,
+        description: `用户希望把任务从 ${oldDate ?? '未安排'} 移到 ${targetDate}。当前涉及容量、每日上限或日期保护，系统会把每个例外完整列出并要求逐项确认；不会把本次放宽保存为永久规则。`,
+        affectedGoalIds, affectedGroupIds: [draftTask.groupId], affectedAssignmentIds: [draftTask.id],
+        affectedDates: Array.from(new Set([oldDate, targetDate].filter((date): date is string => Boolean(date)))).sort(), createdAt: movedAt,
+        metadata: { requestedDate: targetDate, manualMove: true, preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'] },
+      }
+      prepared.changeEvents = [...prepared.changeEvents, event].slice(-100)
+      prepared.updatedAt = movedAt
+      setTaskOpenId(undefined)
+      onPrepared(prepared, event)
+      return true
+    }
 
-继续即表示仅对这次手动移动接受这些后果。`)) return false
+    const targetLoad = loadFor(targetDate) - (assignment.scheduledDate === targetDate ? countedMinutes(assignment) : 0)
+    const projected = targetLoad + countedMinutes(assignment)
+    const capacity = getCapacity(state, targetDate)
+    const risks: string[] = []
+    const desiredDate = nearestRelevantGoalDate(state, assignment)
+    if (desiredDate && targetDate > desiredDate) risks.push(`会越过相关目标期望日期 ${desiredDate}`)
+    if (projected > capacity) risks.push(`将从 ${minutesText(targetLoad)} 增至 ${minutesText(projected)}，超过容量 ${minutesText(projected - capacity)}`)
+    if (risks.length && !window.confirm(`移动“${assignment.title}”到 ${targetDate}？\n\n${risks.join('\n')}\n\n这是可恢复的小范围手动安排，不会修改目标或永久规则。`)) return false
     updateAssignment(assignmentId, { scheduledDate: targetDate })
     setMoveNotice({ id: assignmentId, title: assignment.title, date: targetDate })
     return true
@@ -940,12 +998,13 @@ ${risks.join('\n')}
     }
     setDayOpen(date)
     const current = getDayConfig(state, date)
+    const constraint = constraintsForDate(state, date).slice().reverse().find(item => ['unavailable', 'reduced-capacity', 'special-capacity', 'protected-buffer'].includes(item.kind))
     setPendingDayType(current.type)
     setPendingCustomMinutes(current.customMinutes)
-    setPendingAvailabilityMode(current.isBufferDay ? (current.availableMinutes === 0 ? 'rest' : 'reduced') : 'default')
-    setPendingAvailableMinutes(current.availableMinutes ?? 60)
-    setPendingBufferReason(current.bufferReason ?? '')
-    setPendingBufferPreference(current.bufferPreference ?? 'preserve')
+    setPendingAvailabilityMode(constraint?.kind === 'unavailable' || current.type === 'travel' || current.availableMinutes === 0 ? 'rest' : constraint || current.isBufferDay ? 'reduced' : 'default')
+    setPendingAvailableMinutes(constraint?.capacityMinutes ?? current.availableMinutes ?? 60)
+    setPendingBufferReason(constraint?.reason ?? current.bufferReason ?? '')
+    setPendingBufferPreference(constraint?.preference ?? current.bufferPreference ?? 'preserve')
   }
   const moveCalendarWindow = (direction: -1 | 1) => {
     if (viewMode === 'month') setMonth(addMonths(month, direction))
@@ -977,40 +1036,46 @@ ${risks.join('\n')}
   const dayCfg = dayOpen ? getDayConfig(state, dayOpen) : undefined
   const taskOpen = taskOpenId ? state.assignments.find(item => item.id === taskOpenId) : undefined
   const taskOpenGroup = taskOpen ? groups.get(taskOpen.groupId) : undefined
+  const taskOpenDurationSuggestion = taskOpen ? allDurationSuggestions(state).find(item => item.groupId === taskOpen.groupId) : undefined
+  const groupChangeTarget = groupChangeTargetId ? state.taskGroups.find(group => group.id === groupChangeTargetId) : undefined
   const overflowTasks = overflowPanel ? tasksFor(overflowPanel.date).slice(calendarTaskLimit) : []
 
   const bulkMoveTo = (ids: string[], target: string) => {
     if (!target || !ids.length) return false
     if (target < state.settings.startDate || target > state.settings.endDate) { window.alert('目标日期超出当前计划范围。'); return false }
-    const targetConfig = getDayConfig(state, target)
-    if (targetConfig.isBufferDay && (targetConfig.bufferProtected ?? targetConfig.userSet)) { window.alert('目标日期是受保护的缓冲日，不能直接批量移入。'); return false }
-    const moving = state.assignments.filter(item => ids.includes(item.id) && !item.locked)
-    const previewState = cloneActiveState(state)
-    const riskSet = new Set<string>()
-    for (const assignment of moving) {
-      const checks = checkAssignmentPlacement(previewState, assignment.id, target)
-      const nonOverrideable = checks.filter(item => ['plan-range', 'past', 'protected-buffer', 'travel-day'].includes(item.key))
-      if (nonOverrideable.length) { window.alert(`${assignment.title}：${nonOverrideable.map(item => item.label).join('；')}`); return false }
-      checks.forEach(item => riskSet.add(item.limit > 0 ? `${item.label}：${Math.round(item.current)}/${Math.round(item.limit)}` : item.label))
-      const previewAssignment = previewState.assignments.find(item => item.id === assignment.id)
-      if (previewAssignment) previewAssignment.scheduledDate = target
+    const moving = state.assignments.filter(item => ids.includes(item.id) && item.status !== 'done' && !item.locked && item.id !== state.timer.assignmentId)
+    if (!moving.length) { window.alert('所选任务中没有可移动项；已完成、锁定和正在计时任务不会移动。'); return false }
+    const prepared = cloneActiveState(state)
+    const now = new Date().toISOString()
+    const affectedDates = new Set<string>([target])
+    for (const source of moving) {
+      const item = prepared.assignments.find(candidate => candidate.id === source.id)
+      if (!item) continue
+      if (item.scheduledDate) affectedDates.add(item.scheduledDate)
+      item.previousDate = item.scheduledDate
+      item.scheduledDate = target
+      item.lastManualMoveAt = now
+      item.scheduleSource = 'manual'
+      item.intentStrength = 'manual'
+      item.updatedAt = now
     }
-    const projected = loadFor(target) + moving.reduce((sum, assignment) => sum + (assignment.scheduledDate === target ? 0 : countedMinutes(assignment)), 0)
-    const capacity = getCapacity(state, target)
-    const lateTitles = moving.filter(assignment => { const group = groups.get(assignment.groupId); return Boolean(group && target > group.targetDate) }).map(assignment => assignment.title)
-    if (projected > capacity) riskSet.add(`预计 ${minutesText(projected)}，超过容量 ${minutesText(projected - capacity)}`)
-    if (lateTitles.length) riskSet.add(`${lateTitles.length} 项会越过目标日期`)
-    const risks = [...riskSet]
-    if (risks.length && !window.confirm(`批量移动到 ${target}？
-
-${risks.join('\n')}
-
-继续即表示仅对这次手动移动接受这些后果。`)) return false
-    moveAssignments(ids, target)
+    const affectedAssignmentIds = moving.map(item => item.id)
+    const affectedGroupIds = Array.from(new Set(moving.map(item => item.groupId)))
+    const affectedGoalIds = prepared.goals.filter(goal => goal.linkedTaskGroupIds.some(id => affectedGroupIds.includes(id)) || goal.linkedAssignmentIds.some(id => affectedAssignmentIds.includes(id)) || goal.completionConditions.some(condition => affectedGroupIds.includes(condition.groupId))).map(goal => goal.id)
+    const event: PlanChangeEvent = {
+      id: uid('event'), type: 'bulk-move', action: 'repair', title: `批量移动 ${moving.length} 项任务到 ${fmtDate(target)}`,
+      description: '这是用户指定的批量移动草稿。系统会在应用前完整核验来源日、目标日、容量、每日上限、目标期限、保护日期和手动意图；不会直接强塞。',
+      affectedGoalIds, affectedGroupIds, affectedAssignmentIds, affectedDates: Array.from(affectedDates).sort(), createdAt: now,
+      metadata: { requestedDate: target, preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'] },
+    }
+    prepared.changeEvents = [...prepared.changeEvents, event].slice(-100)
+    prepared.updatedAt = now
     setSelectedIds([])
     setOverflowSelectedIds([])
+    onPrepared(prepared, event)
     return true
   }
+
 
   const bulkMove = (ids = selectedIds) => {
     const target = window.prompt('输入目标日期（YYYY-MM-DD）')
@@ -1036,29 +1101,45 @@ ${risks.join('\n')}
     setOverflowSelectedIds([])
   }
 
+  const exactDayConstraint = dayOpen ? state.calendarConstraints.find(item => item.startDate === dayOpen && item.endDate === dayOpen && ['unavailable', 'reduced-capacity', 'special-capacity', 'protected-buffer'].includes(item.kind)) : undefined
   let dayPreviewState: AppState | undefined
   if (dayOpen && dayCfg) {
     dayPreviewState = cloneActiveState(state)
     const type = pendingDayType ?? dayCfg.type
-    const isBufferDay = pendingAvailabilityMode !== 'default'
-    const availableMinutes = pendingAvailabilityMode === 'rest' ? 0 : pendingAvailabilityMode === 'reduced' ? Math.max(0, pendingAvailableMinutes) : undefined
+    // 日期类型负责基础容量；临时不可用、降低容量和受保护缓冲统一写入 CalendarConstraint。
     dayPreviewState.dayConfigs[dayOpen] = {
       ...dayCfg,
       date: dayOpen,
       type,
       customMinutes: type === 'custom' ? pendingCustomMinutes ?? dayCfg.customMinutes ?? state.settings.regularMinutes : undefined,
-      isBufferDay,
-      availableMinutes,
-      bufferReason: isBufferDay ? pendingBufferReason.trim() || undefined : undefined,
-      bufferPreference: isBufferDay ? pendingBufferPreference : undefined,
-      bufferProtected: isBufferDay,
-      userSet: true
+      isBufferDay: undefined,
+      availableMinutes: undefined,
+      bufferReason: undefined,
+      bufferPreference: undefined,
+      bufferProtected: undefined,
+      userSet: true,
+    }
+    if (exactDayConstraint) dayPreviewState.calendarConstraints = dayPreviewState.calendarConstraints.filter(item => item.id !== exactDayConstraint.id)
+    const needsUnavailable = type === 'travel' || pendingAvailabilityMode === 'rest'
+    const needsReduced = !needsUnavailable && pendingAvailabilityMode === 'reduced'
+    if (needsUnavailable || needsReduced) {
+      const now = new Date().toISOString()
+      dayPreviewState.calendarConstraints.push({
+        id: exactDayConstraint?.id ?? uid('constraint'), startDate: dayOpen, endDate: dayOpen,
+        kind: needsUnavailable ? 'unavailable' : 'protected-buffer',
+        capacityMinutes: needsUnavailable ? 0 : Math.max(0, pendingAvailableMinutes),
+        protected: true,
+        reason: pendingBufferReason.trim() || (needsUnavailable ? '当天不可用' : '手动降低当天容量'),
+        preference: pendingBufferPreference,
+        createdAt: exactDayConstraint?.createdAt ?? now, updatedAt: now,
+      })
     }
   }
 
+
   return <>
     <section className="calendar-toolbar"><div><h2>{viewMode === 'month' ? format(month, 'yyyy年M月') : `${fmtDate(weekStart)}－${fmtDate(shiftDate(weekStart, 6))}`}</h2><p>月视图看全局，周视图处理任务。手机上长按任务后，再点击目标日期即可移动。</p></div><div className="calendar-toolbar-actions"><div className="segmented-control calendar-view-toggle"><button className={viewMode === 'month' ? 'active' : ''} onClick={() => setViewMode('month')}>月</button><button className={viewMode === 'week' ? 'active' : ''} onClick={() => setViewMode('week')}>周</button></div><button className="icon-button" onClick={() => moveCalendarWindow(-1)}><ChevronLeft size={19}/></button><button className="secondary-button" onClick={() => { const date = initialCalendarDate; setMonth(startOfMonth(parseISO(date))); setWeekStart(shiftDate(date, -getDay(parseISO(date)))) }}>今天附近</button><button className="icon-button" onClick={() => moveCalendarWindow(1)}><ChevronRight size={19}/></button></div></section>
-    {moveNotice && <div className="manual-move-notice"><div><strong>已记录你的手动安排</strong><span>「{moveNotice.title}」已移到 {moveNotice.date}，自动重排会优先保留，也不会近期拉回原日期。</span></div><div className="button-wrap"><button className="secondary-button" onClick={() => { updateAssignment(moveNotice.id, { locked: true }); setMoveNotice(undefined) }}><Lock size={15}/>同时锁定</button><button className="text-button" onClick={() => setMoveNotice(undefined)}>知道了</button></div></div>}
+    {moveNotice && <div className="manual-move-notice"><div><strong>已记录你的手动安排</strong><span>「{moveNotice.title}」已移到 {moveNotice.date}，后续自动调整会优先保留，也不会近期拉回原日期。</span></div><div className="button-wrap"><button className="secondary-button" onClick={() => { updateAssignment(moveNotice.id, { locked: true }); setMoveNotice(undefined) }}><Lock size={15}/>同时锁定</button><button className="text-button" onClick={() => setMoveNotice(undefined)}>知道了</button></div></div>}
     {moveModeTaskId && <div className="calendar-move-mode"><div><strong>正在移动：{state.assignments.find(item => item.id === moveModeTaskId)?.title}</strong><span>点击月历或周视图中的目标日期。再次长按其他任务可更换对象。</span></div><button className="secondary-button" onClick={() => setMoveModeTaskId(undefined)}>取消移动</button></div>}
     <section className={`calendar-card ${viewMode === 'week' ? 'calendar-week-view' : 'calendar-month-view'}`} onTouchStart={handleCalendarTouchStart} onTouchEnd={handleCalendarTouchEnd}>
       {viewMode === 'month' ? <>
@@ -1174,13 +1255,13 @@ ${risks.join('\n')}
         <div className="day-load-summary day-load-live"><span>执行负载 {minutesText(planningDayLoad(state, dayOpen))}</span><span>容量 {minutesText(getCapacity(state, dayOpen))} → {minutesText(getCapacity(dayPreviewState, dayOpen))}</span><span>{dayTasks.filter(task => task.status === 'done').length}/{dayTasks.length} 已完成</span><em className={planningDayLoad(dayPreviewState, dayOpen) > getCapacity(dayPreviewState, dayOpen) ? 'over' : ''}>{planningDayLoad(dayPreviewState, dayOpen) > getCapacity(dayPreviewState, dayOpen) ? `调整后超载 ${minutesText(planningDayLoad(dayPreviewState, dayOpen) - getCapacity(dayPreviewState, dayOpen))}` : `调整后剩余 ${minutesText(getCapacity(dayPreviewState, dayOpen) - planningDayLoad(dayPreviewState, dayOpen))}`}</em></div>
         <div className="date-detail-primary"><button className="primary-button" onClick={() => onAddTask(dayOpen)}><Plus size={16}/>添加到这一天</button><span>会完整校验容量、同类上限、长任务、高强度、日期保护、今日规则和目标最晚日期。</span></div>
         <div className="bulk-row"><span>已选择 {selectedIds.length} 项</span><div className="button-wrap">
-          {(pendingDayType ?? dayCfg.type) !== dayCfg.type || ((pendingDayType ?? dayCfg.type) === 'custom' && pendingCustomMinutes !== dayCfg.customMinutes) || pendingAvailabilityMode !== (dayCfg.isBufferDay ? (dayCfg.availableMinutes === 0 ? 'rest' : 'reduced') : 'default') || (pendingAvailabilityMode === 'reduced' && pendingAvailableMinutes !== dayCfg.availableMinutes) || pendingBufferReason !== (dayCfg.bufferReason ?? '') || pendingBufferPreference !== (dayCfg.bufferPreference ?? 'preserve') ? <button className="primary-button" onClick={() => {
+          {JSON.stringify(dayPreviewState.dayConfigs[dayOpen]) !== JSON.stringify(state.dayConfigs[dayOpen] ?? { date: dayOpen, type: 'regular' }) || JSON.stringify(dayPreviewState.calendarConstraints.filter(item => item.startDate === dayOpen && item.endDate === dayOpen)) !== JSON.stringify(state.calendarConstraints.filter(item => item.startDate === dayOpen && item.endDate === dayOpen)) ? <button className="primary-button" onClick={() => {
             const ordinary = dayPreviewState!.assignments.filter(assignment => assignment.scheduledDate === dayOpen && assignment.status !== 'done' && !groups.get(assignment.groupId)?.recurring)
             const newCapacity = getCapacity(dayPreviewState!, dayOpen)
             const newLoad = planningDayLoad(dayPreviewState!, dayOpen)
-            if (ordinary.length && ((pendingDayType ?? dayCfg.type) === 'travel' || newLoad > newCapacity || pendingAvailabilityMode !== 'default')) onReplan(dayOpen, dayPreviewState)
+            if (ordinary.length && ((pendingDayType ?? dayCfg.type) === 'travel' || newLoad > newCapacity || pendingAvailabilityMode !== 'default')) prepareCalendarDayChange(dayOpen, dayPreviewState)
             else updateDayConfig(dayOpen, dayPreviewState!.dayConfigs[dayOpen])
-          }}>预览缓冲日调整</button> : <button className="secondary-button" onClick={() => onReplan(dayOpen)}>查看调整建议</button>}
+          }}>预览缓冲日调整</button> : <button className="secondary-button" onClick={() => onOpenAdjustment(dayOpen)}>查看调整建议</button>}
           <button className="secondary-button" disabled={!selectedIds.length} onClick={() => bulkMove()}>批量移动</button>
         </div></div>
         <div className="day-task-list">{dayTasks.map(assignment => <label key={assignment.id} className="select-task-row" onPointerDown={() => startLongPress(assignment.id)} onPointerUp={cancelLongPress} onPointerCancel={cancelLongPress} onPointerMove={cancelLongPress}><input type="checkbox" checked={selectedIds.includes(assignment.id)} onChange={event => setSelectedIds(previous => event.target.checked ? [...previous, assignment.id] : previous.filter(id => id !== assignment.id))}/><button className="select-task-content" onClick={event => { event.preventDefault(); openTaskUnlessLongPressed(assignment.id) }}><strong>{assignment.title}</strong><span>{groups.get(assignment.groupId)?.subject} · {minutesText(assignment.estimatedMinutes)}</span></button>{assignment.locked && <small>已锁定</small>}</label>)}</div>
@@ -1190,35 +1271,48 @@ ${risks.join('\n')}
     <Drawer open={Boolean(taskOpen)} title={taskOpen?.title ?? '任务详情'} subtitle={taskOpenGroup ? `${taskOpenGroup.subject} · 优先级 ${taskOpenGroup.priority}` : undefined} onClose={() => setTaskOpenId(undefined)}>
       {taskOpen && taskOpenGroup && <div className="task-quick-editor">
         <div className="task-detail-metrics"><div><span>预计时间</span><strong>{minutesText(taskOpen.estimatedMinutes)}</strong></div><div><span>状态</span><strong>{taskOpen.status === 'done' ? '已完成' : taskOpen.status === 'partial' ? '部分完成' : '待完成'}</strong></div><div><span>排期来源</span><strong>{taskOpen.intentStrength === 'manual' ? '用户手动' : taskOpen.scheduleSource}</strong></div></div>
-        <label className="field"><span>任务标题</span><input value={taskOpen.title} onChange={event => updateAssignment(taskOpen.id, { title: event.target.value })}/></label>
-        <label className="field"><span>预计时长（分钟）</span><NumericInput min={1} max={1440} value={taskOpen.estimatedMinutes} onValueChange={value => updateAssignment(taskOpen.id, { estimatedMinutes: value })}/></label>
+        <label className="field"><span>任务标题</span><input value={taskOpen.title} onChange={event => updateAssignment(taskOpen.id, { title: event.target.value, titleCustomized: true })}/></label>
+        <label className="field"><span>预计时长（分钟）</span><NumericInput min={1} max={1440} value={taskOpen.estimatedMinutes} onValueChange={value => updateAssignment(taskOpen.id, { estimatedMinutes: value, durationCustomized: true, manuallyEstimated: true })}/></label>
         <label className="field"><span>移动到</span><input type="date" min={state.settings.startDate} max={state.settings.endDate} value={taskOpen.scheduledDate ?? ''} onChange={event => moveWithValidation(taskOpen.id, event.target.value)}/></label>
         <label className="field"><span>所属任务组</span><select value={taskOpen.groupId} onChange={event => {
-          const targetGroup = state.taskGroups.find(group => group.id === event.target.value)
-          if (!targetGroup) return
-          const adopt = window.confirm(`移动到“${targetGroup.title}”后，将继承其类别、优先级、规则和目标关联。
-
-确定：同时采用该组默认预计 ${targetGroup.unitMinutes} 分钟（仅未开始任务）。
-取消：保留当前预计时长并继续移动。`)
-          const preview = cloneActiveState(state)
-          const draftTask = preview.assignments.find(item => item.id === taskOpen.id)
-          if (draftTask) { draftTask.groupId = targetGroup.id; if (adopt && draftTask.status === 'todo' && draftTask.actualMinutes === 0) draftTask.estimatedMinutes = targetGroup.unitMinutes }
-          const placement = taskOpen.scheduledDate ? checkAssignmentPlacement(preview, taskOpen.id, taskOpen.scheduledDate) : undefined
-          if (placement?.some(item => item.hard) && !window.confirm(`当前日期在新规则下存在冲突：\n${placement.map(item => `• ${item.label}（${item.current}/${item.limit}）`).join('\n')}\n\n仍要移动任务组并保留当前日期吗？之后可在计划调整中处理。`)) return
-          moveAssignmentToGroup(taskOpen.id, targetGroup.id, adopt)
-        }}>{state.taskGroups.filter(group => !group.hiddenStandalone || group.id === taskOpen.groupId).map(group => <option key={group.id} value={group.id}>{group.subject} · {group.title}</option>)}</select></label>
+          if (event.target.value === taskOpen.groupId) return
+          setGroupChangeTargetId(event.target.value)
+        }}>
+          <option value={taskOpen.groupId}>{taskOpenGroup.subject} · {taskOpenGroup.title}（当前）</option>
+          {state.taskGroups.filter(group => group.id !== taskOpen.groupId && !group.hiddenStandalone && !group.recurring && group.status !== 'completed').map(group => <option key={group.id} value={group.id}>{group.subject} · {group.title}</option>)}
+        </select><small>更换任务组会先展示继承规则、编号、预计时长和当前日期影响，不会直接修改。</small></label>
         <label className="switch-row"><button type="button" className={`switch ${taskOpen.locked ? 'on' : ''}`} onClick={() => updateAssignment(taskOpen.id, { locked: !taskOpen.locked })}><i/></button><span>锁定任务，自动方案不得移动</span></label>
         <div className="task-impact-note"><strong>关联目标</strong><span>{state.goals.filter(goal => goal.linkedAssignmentIds.includes(taskOpen.id) || goal.linkedTaskGroupIds.includes(taskOpen.groupId) || goal.completionConditions.some(condition => condition.groupId === taskOpen.groupId)).map(goal => `${goal.title}（最晚 ${goal.latestDate}）`).join('；') || '无关联目标'}。移动出现超载或目标风险时，系统会先说明后果。</span></div>
+        {taskOpenDurationSuggestion && <div className="task-impact-note duration-detail-suggestion"><strong>历史用时建议</strong><span>最近 {taskOpenDurationSuggestion.sampleCount} 个有效样本平均 {taskOpenDurationSuggestion.recentAverage} 分钟；当前组预计 {taskOpenDurationSuggestion.currentEstimate} 分钟，建议 {taskOpenDurationSuggestion.suggestedEstimate} 分钟。接受后仍会先展示日期调整方案。</span><button className="secondary-button" onClick={() => { const prepared = prepareDurationChange(taskOpenDurationSuggestion); setTaskOpenId(undefined); onPrepared(prepared.state, prepared.event) }}>查看时长调整方案</button></div>}
         <div className="drawer-danger-zone">{taskOpen.status === 'done' && <button className="secondary-button" onClick={() => window.confirm(`重新打开“${taskOpen.title}”？已记录的 ${taskOpen.actualMinutes} 分钟会保留。`) && reopenAssignment(taskOpen.id)}>重新打开任务</button>}<button className="danger-button" onClick={() => { const warning = taskOpen.actualMinutes > 0 || taskOpen.progress > 0 ? `此任务已有 ${taskOpen.actualMinutes} 分钟实际用时、进度 ${taskOpen.progress}%。删除会创建可恢复版本，但当前任务将从计划中移除。` : '删除后会更新任务组数量并提供计划版本恢复。'; if (window.confirm(`${warning}
 
 确认移除“${taskOpen.title}”？`)) { removeAssignment(taskOpen.id); setTaskOpenId(undefined) } }}><Trash2 size={16}/>移除任务</button></div>
       </div>}
     </Drawer>
+
+    <AssignmentGroupChangeDialog
+      open={Boolean(taskOpen && groupChangeTarget)}
+      state={state}
+      assignment={taskOpen}
+      targetGroup={groupChangeTarget}
+      onClose={() => setGroupChangeTargetId(undefined)}
+      onSubmit={options => {
+        if (!taskOpen || !groupChangeTarget) return
+        try {
+          const prepared = prepareAssignmentGroupChange(taskOpen.id, groupChangeTarget.id, options)
+          setGroupChangeTargetId(undefined)
+          setTaskOpenId(undefined)
+          onPrepared(prepared.state, prepared.event)
+        } catch (error) {
+          window.alert(error instanceof Error ? error.message : '无法生成任务组变更预览。')
+        }
+      }}
+    />
   </>
 }
 
 function TasksPage({ onAddSingle, onCreateGroup, onPrepared }: { onAddSingle: () => void; onCreateGroup: () => void; onPrepared: (state: AppState, event: PlanChangeEvent) => void }) {
-  const { state, editTaskGroup, prepareTaskGroupEdit, deleteTaskGroup, moveAssignments } = useApp()
+  const { state, editTaskGroup, prepareTaskGroupEdit, deleteTaskGroup, prepareDurationChange } = useApp()
   const [search, setSearch] = useState('')
   const [priority, setPriority] = useState<'all'|Priority>('all')
   const [subject, setSubject] = useState<'all'|Subject>('all')
@@ -1227,19 +1321,49 @@ function TasksPage({ onAddSingle, onCreateGroup, onPrepared }: { onAddSingle: ()
   const assignmentsByGroup = useMemo(() => new Map(state.taskGroups.map(group => [group.id, state.assignments.filter(item => item.groupId === group.id)])), [state.taskGroups, state.assignments])
   const subjects = Array.from(new Set([...state.settings.customSubjects, ...state.taskGroups.map(group => group.subject)])).sort()
   const groups = state.taskGroups.filter(group => !group.hiddenStandalone && (showHidden || !group.hidden) && (priority === 'all' || group.priority === priority) && (subject === 'all' || group.subject === subject) && (`${group.subject}${group.title}${group.notes ?? ''}`.toLowerCase().includes(search.toLowerCase())))
-  const bulkMoveGroup = (group: TaskGroup) => { const date = window.prompt(`把“${group.title}”未完成任务移动到哪一天？（YYYY-MM-DD）`); if (!date) return; moveAssignments(state.assignments.filter(item => item.groupId === group.id && item.status !== 'done' && !item.locked).map(item => item.id), date) }
+  const bulkMoveGroup = (group: TaskGroup) => {
+    const date = window.prompt(`把“${group.title}”未完成任务移动到哪一天？（YYYY-MM-DD）`)
+    if (!date) return
+    if (date < state.settings.startDate || date > state.settings.endDate) { window.alert('目标日期超出计划范围。'); return }
+    const candidates = state.assignments.filter(item => item.groupId === group.id && item.status !== 'done' && !item.locked && item.id !== state.timer.assignmentId)
+    if (!candidates.length) { window.alert('没有可移动的未完成任务；锁定和正在计时任务不会移动。'); return }
+    const prepared = cloneActiveState(state)
+    const movedAt = new Date().toISOString()
+    const affectedDates = new Set<string>([date])
+    for (const source of candidates) {
+      const item = prepared.assignments.find(candidate => candidate.id === source.id)
+      if (!item) continue
+      if (item.scheduledDate) affectedDates.add(item.scheduledDate)
+      item.previousDate = item.scheduledDate
+      item.scheduledDate = date
+      item.lastManualMoveAt = movedAt
+      item.scheduleSource = 'manual'
+      item.intentStrength = 'manual'
+    }
+    const affectedAssignmentIds = candidates.map(item => item.id)
+    const affectedGoalIds = prepared.goals.filter(goal => goal.linkedTaskGroupIds.includes(group.id) || goal.linkedAssignmentIds.some(id => affectedAssignmentIds.includes(id)) || goal.completionConditions.some(condition => condition.groupId === group.id)).map(goal => goal.id)
+    const event: PlanChangeEvent = {
+      id: uid('event'), type: 'bulk-move', action: 'repair', title: `批量移动“${group.title}”未完成任务`,
+      description: `用户指定把 ${candidates.length} 项可移动任务安排到 ${date}。系统会完整核验容量、每日上限、目标期限和日期保护，锁定与正在计时任务保持不变。`,
+      affectedGoalIds, affectedGroupIds: [group.id], affectedAssignmentIds, affectedDates: Array.from(affectedDates).sort(), createdAt: movedAt,
+      metadata: { requestedDate: date, preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'] },
+    }
+    prepared.changeEvents = [...prepared.changeEvents, event].slice(-100)
+    prepared.updatedAt = movedAt
+    onPrepared(prepared, event)
+  }
   return <>
     <section className="tasks-toolbar"><div className="search-box"><Search size={18}/><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索任务组"/></div><select value={priority} onChange={event => setPriority(event.target.value === 'all' ? 'all' : Number(event.target.value) as Priority)}><option value="all">全部优先级</option>{[5,3,2,1,0].map(item => <option key={item} value={item}>优先级 {item}</option>)}</select><select value={subject} onChange={event => setSubject(event.target.value as 'all'|Subject)}><option value="all">全部科目／类别</option>{subjects.map(item => <option key={item}>{item}</option>)}</select><label className="toggle-label"><input type="checkbox" checked={showHidden} onChange={event => setShowHidden(event.target.checked)}/><span>显示隐藏任务组</span></label><div className="task-create-actions"><button className="secondary-button" onClick={onAddSingle}><Plus size={17}/>添加单项任务</button><button className="primary-button" onClick={onCreateGroup}><Plus size={17}/>创建任务组</button></div></section>
-    <section className="group-list">{groups.map(group => { const items = assignmentsByGroup.get(group.id) ?? []; const done = items.filter(item => item.status === 'done').length; const actual = items.reduce((sum,item) => sum + item.actualMinutes,0); const planned = items.reduce((sum,item) => sum + item.estimatedMinutes,0); const durationSuggestion = getDurationSuggestion(state, group.id); const linkedGoals = state.goals.filter(goal => goal.linkedTaskGroupIds.includes(group.id) || goal.completionConditions.some(condition => condition.groupId === group.id)); return <article className="group-card" key={group.id}><div className="group-card-head"><div><span className={`subject-pill subject-${group.subject}`}>{group.subject}</span><span className={`priority-badge priority-${group.priority}`}>P{group.priority}</span><span className="status-pill">{group.status === 'completed' ? '已完成' : group.status === 'archived' ? '已归档' : '进行中'}</span><h3>{group.title}</h3></div><div className="group-actions"><button className="text-button" onClick={() => bulkMoveGroup(group)}>移动未完成</button><button className="text-button" onClick={() => setEditing(group)}>编辑</button><button className="icon-button danger-icon" onClick={() => window.confirm(`删除任务组“${group.title}”？将影响 ${items.length} 项任务、${items.filter(item=>item.status==='done').length} 项已完成、${items.filter(item=>item.actualMinutes>0).length} 项有实际用时和 ${linkedGoals.length} 个目标，并创建可恢复版本。`) && deleteTaskGroup(group.id)}><Trash2 size={17}/></button></div></div><div className="group-stats"><span>{done}/{items.length} 已完成</span><span>预计 {minutesText(planned)}</span><span>实际 {minutesText(actual)}</span><span>关联目标 {linkedGoals.length}</span>{group.dailyMax && <span>每天最多 {group.dailyMax} 个</span>}</div><div className="progress-track"><i style={{width:`${items.length ? done/items.length*100 : 0}%`}}/></div>{(group.notes || group.sourceLabel) && <p className="group-note">{group.notes || group.sourceLabel}</p>}{durationSuggestion && <div className="duration-suggestion"><div><strong>发现用时校准机会</strong><span>最近 {durationSuggestion.sampleSize} 次记录显示当前预计可能需要调整；请在每日复盘中查看样本并生成方案，不会直接覆盖。</span></div></div>}</article> })}
+    <section className="group-list">{groups.map(group => { const items = assignmentsByGroup.get(group.id) ?? []; const done = items.filter(item => item.status === 'done').length; const actual = items.reduce((sum,item) => sum + item.actualMinutes,0); const planned = items.reduce((sum,item) => sum + item.estimatedMinutes,0); const durationSuggestion = allDurationSuggestions(state).find(item => item.groupId === group.id); const linkedGoals = state.goals.filter(goal => goal.linkedTaskGroupIds.includes(group.id) || goal.completionConditions.some(condition => condition.groupId === group.id)); return <article className="group-card" key={group.id}><div className="group-card-head"><div><span className={`subject-pill subject-${group.subject}`}>{group.subject}</span><span className={`priority-badge priority-${group.priority}`}>P{group.priority}</span><span className="status-pill">{group.status === 'completed' ? '已完成' : group.status === 'archived' ? '已归档' : '进行中'}</span><h3>{group.title}</h3></div><div className="group-actions"><button className="text-button" onClick={() => bulkMoveGroup(group)}>移动未完成</button><button className="text-button" onClick={() => setEditing(group)}>编辑</button><button className="icon-button danger-icon" onClick={() => window.confirm(`删除任务组“${group.title}”？将影响 ${items.length} 项任务、${items.filter(item=>item.status==='done').length} 项已完成、${items.filter(item=>item.actualMinutes>0).length} 项有实际用时和 ${linkedGoals.length} 个目标，并创建可恢复版本。`) && deleteTaskGroup(group.id)}><Trash2 size={17}/></button></div></div><div className="group-stats"><span>{done}/{items.length} 已完成</span><span>预计 {minutesText(planned)}</span><span>实际 {minutesText(actual)}</span><span>关联目标 {linkedGoals.length}</span>{group.dailyMax && <span>每天最多 {group.dailyMax} 个</span>}</div><div className="progress-track"><i style={{width:`${items.length ? done/items.length*100 : 0}%`}}/></div>{(group.notes || group.sourceLabel) && <p className="group-note">{group.notes || group.sourceLabel}</p>}{durationSuggestion && <div className="duration-suggestion"><div><strong>发现用时校准机会</strong><span>当前 {durationSuggestion.currentEstimate} 分钟；最近 {durationSuggestion.sampleCount} 个有效样本平均 {Math.round(durationSuggestion.recentAverage)} 分钟，建议 {durationSuggestion.suggestedEstimate} 分钟。只会生成预览，不直接覆盖。</span></div><button className="secondary-button" onClick={() => { const prepared = prepareDurationChange(durationSuggestion); onPrepared(prepared.state, prepared.event) }}>查看时长调整方案</button></div>}</article> })}
       {!groups.length && <div className="empty-state"><CheckCircle2 size={30}/><h3>{state.taskGroups.filter(group => !group.hiddenStandalone).length ? '没有符合条件的任务组' : '计划还是空的'}</h3><p>{state.taskGroups.length ? '调整筛选条件。' : '可先添加一个单项任务，也可创建批量任务组。'}</p><div className="button-wrap"><button className="secondary-button" onClick={onAddSingle}>添加第一个任务</button><button className="primary-button" onClick={onCreateGroup}>创建批量计划／任务组</button></div></div>}
     </section>
-    <TaskGroupDialog open={Boolean(editing)} state={state} initial={editing} onClose={() => setEditing(undefined)} onCreate={() => undefined} onEdit={group => {
+    <TaskGroupDialog open={Boolean(editing)} state={state} initial={editing} onClose={() => setEditing(undefined)} onCreate={() => undefined} onEdit={(group, numberingChoice) => {
       const original = state.taskGroups.find(item => item.id === group.id)
       const affectsPlan = Boolean(original && (original.quantity !== group.quantity || original.unitMinutes !== group.unitMinutes || original.subject !== group.subject
         || original.priority !== group.priority || original.dailyMax !== group.dailyMax || original.activityType !== group.activityType
         || original.highIntensity !== group.highIntensity || original.countInStats !== group.countInStats))
       if (affectsPlan) {
-        const prepared = prepareTaskGroupEdit(group)
+        const prepared = prepareTaskGroupEdit(group, numberingChoice)
         onPrepared(prepared.state, prepared.event)
       } else editTaskGroup(group)
     }}/>
@@ -1266,10 +1390,57 @@ function SettingsPage({ sessionUserId, sessionEmail, cloudMessage, onCloudUpload
   const cloudDownload=async()=>{try{const cloud=await downloadSnapshot(sessionUserId);if(!cloud){setAuthMessage('云端尚无数据');return}if(window.confirm('用云端当前计划覆盖本机当前计划？本机完整版本历史仍保留在本设备。'))replaceState({...cloud,replanHistory:state.replanHistory,conflictBackups:state.conflictBackups,planVersions:state.planVersions},true);setAuthMessage('已从云端恢复')}catch(error){setAuthMessage(error instanceof Error?error.message:'下载失败')}}
   const restoreConflict=(raw:string)=>{try{const parsed=JSON.parse(raw) as AppState;if(window.confirm('恢复这份冲突备份？当前状态会保留在撤销历史中。'))replaceState(parsed,true)}catch{window.alert('冲突备份已损坏，无法恢复。')}}
   const addSubject=()=>{const value=subjectDraft.trim();if(!value)return;updateSettings({customSubjects:Array.from(new Set([...state.settings.customSubjects,value]))});setSubjectDraft('')}
+  const prepareSettingsChange = (patch: Partial<AppState['settings']>, title: string, type: PlanChangeEvent['type'] = 'rule-change') => {
+    const prepared = cloneActiveState(state)
+    prepared.settings = { ...prepared.settings, ...patch }
+    if (prepared.settings.startDate > prepared.settings.endDate) { window.alert('计划开始日期不能晚于结束日期。'); return }
+    const now = new Date().toISOString()
+    const availability = type === 'availability-change'
+    let hasIncrease = false
+    let hasDecrease = false
+    if (availability) {
+      for (const key of ['regularMinutes', 'studyMinutes', 'travelMinutes'] as const) {
+        if (patch[key] == null) continue
+        if (prepared.settings[key] > state.settings[key]) hasIncrease = true
+        if (prepared.settings[key] < state.settings[key]) hasDecrease = true
+      }
+      if (patch.startDate) {
+        if (prepared.settings.startDate < state.settings.startDate) hasIncrease = true
+        if (prepared.settings.startDate > state.settings.startDate) hasDecrease = true
+      }
+      if (patch.endDate) {
+        if (prepared.settings.endDate > state.settings.endDate) hasIncrease = true
+        if (prepared.settings.endDate < state.settings.endDate) hasDecrease = true
+      }
+    }
+    const pureRelaxation = availability && hasIncrease && !hasDecrease
+    const affected = prepared.assignments.filter(item => item.status !== 'done' && (!item.scheduledDate || item.scheduledDate >= todayISO()))
+    const affectedAssignmentIds = affected.map(item => item.id)
+    const affectedGroupIds = Array.from(new Set(affected.map(item => item.groupId)))
+    const affectedGoalIds = prepared.goals.filter(goal => goal.status === 'active' && (
+      goal.linkedTaskGroupIds.some(id => affectedGroupIds.includes(id))
+      || goal.linkedAssignmentIds.some(id => affectedAssignmentIds.includes(id))
+      || goal.completionConditions.some(condition => affectedGroupIds.includes(condition.groupId))
+    )).map(goal => goal.id)
+    const rangeStart = [todayISO(), state.settings.startDate, prepared.settings.startDate].sort().at(-1) ?? todayISO()
+    const rangeEnd = state.settings.endDate > prepared.settings.endDate ? state.settings.endDate : prepared.settings.endDate
+    const affectedDates = rangeStart <= rangeEnd ? dateRange(rangeStart, rangeEnd) : []
+    const event: PlanChangeEvent = {
+      id: uid('event'), type, action: pureRelaxation ? 'optimize' : 'repair', title,
+      description: pureRelaxation
+        ? '可用时间或计划范围增加。设置先进入草稿；系统不会自动把任务提前，可保持当前排期，也可预览如何利用新增空间减负。'
+        : '设置变化先进入草稿；系统会比较调整前后容量、任务日期和目标风险，不会在保存设置时静默移动任务。',
+      affectedGoalIds, affectedGroupIds, affectedAssignmentIds, affectedDates, createdAt: now,
+      metadata: { settingsPatch: patch, pureRelaxation, hasIncrease, hasDecrease, preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'] },
+    }
+    prepared.changeEvents = [...prepared.changeEvents, event].slice(-100)
+    prepared.updatedAt = now
+    onPrepared(prepared, event)
+  }
   return <div className="settings-stack">
-    <SettingsSection title="计划基础" description="目标日期已统一迁移到“目标”页面，这里只保留计划边界和默认风格，避免多个可编辑真相。"><div className="form-grid"><label className="field span-2"><span>计划名称</span><input value={planNameDraft} onChange={event=>setPlanNameDraft(event.target.value)} onBlur={()=>planNameDraft!==state.settings.planName&&updateSettings({planName:planNameDraft})}/></label><label className="field"><span>开始日期</span><input type="date" value={state.settings.startDate} onChange={event=>updateSettings({startDate:event.target.value})}/></label><label className="field"><span>结束日期</span><input type="date" value={state.settings.endDate} onChange={event=>updateSettings({endDate:event.target.value})}/></label><label className="field"><span>默认排期风格</span><select value={state.settings.planningMode} onChange={event=>updateSettings({planningMode:event.target.value as AppState['settings']['planningMode']})}><option value="sprint">冲刺</option><option value="balanced">平衡</option><option value="relaxed">轻松</option></select></label></div></SettingsSection>
+    <SettingsSection title="计划基础" description="目标日期已统一迁移到“目标”页面，这里只保留计划边界和默认风格，避免多个可编辑真相。"><div className="form-grid"><label className="field span-2"><span>计划名称</span><input value={planNameDraft} onChange={event=>setPlanNameDraft(event.target.value)} onBlur={()=>planNameDraft!==state.settings.planName&&updateSettings({planName:planNameDraft})}/></label><label className="field"><span>开始日期</span><input type="date" value={state.settings.startDate} onChange={event=>prepareSettingsChange({startDate:event.target.value}, '调整计划开始日期', 'availability-change')}/></label><label className="field"><span>结束日期</span><input type="date" value={state.settings.endDate} onChange={event=>prepareSettingsChange({endDate:event.target.value}, '调整计划结束日期', 'availability-change')}/></label><label className="field"><span>默认排期风格</span><select value={state.settings.planningMode} onChange={event=>updateSettings({planningMode:event.target.value as AppState['settings']['planningMode']})}><option value="sprint">冲刺</option><option value="balanced">平衡</option><option value="relaxed">轻松</option></select></label></div></SettingsSection>
     <SettingsSection title="排期偏好" description="这些是可解释的偏好和范围参数；硬约束、用户手动安排、锁定、执行状态与日期保护不会被静默突破。"><div className="form-grid three"><label className="field"><span>冻结近期天数</span><NumericInput commitMode="blur" min={0} max={7} value={state.settings.freezeDays} onValueChange={value=>updateSettings({freezeDays:value})}/></label><label className="field"><span>常规日最多任务</span><NumericInput commitMode="blur" min={1} max={100} value={state.settings.regularMaxTasks} onValueChange={value=>updateSettings({regularMaxTasks:value})}/></label><label className="field"><span>学习日最多任务</span><NumericInput commitMode="blur" min={1} max={100} value={state.settings.studyMaxTasks} onValueChange={value=>updateSettings({studyMaxTasks:value})}/></label><label className="field"><span>均衡方案目标利用率（%）</span><NumericInput commitMode="blur" min={50} max={100} value={Math.round(state.settings.targetUtilization*100)} onValueChange={value=>updateSettings({targetUtilization:value/100})}/></label><label className="field"><span>接近满载提示线（%）</span><NumericInput commitMode="blur" min={60} max={100} value={Math.round(state.settings.nearFullThreshold*100)} onValueChange={value=>updateSettings({nearFullThreshold:value/100})}/></label><label className="field"><span>缓冲日目标利用率（%）</span><NumericInput commitMode="blur" min={0} max={80} value={Math.round(state.settings.bufferUtilization*100)} onValueChange={value=>updateSettings({bufferUtilization:value/100})}/></label><label className="field"><span>小范围调整优先半径（天）</span><NumericInput commitMode="blur" min={1} max={14} value={state.settings.localRepairRadius} onValueChange={value=>updateSettings({localRepairRadius:value})}/></label><label className="field"><span>单日尽量最多新增任务</span><NumericInput commitMode="blur" min={0} max={10} value={state.settings.maxNewTasksPerDay} onValueChange={value=>updateSettings({maxNewTasksPerDay:value})}/></label><label className="field"><span>单日负载变化预算（%容量）</span><NumericInput commitMode="blur" min={0} max={100} value={Math.round(state.settings.maxLoadChangeRatio*100)} onValueChange={value=>updateSettings({maxLoadChangeRatio:value/100})}/></label><label className="field"><span>单类别建议占比上限（%）</span><NumericInput commitMode="blur" min={30} max={100} value={Math.round(state.settings.subjectShareLimit*100)} onValueChange={value=>updateSettings({subjectShareLimit:value/100})}/></label></div></SettingsSection>
-    <SettingsSection title="每日容量" description="容量是默认硬上限。今天已经学习的实际时间会消耗容量，即使该任务不计入正式统计。"><div className="form-grid three"><label className="field"><span>常规日（分钟）</span><NumericInput commitMode="blur" min={0} max={1440} value={state.settings.regularMinutes} onValueChange={value=>updateSettings({regularMinutes:value})}/></label><label className="field"><span>学习日（分钟）</span><NumericInput commitMode="blur" min={0} max={1440} value={state.settings.studyMinutes} onValueChange={value=>updateSettings({studyMinutes:value})}/></label><label className="field"><span>旅游日（分钟）</span><NumericInput commitMode="blur" min={0} max={1440} value={state.settings.travelMinutes} onValueChange={value=>updateSettings({travelMinutes:value})}/></label></div><div className="toggle-grid"><Toggle checked={state.settings.countWordsTime} onChange={value=>updateSettings({countWordsTime:value})} label="把每日单词计入正式计划与统计时间"/><Toggle checked={state.settings.showWarnings} onChange={value=>updateSettings({showWarnings:value})} label="显示进度风险提醒"/><Toggle checked={state.settings.optionalReview} onChange={value=>updateSettings({optionalReview:value})} label="保留每日复盘入口"/><Toggle checked={state.settings.keepOfflineOnLogout} onChange={value=>updateSettings({keepOfflineOnLogout:value})} label="退出登录后保留个人离线缓存"/></div></SettingsSection>
+    <SettingsSection title="每日容量" description="容量是默认硬上限。今天已经学习的实际时间会消耗容量，即使该任务不计入正式统计。"><div className="form-grid three"><label className="field"><span>常规日（分钟）</span><NumericInput commitMode="blur" min={0} max={1440} value={state.settings.regularMinutes} onValueChange={value=>prepareSettingsChange({regularMinutes:value}, '调整常规日默认容量', 'availability-change')}/></label><label className="field"><span>学习日（分钟）</span><NumericInput commitMode="blur" min={0} max={1440} value={state.settings.studyMinutes} onValueChange={value=>prepareSettingsChange({studyMinutes:value}, '调整学习日默认容量', 'availability-change')}/></label><label className="field"><span>旅游日（分钟）</span><NumericInput commitMode="blur" min={0} max={1440} value={state.settings.travelMinutes} onValueChange={value=>prepareSettingsChange({travelMinutes:value}, '调整旅游日默认容量', 'availability-change')}/></label></div><div className="toggle-grid"><Toggle checked={state.settings.countWordsTime} onChange={value=>updateSettings({countWordsTime:value})} label="把每日单词计入正式计划与统计时间"/><Toggle checked={state.settings.showWarnings} onChange={value=>updateSettings({showWarnings:value})} label="显示进度风险提醒"/><Toggle checked={state.settings.optionalReview} onChange={value=>updateSettings({optionalReview:value})} label="当天任务全部完成时自动打开复盘（入口始终保留）"/><Toggle checked={state.settings.keepOfflineOnLogout} onChange={value=>updateSettings({keepOfflineOnLogout:value})} label="退出登录后保留个人离线缓存"/></div></SettingsSection>
     <CalendarConstraintManager onPrepared={onPrepared}/>
     <SettingsSection title="自定义科目／类别" description="保留学习预设，同时允许增加自己的类别；存储层不会把产品永久限制为学校科目。"><div className="custom-subject-editor"><div className="button-wrap"><input value={subjectDraft} onChange={event=>setSubjectDraft(event.target.value)} placeholder="例如：数学竞赛、研究项目"/><button className="primary-button" onClick={addSubject}>添加</button></div><div className="tag-list">{state.settings.customSubjects.map(item=><span key={item}>{item}<button aria-label={`删除${item}`} onClick={()=>updateSettings({customSubjects:state.settings.customSubjects.filter(subject=>subject!==item)})}>×</button></span>)}</div></div></SettingsSection>
     <SettingsSection title="自适应时长建议" description="只使用最近有效样本生成建议，不自动覆盖预计或移动日历；孤立异常值按 IQR 规则降低影响。"><div className="form-grid three"><label className="field"><span>历史窗口（最近完成数）</span><NumericInput commitMode="blur" min={3} max={50} value={state.settings.duration.windowSize} onValueChange={value=>updateSettings({duration:{...state.settings.duration,windowSize:value}})}/></label><label className="field"><span>最少样本数</span><NumericInput commitMode="blur" min={2} max={20} value={state.settings.duration.minimumSamples} onValueChange={value=>updateSettings({duration:{...state.settings.duration,minimumSamples:value}})}/></label><label className="field"><span>偏差提示阈值（%）</span><NumericInput commitMode="blur" min={5} max={100} value={Math.round(state.settings.duration.deviationThreshold*100)} onValueChange={value=>updateSettings({duration:{...state.settings.duration,deviationThreshold:value/100}})}/></label></div><Toggle checked={state.settings.duration.enabled} onChange={value=>updateSettings({duration:{...state.settings.duration,enabled:value}})} label="启用复盘中的时长建议"/></SettingsSection>

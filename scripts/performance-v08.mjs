@@ -19,7 +19,7 @@ const assignments = Array.from({ length: 500 }, (_, index) => ({
   scheduleSource: index % 19 === 0 ? 'manual' : 'system', timeEntries: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
 }))
 const goals = Array.from({ length: 20 }, (_, index) => ({
-  id: `goal-${index}`, title: `规模测试目标${index + 1}`, latestDate: date(index + 12), desiredDate: date(index + 8), status: 'active',
+  id: `goal-${index}`, title: `规模测试目标${index + 1}`, priority: [5, 3, 2, 1, 0][index % 5], latestDate: date(index + 12), desiredDate: date(index + 8), status: 'active',
   linkedTaskGroupIds: [`g-${index}`, `g-${(index + 10) % 50}`], linkedAssignmentIds: [],
   completionConditions: [{ id: `condition-${index}`, groupId: `g-${index}`, mode: index % 3 === 0 ? 'all' : index % 3 === 1 ? 'percentage' : 'count', value: index % 3 === 1 ? 50 : index % 3 === 2 ? 5 : undefined }],
   createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),

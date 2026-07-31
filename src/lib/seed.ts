@@ -106,6 +106,7 @@ function createBaseState(settings: AppSettings, groups: TaskGroup[], templateKin
     assignments: groups.flatMap(assignmentsForGroup),
     goals: [],
     calendarConstraints: [],
+    acceptedConstraintExceptions: [],
     timer: { accumulatedSeconds: 0, running: false },
     reviewRecords: [],
     changeEvents: [],
@@ -156,8 +157,8 @@ export function buildGuestDemoState(): AppState {
   const chemistry = groups.find(item => item.title === '实验专题预习微课')!
   const mainGroups = groups.filter(item => ['函数综合训练卷', '运动学限时小练', '古诗文精读'].includes(item.title))
   state.goals = [
-    { id: uid('goal'), title: '完成暑假核心学习任务', description: '优先完成数学、物理和古诗文核心任务。', desiredDate: core, latestDate: end, status: 'active', completionConditions: mainGroups.map(item => condition(item.id, 'all')), linkedTaskGroupIds: mainGroups.map(item => item.id), linkedAssignmentIds: [], createdAt: now, updatedAt: now },
-    { id: uid('goal'), title: '化学阶段检查准备', description: '老师检查前完成至少一半化学预习。', desiredDate: shiftDate(today, 10), latestDate: shiftDate(today, 15), status: 'active', completionConditions: [condition(chemistry.id, 'percentage', 50)], linkedTaskGroupIds: [chemistry.id], linkedAssignmentIds: [], createdAt: now, updatedAt: now },
+    { id: uid('goal'), title: '完成暑假核心学习任务', priority: 5, description: '优先完成数学、物理和古诗文核心任务。', desiredDate: core, latestDate: end, status: 'active', completionConditions: mainGroups.map(item => condition(item.id, 'all')), linkedTaskGroupIds: mainGroups.map(item => item.id), linkedAssignmentIds: [], createdAt: now, updatedAt: now },
+    { id: uid('goal'), title: '化学阶段检查准备', priority: 5, description: '老师检查前完成至少一半化学预习。', desiredDate: shiftDate(today, 10), latestDate: shiftDate(today, 15), status: 'active', completionConditions: [condition(chemistry.id, 'percentage', 50)], linkedTaskGroupIds: [chemistry.id], linkedAssignmentIds: [], createdAt: now, updatedAt: now },
   ]
   state.calendarConstraints = [
     { id: uid('constraint'), startDate: shiftDate(today, 13), endDate: shiftDate(today, 13), kind: 'unavailable', capacityMinutes: 0, protected: true, reason: '演示外出日', preference: 'spread', createdAt: now, updatedAt: now },
@@ -231,20 +232,20 @@ function normalizeAssignment(raw: Partial<Assignment>, group: TaskGroup | undefi
 
 function migrateLegacyGoals(raw: Partial<AppState>, groups: TaskGroup[], now: string): Goal[] {
   const existing = Array.isArray(raw.goals) ? raw.goals : []
-  if (existing.length > 0) return existing.map(goal => ({ ...goal, linkedTaskGroupIds: Array.from(new Set(goal.linkedTaskGroupIds ?? [])), linkedAssignmentIds: Array.from(new Set(goal.linkedAssignmentIds ?? [])), completionConditions: goal.completionConditions ?? [], createdAt: goal.createdAt ?? now, updatedAt: goal.updatedAt ?? now }))
+  if (existing.length > 0) return existing.map(goal => ({ ...goal, priority: goal.priority ?? 3, linkedTaskGroupIds: Array.from(new Set(goal.linkedTaskGroupIds ?? [])), linkedAssignmentIds: Array.from(new Set(goal.linkedAssignmentIds ?? [])), completionConditions: goal.completionConditions ?? [], createdAt: goal.createdAt ?? now, updatedAt: goal.updatedAt ?? now }))
   const goals: Goal[] = []
   const coreDate = raw.settings?.coreTargetDate
   const chemistryDate = raw.settings?.chemistryTargetDate
   const coreGroups = groups.filter(group => group.priority === 5 && group.subject !== '化学' && !group.hiddenStandalone)
   const chemistryGroups = groups.filter(group => group.subject === '化学' && !group.hiddenStandalone)
-  if (coreDate && coreGroups.length) goals.push({ id: uid('goal'), title: '迁移：核心任务目标', description: '由 v0.7 全局核心目标日期迁移；迁移本身不会改变原排期。', desiredDate: coreDate, latestDate: coreGroups.map(group => group.dueDate || coreDate).sort().at(-1) ?? coreDate, status: 'active', completionConditions: coreGroups.map(group => condition(group.id, 'all')), linkedTaskGroupIds: coreGroups.map(group => group.id), linkedAssignmentIds: [], migratedFromLegacy: true, createdAt: now, updatedAt: now })
-  if (chemistryDate && chemistryGroups.length) goals.push({ id: uid('goal'), title: '迁移：化学任务目标', description: '由 v0.7 化学目标日期迁移；迁移本身不会改变原排期。', desiredDate: chemistryDate, latestDate: chemistryGroups.map(group => group.dueDate || chemistryDate).sort().at(-1) ?? chemistryDate, status: 'active', completionConditions: chemistryGroups.map(group => condition(group.id, 'all')), linkedTaskGroupIds: chemistryGroups.map(group => group.id), linkedAssignmentIds: [], migratedFromLegacy: true, createdAt: now, updatedAt: now })
+  if (coreDate && coreGroups.length) goals.push({ id: uid('goal'), title: '迁移：核心任务目标', priority: 5, description: '由 v0.7 全局核心目标日期迁移；迁移本身不会改变原排期。', desiredDate: coreDate, latestDate: coreGroups.map(group => group.dueDate || coreDate).sort().at(-1) ?? coreDate, status: 'active', completionConditions: coreGroups.map(group => condition(group.id, 'all')), linkedTaskGroupIds: coreGroups.map(group => group.id), linkedAssignmentIds: [], migratedFromLegacy: true, createdAt: now, updatedAt: now })
+  if (chemistryDate && chemistryGroups.length) goals.push({ id: uid('goal'), title: '迁移：化学任务目标', priority: 5, description: '由 v0.7 化学目标日期迁移；迁移本身不会改变原排期。', desiredDate: chemistryDate, latestDate: chemistryGroups.map(group => group.dueDate || chemistryDate).sort().at(-1) ?? chemistryDate, status: 'active', completionConditions: chemistryGroups.map(group => condition(group.id, 'all')), linkedTaskGroupIds: chemistryGroups.map(group => group.id), linkedAssignmentIds: [], migratedFromLegacy: true, createdAt: now, updatedAt: now })
   const covered = new Set(goals.flatMap(goal => goal.linkedTaskGroupIds))
   for (const groupItem of groups) {
     if (covered.has(groupItem.id) || groupItem.hiddenStandalone || !(groupItem.targetDate || groupItem.dueDate)) continue
     const desired = groupItem.targetDate || groupItem.dueDate
     const latest = groupItem.dueDate || desired
-    goals.push({ id: uid('goal'), title: `迁移：${groupItem.title}`, description: '由 v0.7 任务组目标日期迁移。', desiredDate: desired, latestDate: latest < desired ? desired : latest, status: 'active', completionConditions: [condition(groupItem.id, 'all')], linkedTaskGroupIds: [groupItem.id], linkedAssignmentIds: [], migratedFromLegacy: true, createdAt: now, updatedAt: now })
+    goals.push({ id: uid('goal'), title: `迁移：${groupItem.title}`, priority: groupItem.priority, description: '由 v0.7 任务组目标日期迁移。', desiredDate: desired, latestDate: latest < desired ? desired : latest, status: 'active', completionConditions: [condition(groupItem.id, 'all')], linkedTaskGroupIds: [groupItem.id], linkedAssignmentIds: [], migratedFromLegacy: true, createdAt: now, updatedAt: now })
   }
   return goals
 }
@@ -287,6 +288,7 @@ export function normalizeState(rawInput: AppState): AppState {
   const state: AppState = {
     schemaVersion: SCHEMA_VERSION, version: SCHEMA_VERSION, updatedAt: raw.updatedAt ?? now, settings, dayConfigs,
     taskGroups, assignments, goals, calendarConstraints: migrateConstraints(raw, now),
+    acceptedConstraintExceptions: (raw.acceptedConstraintExceptions ?? []).filter(item => item?.date && item?.key).slice(-100),
     timer: raw.timer ?? { accumulatedSeconds: 0, running: false }, reviewRecords: raw.reviewRecords ?? [], changeEvents: raw.changeEvents ?? [],
     guestModified: raw.guestModified ?? false, lastCloudSyncAt: raw.lastCloudSyncAt, templateKind: raw.templateKind ?? 'blank',
     replanHistory: [...rawHistory].slice(-10), planVersions: [...rawVersions].slice(-10),

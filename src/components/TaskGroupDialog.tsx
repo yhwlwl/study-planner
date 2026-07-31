@@ -17,7 +17,7 @@ export function TaskGroupDialog({ open, onClose, state, initial, onCreate, onEdi
   state: AppState
   initial?: TaskGroup
   onCreate: (draft: TaskGroupDraft, schedule: boolean) => void
-  onEdit?: (group: TaskGroup) => void
+  onEdit?: (group: TaskGroup, numberingChoice: 'preserve' | 'number-all') => void
 }) {
   const subjects = useMemo(() => Array.from(new Set([...presetSubjects, ...state.settings.customSubjects, ...state.taskGroups.map(group => group.subject)])), [state])
   const [title, setTitle] = useState('')
@@ -32,6 +32,7 @@ export function TaskGroupDialog({ open, onClose, state, initial, onCreate, onEdi
   const [notes, setNotes] = useState('')
   const [goalIds, setGoalIds] = useState<string[]>([])
   const [customSubject, setCustomSubject] = useState('')
+  const [numberingChoice, setNumberingChoice] = useState<'preserve' | 'number-all'>('preserve')
 
   useEffect(() => {
     if (!open) return
@@ -47,14 +48,17 @@ export function TaskGroupDialog({ open, onClose, state, initial, onCreate, onEdi
     setNotes(initial?.notes ?? '')
     setGoalIds(state.goals.filter(goal => goal.linkedTaskGroupIds.includes(initial?.id ?? '')).map(goal => goal.id))
     setCustomSubject('')
+    setNumberingChoice('preserve')
   }, [open, initial, state.goals])
 
   const chosenSubject = customSubject.trim() || subject
-  const draft = (): TaskGroupDraft => ({ title: title.trim(), subject: chosenSubject, priority, unitMinutes: minutes, activityType, dailyMax, highIntensity, countInStats, quantity, notes: notes.trim() || undefined, goalIds })
+  const initialItemCount = initial ? state.assignments.filter(item => item.groupId === initial.id).length : 0
+  const becomesMultiItem = Boolean(initial && !initial.recurring && initialItemCount === 1 && quantity > 1)
+  const draft = (): TaskGroupDraft => ({ title: title.trim(), subject: chosenSubject, priority, unitMinutes: minutes, activityType, dailyMax, highIntensity, countInStats, quantity, notes: notes.trim() || undefined, goalIds, numberingChoice })
   const create = (schedule: boolean) => { if (!title.trim()) return; onCreate(draft(), schedule) }
   const edit = () => {
     if (!initial || !onEdit || !title.trim()) return
-    onEdit({ ...initial, title: title.trim(), subject: chosenSubject, priority, quantity, unitMinutes: minutes, dailyMax, activityType, highIntensity, countInStats, notes: notes.trim() || undefined })
+    onEdit({ ...initial, title: title.trim(), subject: chosenSubject, priority, quantity, unitMinutes: minutes, dailyMax, activityType, highIntensity, countInStats, notes: notes.trim() || undefined }, numberingChoice)
     onClose()
   }
 
@@ -70,7 +74,11 @@ export function TaskGroupDialog({ open, onClose, state, initial, onCreate, onEdi
       <label className="field span-2"><span>任务活动类型</span><select value={activityType} onChange={event => setActivityType(event.target.value)}>{activityOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select><small>类型上限由同一个约束核心校验；单次放宽必须在方案中明确接受。</small></label>
       <label className="field checkbox-field"><input type="checkbox" checked={highIntensity} onChange={event => setHighIntensity(event.target.checked)}/><span>高强度任务（默认每天最多2项）</span></label>
       <label className="field checkbox-field"><input type="checkbox" checked={countInStats} onChange={event => setCountInStats(event.target.checked)}/><span>计入计划与统计时间</span></label>
-      {!initial && state.goals.length > 0 && <fieldset className="field span-2 goal-link-field"><legend>关联目标</legend>{state.goals.filter(goal => goal.status !== 'archived').map(goal => <label key={goal.id}><input type="checkbox" checked={goalIds.includes(goal.id)} onChange={event => setGoalIds(current => event.target.checked ? [...new Set([...current, goal.id])] : current.filter(id => id !== goal.id))}/><span>{goal.title} · 最晚 {goal.latestDate}</span></label>)}</fieldset>}
+      {becomesMultiItem && <fieldset className="field span-2 numbering-choice"><legend>这个任务组将首次从 1 项扩展为多项</legend>
+        <label><input type="radio" name="group-edit-numbering" checked={numberingChoice === 'preserve'} onChange={() => setNumberingChoice('preserve')}/><span><strong>保留原任务名称</strong><small>原任务会标记为自定义标题，新增任务按后续序号命名。</small></span></label>
+        <label><input type="radio" name="group-edit-numbering" checked={numberingChoice === 'number-all'} onChange={() => setNumberingChoice('number-all')}/><span><strong>统一按当前顺序编号</strong><small>只修改非自定义标题，下一步会完整预览。</small></span></label>
+      </fieldset>}
+      {!initial && state.goals.length > 0 && <fieldset className="field span-2 goal-link-field"><legend>同时加入目标（可选）</legend><small>勾选后，会把“完成这个任务组的全部任务”作为该目标的一项完成条件。需要只完成一半或指定数量时，请创建后到“目标”页面修改条件。</small>{state.goals.filter(goal => goal.status !== 'archived').map(goal => <label key={goal.id}><input type="checkbox" checked={goalIds.includes(goal.id)} onChange={event => setGoalIds(current => event.target.checked ? [...new Set([...current, goal.id])] : current.filter(id => id !== goal.id))}/><span>{goal.title} · 最晚 {goal.latestDate}</span></label>)}</fieldset>}
       <label className="field span-2"><span>备注</span><textarea rows={3} value={notes} onChange={event => setNotes(event.target.value)}/></label>
       {!initial && <div className="form-note span-2">任务组只定义共享规则，真正进入日历的是生成的单项任务。阶段目标和最终截止日期统一由“目标”管理。</div>}
     </div>

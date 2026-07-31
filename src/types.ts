@@ -1,5 +1,5 @@
 /** Study Planner v0.8 领域模型。保留少量 v0.7 兼容字段，仅用于确定性迁移与旧界面渐进改造。 */
-export const SCHEMA_VERSION = 8 as const
+export const SCHEMA_VERSION = 9 as const
 
 export type ISODate = string
 export type Priority = 0 | 1 | 2 | 3 | 5
@@ -175,6 +175,8 @@ export interface Goal {
   id: string
   title: string
   description?: string
+  /** 目标间冲突时使用；期限更近仍优先，同期限再按优先级。 */
+  priority: Priority
   desiredDate?: ISODate
   latestDate: ISODate
   status: GoalStatus
@@ -212,6 +214,7 @@ export type PlanChangeEventType =
   | 'load-preference-change'
   | 'future-replanning'
   | 'rule-change'
+  | 'bulk-move'
   | 'group-deletion'
   | 'goal-deletion'
   | 'restore'
@@ -246,9 +249,21 @@ export type ConstraintKey =
 export interface ConstraintException {
   date: ISODate
   key: ConstraintKey
+  /** 保留 group:ID / activity:TYPE 等精确内部键，避免不同组共享例外。 */
+  rawKey?: string
   label: string
   permanent: false
+  /** 原规则值与本次临时放宽值，仅用于解释和审计。 */
+  currentLimit?: number
+  overrideLimit?: number
   accepted?: boolean
+}
+
+export interface AcceptedConstraintException extends ConstraintException {
+  id: string
+  eventId: string
+  accepted: true
+  createdAt: string
 }
 
 export interface ProposalIssue {
@@ -304,6 +319,21 @@ export interface GoalImpact {
   summary: string
 }
 
+
+export interface ProposalFieldChange {
+  label: string
+  before?: string
+  after?: string
+}
+
+export interface ProposalStructuralChange {
+  entityType: 'assignment' | 'task-group' | 'goal' | 'calendar-constraint' | 'settings'
+  entityId: string
+  title: string
+  changeType: 'added' | 'removed' | 'updated'
+  fields: ProposalFieldChange[]
+}
+
 export interface ProposalMetrics {
   newTaskCount: number
   movedTaskCount: number
@@ -334,6 +364,8 @@ export interface SchedulingProposal {
   movements: TaskMovement[]
   dateChanges: DateLoadChange[]
   goalImpacts: GoalImpact[]
+  /** 非日期类的完整前后变化，例如任务换组、预计时长、任务组规则、目标和日期约束。 */
+  structuralChanges: ProposalStructuralChange[]
   exceptions: ConstraintException[]
   excludedDates: RejectedDateReason[]
   metrics: ProposalMetrics
@@ -366,6 +398,12 @@ export interface PlanVersion {
   afterState: string
   schemaVersion: number
   localOnly: true
+  /** 重大方案的可解释审计元数据；旧版本可为空。 */
+  preference?: SchedulingPreference
+  proposalTitle?: string
+  proposalDescription?: string
+  exceptionSummaries?: string[]
+  manualOverrideCount?: number
 }
 
 export interface ReviewRecord {
@@ -376,6 +414,11 @@ export interface ReviewRecord {
   totalCount: number
   plannedMinutes: number
   actualMinutes: number
+  inferredMinutes?: number
+  /** 保存当日复盘快照，避免任务后来重开或改期后重写历史。 */
+  plannedAssignmentIds?: string[]
+  executedAssignmentIds?: string[]
+  completedAssignmentIds?: string[]
   unfinishedAssignmentIds: string[]
   durationSuggestionGroupIds: string[]
 }
@@ -401,8 +444,13 @@ export interface GoalProgress {
   countedAssignmentIds: string[]
   estimatedRemainingMinutes: number
   expectedCompletion?: ISODate
+  /** 已完成目标的真实达成日期，按满足条件所需任务的最晚完成日计算。 */
+  actualCompletionDate?: ISODate
   desiredRisk: boolean
   latestRisk: boolean
+  /** 已完成目标用于历史评价；未完成时为空。 */
+  desiredMet?: boolean
+  latestMet?: boolean
   conditionDetails: Array<{
     conditionId: string
     groupId: string
@@ -411,6 +459,23 @@ export interface GoalProgress {
     completed: number
     countedAssignmentIds: string[]
   }>
+}
+
+
+export interface ReviewDaySnapshot {
+  date: ISODate
+  /** 当日原计划任务。 */
+  plannedAssignmentIds: string[]
+  /** 当日有真实计时、手动用时或完成记录的任务。 */
+  executedAssignmentIds: string[]
+  /** 复盘中展示的任务并集，自动去重。 */
+  assignmentIds: string[]
+  completedAssignmentIds: string[]
+  unfinishedAssignmentIds: string[]
+  recurringUnfinishedAssignmentIds: string[]
+  plannedMinutes: number
+  actualMinutes: number
+  inferredMinutes: number
 }
 
 export interface PlacementResult {
@@ -427,11 +492,16 @@ export interface NewTaskDraft {
   title: string
   groupId?: string
   standalone: boolean
+  /** 独立任务使用自己的类别与优先级；加入任务组时忽略这两个字段。 */
+  subject?: Subject
+  priority?: Priority
   estimatedMinutes: number
   schedulingIntent: SchedulingIntent
   date?: ISODate
   locked: boolean
   notes?: string
+  /** 当一项任务组首次扩展为多项时，明确选择是否统一编号。 */
+  numberingChoice?: 'preserve' | 'number-all'
 }
 
 export interface TaskGroupDraft {
@@ -446,11 +516,14 @@ export interface TaskGroupDraft {
   quantity: number
   notes?: string
   goalIds: string[]
+  /** 编辑单项组扩展为多项时，明确保护原名或统一编号。 */
+  numberingChoice?: 'preserve' | 'number-all'
 }
 
 export interface GoalDraft {
   title: string
   description?: string
+  priority: Priority
   desiredDate?: ISODate
   latestDate: ISODate
   completionConditions: GoalCondition[]
@@ -475,6 +548,7 @@ export interface AppStatePortable {
   assignments: Assignment[]
   goals: Goal[]
   calendarConstraints: CalendarConstraint[]
+  acceptedConstraintExceptions: AcceptedConstraintException[]
   timer: TimerState
   reviewRecords: ReviewRecord[]
   changeEvents: PlanChangeEvent[]

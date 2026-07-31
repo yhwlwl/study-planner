@@ -45,14 +45,32 @@ export function createPlanVersion(before: AppState, after: AppState, event: Plan
 }
 
 export function createVersionFromProposal(before: AppState, after: AppState, event: PlanChangeEvent, proposal: SchedulingProposal): PlanVersion {
-  return createPlanVersion(before, after, event, `${event.title} · ${proposal.title}`)
+  return {
+    ...createPlanVersion(before, after, event, `${event.title} · ${proposal.title}`),
+    preference: proposal.preference,
+    proposalTitle: proposal.title,
+    proposalDescription: proposal.description,
+    exceptionSummaries: proposal.exceptions.map(item => `${item.date} · ${item.label}${item.overrideLimit != null ? ` → ${item.overrideLimit}` : ''}`),
+    manualOverrideCount: proposal.metrics.manualTaskMoveCount,
+  }
+}
+
+
+/** 某项任务是否已经形成不能被旧快照抹掉的真实执行事实。 */
+function hasImmutableExecution(state: AppState, assignmentId: string) {
+  const item = state.assignments.find(candidate => candidate.id === assignmentId)
+  if (!item) return false
+  return item.actualMinutes > 0 || item.progress > 0 || item.status !== 'todo'
+    || Boolean(item.completedAt) || (item.timeEntries?.length ?? 0) > 0
+    || state.timer.assignmentId === item.id
 }
 
 /**
- * 恢复旧计划时，计时记录、实际分钟、完成状态和完成日期属于不可逆执行事实，始终取当前值。
+ * 把旧计划结构恢复为当前草稿，同时保留所有真实执行事实。
+ * 旧快照中不存在、但之后已经执行过的任务也必须继续存在，不能“恢复”掉历史。
  */
-export function restoreVersionState(current: AppState, version: PlanVersion, side: 'before' | 'after' = 'after'): AppState {
-  const portable = JSON.parse(side === 'after' ? version.afterState : version.beforeState) as AppState
+export function restoreSnapshotState(current: AppState, snapshot: string): AppState {
+  const portable = JSON.parse(snapshot) as AppState
   const restored = normalizeState({
     ...portable,
     replanHistory: current.replanHistory,
@@ -73,10 +91,33 @@ export function restoreVersionState(current: AppState, version: PlanVersion, sid
       remainingMinutes: execution.remainingMinutes,
     }
   })
+
+  const restoredIds = new Set(restored.assignments.map(item => item.id))
+  const restoredGroupIds = new Set(restored.taskGroups.map(item => item.id))
+  for (const currentTask of current.assignments) {
+    if (restoredIds.has(currentTask.id) || !hasImmutableExecution(current, currentTask.id)) continue
+    const group = current.taskGroups.find(item => item.id === currentTask.groupId)
+    if (group && !restoredGroupIds.has(group.id)) {
+      restored.taskGroups.push(structuredClone(group))
+      restoredGroupIds.add(group.id)
+    }
+    restored.assignments.push(structuredClone(currentTask))
+    restoredIds.add(currentTask.id)
+  }
+
   restored.timer = current.timer
   restored.reviewRecords = current.reviewRecords
+  restored.lastCloudSyncAt = current.lastCloudSyncAt
+  restored.templateKind = current.templateKind
   restored.updatedAt = new Date().toISOString()
   return normalizeState(restored)
+}
+
+/**
+ * 恢复旧计划时，计时记录、实际分钟、完成状态和完成日期属于不可逆执行事实，始终取当前值。
+ */
+export function restoreVersionState(current: AppState, version: PlanVersion, side: 'before' | 'after' = 'after'): AppState {
+  return restoreSnapshotState(current, side === 'after' ? version.afterState : version.beforeState)
 }
 
 export interface VersionDiffSummary {

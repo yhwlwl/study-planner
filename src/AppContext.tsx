@@ -1,20 +1,20 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type {
   AppSettings, AppState, Assignment, CalendarConstraint, CreateResult, DayConfig, DurationSuggestion, Goal, GoalDraft,
-  NewTaskDraft, PlanChangeEvent, PlanVersion, ReplanAudit, ReplanBundle, ReplanHistoryEntry, ReplanRequest,
-  ReplanResult, ReviewRecord, SchedulingProposal, SequenceRenumberSuggestion, TaskGroup, TaskGroupDraft,
+  NewTaskDraft, PlanChangeEvent, PlanVersion, ReplanHistoryEntry,
+  ReviewRecord, SchedulingProposal, SequenceRenumberSuggestion, TaskGroup, TaskGroupDraft,
 } from './types'
 import {
   buildBlankState, buildGuestDemoState, buildInitialState, createAssignmentsForGroup, normalizeState,
 } from './lib/seed'
 import { clearLocalState, loadLocalState, saveLocalState } from './lib/db'
-import { allDurationSuggestions, generateReplanBundle, generateSchedulingProposals } from './lib/planner'
+import { allDurationSuggestions, generateSchedulingProposals, reviewDaySnapshot } from './lib/planner'
 import { uid } from './lib/id'
 import { findSequenceRenumberGroups, renumberTaskGroupsByDate } from './lib/sequence'
-import { updateGoalAndGroupLifecycle } from './lib/goals'
+import { goalProgress, updateGoalAndGroupLifecycle } from './lib/goals'
 import { cloneActiveState, hydratePortableState } from './lib/state'
-import { createPlanVersion, createVersionFromProposal, previewVersionDiff, restoreVersionState, type VersionDiffSummary } from './lib/versions'
-import { todayISO } from './lib/date'
+import { createPlanVersion, createVersionFromProposal, previewVersionDiff, restoreSnapshotState, restoreVersionState, type VersionDiffSummary } from './lib/versions'
+import { dateRange, getCapacity } from './lib/date'
 
 type Recipe = (draft: AppState) => void
 
@@ -43,21 +43,21 @@ interface AppContextValue {
   editTaskGroup: (group: TaskGroup) => void
   deleteTaskGroup: (id: string) => void
   removeAssignment: (id: string) => void
-  moveAssignmentToGroup: (id: string, groupId: string, adoptDefaultDuration?: boolean) => void
+  prepareAssignmentGroupChange: (id: string, groupId: string, options: { adoptDefaultDuration: boolean; numberingChoice: 'preserve' | 'number-all' }) => PrepareStateResult
   prepareSingleAssignment: (draft: NewTaskDraft) => CreateResult
   prepareTaskGroup: (draft: TaskGroupDraft) => CreateResult
-  prepareTaskGroupEdit: (group: TaskGroup) => PrepareStateResult
+  prepareTaskGroupEdit: (group: TaskGroup, numberingChoice?: 'preserve' | 'number-all') => PrepareStateResult
   prepareGoalChange: (draft: GoalDraft, goalId?: string) => PrepareStateResult
   prepareGoalDelete: (goalId: string) => PrepareStateResult
   prepareCalendarConstraintChange: (constraint?: CalendarConstraint, removeId?: string) => PrepareStateResult
-  prepareDurationChange: (suggestion: DurationSuggestion, estimate?: number) => PrepareStateResult
-  generateProposals: (preparedState: AppState, event: PlanChangeEvent, baseline?: AppState, signal?: AbortSignal) => SchedulingProposal[]
+  prepareDurationChange: (suggestion: DurationSuggestion, estimate?: number, reviewDate?: string) => PrepareStateResult
+  prepareReviewCompletion: (date: string, carryDates: Record<string, string>) => PrepareStateResult
+  generateProposals: (preparedState: AppState, event: PlanChangeEvent, baseline?: AppState, signal?: AbortSignal, expansionLevel?: number) => SchedulingProposal[]
   applySchedulingProposal: (proposal: SchedulingProposal, event: PlanChangeEvent) => void
   applyPreparedWithoutScheduling: (preparedState: AppState, event: PlanChangeEvent, reason?: string) => void
-  previewReplan: (request?: Partial<ReplanRequest>, baseState?: AppState) => ReplanBundle
-  applyReplan: (result: ReplanResult, editedState?: AppState, audit?: ReplanAudit) => void
   restoreReplanHistory: (id: string) => void
   recordReview: (date: string) => ReviewRecord
+  completeReview: (date: string) => ReviewRecord
   previewPlanVersion: (id: string, side?: 'before' | 'after') => VersionDiffSummary | undefined
   restorePlanVersion: (id: string, side?: 'before' | 'after') => void
   startTimer: (assignmentId: string) => void
@@ -71,9 +71,6 @@ interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | undefined>(undefined)
 
-function withoutNestedHistory(state: AppState) {
-  return structuredClone({ ...state, replanHistory: [], conflictBackups: [], planVersions: [] })
-}
 
 function cloneForMutation(state: AppState): AppState {
   const next = structuredClone({ ...state, replanHistory: [], conflictBackups: [], planVersions: [] }) as AppState
@@ -93,18 +90,59 @@ function planEvent(input: Omit<PlanChangeEvent, 'id' | 'createdAt'>): PlanChange
   return { id: uid('event'), createdAt: nowISO(), ...input }
 }
 
+function reviewRecordFor(state: AppState, date: string): ReviewRecord {
+  const snapshot = reviewDaySnapshot(state, date)
+  const involvedGroups = new Set(snapshot.assignmentIds.flatMap(id => {
+    const assignment = state.assignments.find(item => item.id === id)
+    return assignment ? [assignment.groupId] : []
+  }))
+  const suggestions = allDurationSuggestions(state).filter(item => involvedGroups.has(item.groupId))
+  return {
+    id: uid('review'), date, createdAt: nowISO(), completedCount: snapshot.completedAssignmentIds.length,
+    totalCount: snapshot.plannedAssignmentIds.length, plannedMinutes: snapshot.plannedMinutes,
+    actualMinutes: snapshot.actualMinutes, inferredMinutes: snapshot.inferredMinutes,
+    plannedAssignmentIds: snapshot.plannedAssignmentIds,
+    executedAssignmentIds: snapshot.executedAssignmentIds,
+    completedAssignmentIds: snapshot.completedAssignmentIds,
+    unfinishedAssignmentIds: snapshot.unfinishedAssignmentIds,
+    durationSuggestionGroupIds: suggestions.map(item => item.groupId),
+  }
+}
+
+function putReviewRecord(state: AppState, date: string) {
+  const record = reviewRecordFor(state, date)
+  state.reviewRecords = [...state.reviewRecords.filter(item => item.date !== date), record].slice(-120)
+  return record
+}
+
 function automaticTitle(group: TaskGroup, index: number) {
   return group.quantity > 1 ? `${group.title} ${String(index).padStart(2, '0')}` : group.title
 }
 
-function goalStrictness(goal: GoalDraft | Goal): number {
-  const dateWeight = (value?: string) => value ? Date.parse(value) : Number.MAX_SAFE_INTEGER
-  const conditionWeight = goal.completionConditions.reduce((sum, item) => {
-    if (item.mode === 'all') return sum + 1_000_000
-    if (item.mode === 'percentage') return sum + (item.value ?? 0) * 10_000
-    return sum + (item.value ?? 0) * 1_000
-  }, 0)
-  return -dateWeight(goal.latestDate) - dateWeight(goal.desiredDate) / 10 + conditionWeight
+function classifyGoalChange(before: AppState, after: AppState, existing: Goal | undefined, nextGoal: Goal): PlanChangeEvent['type'] {
+  if (!existing) return 'goal-tightening'
+  let tighter = false
+  let looser = false
+  if (nextGoal.latestDate < existing.latestDate) tighter = true
+  if (nextGoal.latestDate > existing.latestDate) looser = true
+  const oldDesired = existing.desiredDate
+  const newDesired = nextGoal.desiredDate
+  if (newDesired && (!oldDesired || newDesired < oldDesired)) tighter = true
+  if (oldDesired && (!newDesired || newDesired > oldDesired)) looser = true
+  if (nextGoal.priority > existing.priority) tighter = true
+  if (nextGoal.priority < existing.priority) looser = true
+  const oldProgress = goalProgress(before, existing)
+  const newProgress = goalProgress(after, nextGoal)
+  if (newProgress.requiredCount > oldProgress.requiredCount) tighter = true
+  if (newProgress.requiredCount < oldProgress.requiredCount) looser = true
+  const oldCounted = new Set(oldProgress.countedAssignmentIds)
+  const newCounted = new Set(newProgress.countedAssignmentIds)
+  if ([...newCounted].some(id => !oldCounted.has(id))) tighter = true
+  if ([...oldCounted].some(id => !newCounted.has(id))) looser = true
+  if (tighter && looser) return 'rule-change'
+  if (tighter) return 'goal-tightening'
+  if (looser) return 'goal-relaxation'
+  return 'rule-change'
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -143,6 +181,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!before || before.scheduledDate === assignment.scheduledDate) continue
       changedGroupIds.add(assignment.groupId)
       changedSources.add(assignment.scheduleSource === 'replan' ? 'automatic' : 'manual')
+    }
+    // Deleting one child also changes the chronological sequence of the surviving children.
+    // Detect removed assignment ids so the same renumber preview is offered after deletion or
+    // a safe quantity reduction, rather than leaving a visible 01/03 gap forever.
+    for (const [assignmentId, before] of previous.assignments) {
+      if (currentAssignments.has(assignmentId)) continue
+      changedGroupIds.add(before.groupId)
+      changedSources.add('manual')
     }
     if (!changedGroupIds.size) return
     const groups = findSequenceRenumberGroups(state, changedGroupIds)
@@ -357,24 +403,69 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return updateGoalAndGroupLifecycle(next)
   }), [])
 
-  const moveAssignmentToGroup = useCallback((id: string, groupId: string, adoptDefaultDuration = false) => commit(draft => {
-    const assignment = draft.assignments.find(item => item.id === id)
-    const newGroup = draft.taskGroups.find(item => item.id === groupId)
-    if (!assignment || !newGroup || assignment.groupId === groupId) return
+  const prepareAssignmentGroupChange = useCallback((id: string, groupId: string, options: { adoptDefaultDuration: boolean; numberingChoice: 'preserve' | 'number-all' }): PrepareStateResult => {
+    const before = stateRef.current
+    const next = cloneActiveState(before)
+    const assignment = next.assignments.find(item => item.id === id)
+    const newGroup = next.taskGroups.find(item => item.id === groupId)
+    if (!assignment || !newGroup || assignment.groupId === groupId) throw new Error('任务或目标任务组不存在。')
+    if (newGroup.recurring) throw new Error('每日重复任务组不接收临时单项任务。')
     const oldGroupId = assignment.groupId
+    const oldGroup = next.taskGroups.find(item => item.id === oldGroupId)
+    const now = nowISO()
+    const oldGoalIds = next.goals.filter(goal => goal.linkedAssignmentIds.includes(id) || goal.linkedTaskGroupIds.includes(oldGroupId) || goal.completionConditions.some(condition => condition.groupId === oldGroupId)).map(goal => goal.id)
+    const newGoalIds = next.goals.filter(goal => goal.linkedAssignmentIds.includes(id) || goal.linkedTaskGroupIds.includes(groupId) || goal.completionConditions.some(condition => condition.groupId === groupId)).map(goal => goal.id)
+
     assignment.groupId = groupId
-    assignment.index = draft.assignments.filter(item => item.groupId === groupId && item.id !== id).length + 1
-    assignment.updatedAt = nowISO()
-    if (adoptDefaultDuration && assignment.status === 'todo' && assignment.actualMinutes === 0) {
+    assignment.standalone = Boolean(newGroup.hiddenStandalone)
+    const canAdopt = assignment.status === 'todo' && assignment.progress === 0 && assignment.actualMinutes === 0 && (assignment.timeEntries?.length ?? 0) === 0 && next.timer.assignmentId !== assignment.id
+    if (options.adoptDefaultDuration && canAdopt) {
       assignment.estimatedMinutes = newGroup.unitMinutes
       assignment.durationCustomized = false
       assignment.manuallyEstimated = false
+    } else if (assignment.estimatedMinutes !== newGroup.unitMinutes) {
+      assignment.durationCustomized = true
+      assignment.manuallyEstimated = true
     }
-    const oldGroup = draft.taskGroups.find(item => item.id === oldGroupId)
-    if (oldGroup?.hiddenStandalone && !draft.assignments.some(item => item.groupId === oldGroupId)) {
-      draft.taskGroups = draft.taskGroups.filter(item => item.id !== oldGroupId)
+    assignment.updatedAt = now
+
+    const normalizeGroupSequence = (targetId: string, preserveFirstName = false) => {
+      const group = next.taskGroups.find(item => item.id === targetId)
+      if (!group) return
+      const items = next.assignments.filter(item => item.groupId === targetId).sort((a, b) => a.index - b.index || (a.createdAt ?? '').localeCompare(b.createdAt ?? ''))
+      items.forEach((item, index) => {
+        item.index = index + 1
+        if (preserveFirstName && index === 0) {
+          item.titleCustomized = true
+        } else if (!item.titleCustomized) {
+          item.title = items.length > 1 ? `${group.title} ${String(index + 1).padStart(2, '0')}` : group.title
+        }
+        item.updatedAt = now
+      })
+      group.quantity = items.length
+      group.updatedAt = now
     }
-  }), [commit])
+
+    normalizeGroupSequence(oldGroupId)
+    const targetBeforeCount = before.assignments.filter(item => item.groupId === groupId && item.id !== id).length
+    normalizeGroupSequence(groupId, targetBeforeCount === 1 && options.numberingChoice === 'preserve')
+
+    if (oldGroup?.hiddenStandalone && !next.assignments.some(item => item.groupId === oldGroupId)
+      && !next.goals.some(goal => goal.linkedTaskGroupIds.includes(oldGroupId) || goal.completionConditions.some(condition => condition.groupId === oldGroupId))) {
+      next.taskGroups = next.taskGroups.filter(item => item.id !== oldGroupId)
+    }
+
+    const event = planEvent({
+      type: 'rule-change', action: 'repair', title: `更换任务组：${assignment.title}`,
+      description: `任务将从“${oldGroup?.title ?? oldGroupId}”转入“${newGroup.title}”。进度、实际用时、计时记录和备注保持不变；当前日期会按新组规则与目标重新校验。`,
+      affectedGoalIds: Array.from(new Set([...oldGoalIds, ...newGoalIds])), affectedGroupIds: [oldGroupId, groupId], affectedAssignmentIds: [id],
+      affectedDates: assignment.scheduledDate ? [assignment.scheduledDate] : [],
+      metadata: { oldGroupId, newGroupId: groupId, adoptDefaultDuration: options.adoptDefaultDuration && canAdopt, numberingChoice: options.numberingChoice },
+    })
+    next.changeEvents = [...next.changeEvents, event].slice(-100)
+    next.updatedAt = now
+    return { state: updateGoalAndGroupLifecycle(next), event }
+  }, [])
 
   const prepareSingleAssignment = useCallback((draft: NewTaskDraft): CreateResult => {
     const before = stateRef.current
@@ -384,7 +475,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const createdGroupIds: string[] = []
     if (!group || draft.standalone) {
       group = {
-        id: uid('group'), subject: '其他', title: draft.title.trim() || '未命名任务', priority: 1, quantity: 0,
+        id: uid('group'), subject: draft.subject?.trim() || '其他', title: draft.title.trim() || '未命名任务', priority: draft.priority ?? 3, quantity: 0,
         unitMinutes: Math.max(1, Math.round(draft.estimatedMinutes)), targetDate: next.settings.endDate, dueDate: next.settings.endDate,
         countInStats: true, hidden: true, hiddenStandalone: true, activityType: 'normal', highIntensity: false,
         status: 'active', createdAt: now, updatedAt: now,
@@ -392,10 +483,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       next.taskGroups.push(group)
       createdGroupIds.push(group.id)
     }
-    const existing = next.assignments.filter(item => item.groupId === group!.id)
+    const existing = next.assignments.filter(item => item.groupId === group!.id).sort((a, b) => a.index - b.index)
     const index = existing.length + 1
+    const numberAll = existing.length === 1 && draft.numberingChoice === 'number-all'
+    if (numberAll && !existing[0].titleCustomized) {
+      existing[0].index = 1
+      existing[0].title = `${group.title} 01`
+      existing[0].titleCustomized = false
+      existing[0].updatedAt = now
+    }
     const defaultTitle = existing.length > 0 ? `${group.title} ${String(index).padStart(2, '0')}` : group.title
-    const requestedTitle = draft.title.trim() || defaultTitle
+    const requestedTitle = numberAll ? defaultTitle : (draft.title.trim() || defaultTitle)
     const lockDate = draft.schedulingIntent === 'lock-date'
     const preferDate = draft.schedulingIntent === 'prefer-date' || lockDate
     const assignment: Assignment = {
@@ -416,7 +514,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       type: 'new-task-insertion', action: 'insert', title: `添加任务：${assignment.title}`,
       description: '先创建任务草稿，再尝试以最小扰动安排；应用方案前不会改写当前计划。',
       affectedGoalIds: inheritedGoalIds, affectedGroupIds: [group.id], affectedAssignmentIds: [assignment.id],
-      affectedDates: assignment.scheduledDate ? [assignment.scheduledDate] : [], metadata: { schedulingIntent: draft.schedulingIntent },
+      affectedDates: assignment.scheduledDate ? [assignment.scheduledDate] : [], metadata: { schedulingIntent: draft.schedulingIntent, numberingChoice: draft.numberingChoice },
     })
     next.changeEvents = [...next.changeEvents, event].slice(-100)
     next.updatedAt = now
@@ -457,7 +555,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return { state: updateGoalAndGroupLifecycle(next), event, createdAssignmentIds: assignments.map(item => item.id), createdGroupIds: [group.id] }
   }, [])
 
-  const prepareTaskGroupEdit = useCallback((group: TaskGroup): PrepareStateResult => {
+  const prepareTaskGroupEdit = useCallback((group: TaskGroup, numberingChoice: 'preserve' | 'number-all' = 'preserve'): PrepareStateResult => {
     const before = stateRef.current
     const next = cloneActiveState(before)
     const index = next.taskGroups.findIndex(item => item.id === group.id)
@@ -472,11 +570,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const updatedGroup: TaskGroup = { ...group, quantity: requestedQuantity, updatedAt: now }
     next.taskGroups[index] = updatedGroup
 
+    const firstExpansion = !old.recurring && !updatedGroup.recurring && existing.length === 1 && requestedQuantity > 1
     for (const assignment of existing) {
-      if (!assignment.durationCustomized && !assignment.manuallyEstimated && assignment.status === 'todo' && assignment.actualMinutes === 0) {
-        assignment.estimatedMinutes = updatedGroup.unitMinutes
+      const canInheritNewDuration = !assignment.durationCustomized
+        && !assignment.manuallyEstimated
+        && assignment.status === 'todo'
+        && assignment.progress === 0
+        && assignment.actualMinutes === 0
+        && assignment.timeEntries.length === 0
+        && next.timer.assignmentId !== assignment.id
+      if (canInheritNewDuration) assignment.estimatedMinutes = updatedGroup.unitMinutes
+      if (firstExpansion && numberingChoice === 'preserve') {
+        assignment.titleCustomized = true
+      } else if (!assignment.titleCustomized) {
+        assignment.title = requestedQuantity > 1 ? `${updatedGroup.title} ${String(assignment.index).padStart(2, '0')}` : updatedGroup.title
       }
-      if (!assignment.titleCustomized) assignment.title = requestedQuantity > 1 ? `${updatedGroup.title} ${String(assignment.index).padStart(2, '0')}` : updatedGroup.title
       assignment.updatedAt = now
     }
 
@@ -491,11 +599,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!old.recurring && !updatedGroup.recurring && requestedQuantity < existing.length) {
       const removeNeeded = existing.length - requestedQuantity
       const descending = [...existing].sort((a, b) => b.index - a.index)
-      const removable = descending.filter(item => item.status === 'todo' && item.progress === 0 && item.actualMinutes === 0 && !item.locked && next.timer.assignmentId !== item.id)
-      const removing = removable.slice(0, removeNeeded)
+      const removing: Assignment[] = []
+      // Quantity reduction may only trim a safe contiguous suffix. If the latest child has
+      // execution history/lock/timer protection, do not skip it and delete an earlier child;
+      // that would silently change the meaning of the sequence.
+      for (const item of descending) {
+        if (removing.length >= removeNeeded) break
+        const safe = item.status === 'todo'
+          && item.progress === 0
+          && item.actualMinutes === 0
+          && item.timeEntries.length === 0
+          && !item.locked
+          && next.timer.assignmentId !== item.id
+        if (!safe) {
+          protectedIds.push(item.id)
+          break
+        }
+        removing.push(item)
+      }
       const removeSet = new Set(removing.map(item => item.id))
       removedIds.push(...removeSet)
-      protectedIds.push(...descending.filter(item => !removeSet.has(item.id)).slice(0, Math.max(0, removeNeeded - removing.length)).map(item => item.id))
       next.assignments = next.assignments.filter(item => !removeSet.has(item.id))
       updatedGroup.quantity = next.assignments.filter(item => item.groupId === updatedGroup.id).length
     }
@@ -517,7 +640,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       affectedGoalIds: next.goals.filter(goal => goal.linkedTaskGroupIds.includes(group.id) || goal.completionConditions.some(condition => condition.groupId === group.id)).map(goal => goal.id),
       affectedGroupIds: [group.id], affectedAssignmentIds: affectedIds,
       affectedDates: [...new Set(next.assignments.filter(item => affectedIds.includes(item.id)).map(item => item.scheduledDate).filter((date): date is string => Boolean(date)))],
-      metadata: { createdIds, removedIds, protectedIds, previousQuantity: existing.length, requestedQuantity },
+      metadata: { createdIds, removedIds, protectedIds, previousQuantity: existing.length, requestedQuantity, numberingChoice: firstExpansion ? numberingChoice : undefined },
     })
     next.changeEvents = [...next.changeEvents, event].slice(-100)
     next.updatedAt = now
@@ -531,8 +654,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const existing = goalId ? next.goals.find(item => item.id === goalId) : undefined
     const latestDate = draft.latestDate
     const goal: Goal = {
-      id: existing?.id ?? uid('goal'), title: draft.title.trim() || '未命名目标', description: draft.description,
-      desiredDate: draft.desiredDate && draft.desiredDate <= latestDate ? draft.desiredDate : latestDate,
+      id: existing?.id ?? uid('goal'), title: draft.title.trim() || '未命名目标', description: draft.description, priority: draft.priority,
+      desiredDate: draft.desiredDate ? (draft.desiredDate <= latestDate ? draft.desiredDate : latestDate) : undefined,
       latestDate, status: existing?.status === 'archived' ? 'archived' : 'active',
       completionConditions: draft.completionConditions,
       linkedTaskGroupIds: Array.from(new Set([...draft.linkedTaskGroupIds, ...draft.completionConditions.map(item => item.groupId)])),
@@ -541,15 +664,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     if (existing) next.goals = next.goals.map(item => item.id === existing.id ? goal : item)
     else next.goals.push(goal)
-    const oldStrictness = existing ? goalStrictness(existing) : -Infinity
-    const newStrictness = goalStrictness(goal)
-    const type = !existing || newStrictness > oldStrictness ? 'goal-tightening' : newStrictness < oldStrictness ? 'goal-relaxation' : 'rule-change'
+    const type = classifyGoalChange(before, next, existing, goal)
+    // A partial Goal (for example, "complete 50% of Chemistry by 8/15") must only
+    // nominate the assignments that actually satisfy that condition. Include both the
+    // old and new counted sets so a relaxation can also consider work that has just
+    // been released from the former, stricter requirement.
+    const previousCountedIds = existing ? goalProgress(before, existing).countedAssignmentIds : []
+    const nextCountedIds = goalProgress(next, goal).countedAssignmentIds
+    const affectedAssignmentIds = Array.from(new Set([...previousCountedIds, ...nextCountedIds]))
     const event = planEvent({
       type, action: type === 'goal-relaxation' ? 'optimize' : 'repair', title: `${existing ? '调整' : '创建'}目标：${goal.title}`,
       description: '目标本身先进入草稿状态；日历日期只有在用户应用候选方案后才会改变。',
       affectedGoalIds: [goal.id], affectedGroupIds: goal.linkedTaskGroupIds,
-      affectedAssignmentIds: next.assignments.filter(item => goal.linkedAssignmentIds.includes(item.id) || goal.linkedTaskGroupIds.includes(item.groupId)).map(item => item.id),
-      affectedDates: [goal.desiredDate, goal.latestDate].filter((date): date is string => Boolean(date)),
+      affectedAssignmentIds,
+      affectedDates: [existing?.desiredDate, existing?.latestDate, goal.desiredDate, goal.latestDate].filter((date): date is string => Boolean(date)),
     })
     next.changeEvents = [...next.changeEvents, event].slice(-100)
     next.updatedAt = now
@@ -566,7 +694,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       type: 'goal-deletion', action: 'optimize', title: `删除目标：${goal.title}`,
       description: '删除目标不会自动把任务推迟；可选择保持当前排期或利用释放的空间减负。',
       affectedGoalIds: [goal.id], affectedGroupIds: goal.linkedTaskGroupIds,
-      affectedAssignmentIds: next.assignments.filter(item => goal.linkedAssignmentIds.includes(item.id) || goal.linkedTaskGroupIds.includes(item.groupId)).map(item => item.id),
+      affectedAssignmentIds: goalProgress(before, goal).countedAssignmentIds,
       affectedDates: [goal.desiredDate, goal.latestDate].filter((date): date is string => Boolean(date)),
     })
     next.changeEvents = [...next.changeEvents, event].slice(-100)
@@ -577,42 +705,74 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const prepareCalendarConstraintChange = useCallback((constraint?: CalendarConstraint, removeId?: string): PrepareStateResult => {
     const before = stateRef.current
     const next = cloneActiveState(before)
-    let affectedDates: string[] = []
+    const now = nowISO()
     let title = '调整日期可用性'
+    let previousConstraint: CalendarConstraint | undefined
+    let nextConstraint: CalendarConstraint | undefined
+
     if (removeId) {
-      const existing = next.calendarConstraints.find(item => item.id === removeId)
-      if (existing) {
-        affectedDates = [existing.startDate, existing.endDate]
-        title = `移除日期约束：${existing.reason ?? existing.startDate}`
-      }
+      previousConstraint = next.calendarConstraints.find(item => item.id === removeId)
+      if (previousConstraint) title = `移除日期约束：${previousConstraint.reason ?? previousConstraint.startDate}`
       next.calendarConstraints = next.calendarConstraints.filter(item => item.id !== removeId)
     } else if (constraint) {
-      const normalized = { ...constraint, endDate: constraint.endDate || constraint.startDate, updatedAt: nowISO(), createdAt: constraint.createdAt || nowISO() }
-      const index = next.calendarConstraints.findIndex(item => item.id === normalized.id)
-      if (index >= 0) next.calendarConstraints[index] = normalized
-      else next.calendarConstraints.push(normalized)
-      affectedDates = [normalized.startDate, normalized.endDate]
-      title = `${index >= 0 ? '修改' : '添加'}日期约束：${normalized.reason ?? normalized.startDate}`
+      nextConstraint = { ...constraint, endDate: constraint.endDate || constraint.startDate, updatedAt: now, createdAt: constraint.createdAt || now }
+      const index = next.calendarConstraints.findIndex(item => item.id === nextConstraint!.id)
+      if (index >= 0) {
+        previousConstraint = next.calendarConstraints[index]
+        next.calendarConstraints[index] = nextConstraint
+      } else next.calendarConstraints.push(nextConstraint)
+      title = `${index >= 0 ? '修改' : '添加'}日期约束：${nextConstraint.reason ?? nextConstraint.startDate}`
     }
-    const start = affectedDates.sort()[0]
-    const end = affectedDates.sort().at(-1)
-    const affectedAssignments = next.assignments.filter(item => item.scheduledDate && start && end && item.scheduledDate >= start && item.scheduledDate <= end)
+
+    // Editing a range must re-evaluate both the dates released by the old range and the dates
+    // newly covered by the replacement range. Looking only at the new range loses half the event.
+    const dateSet = new Set<string>()
+    if (previousConstraint) for (const date of dateRange(previousConstraint.startDate, previousConstraint.endDate)) dateSet.add(date)
+    if (nextConstraint) for (const date of dateRange(nextConstraint.startDate, nextConstraint.endDate)) dateSet.add(date)
+    const affectedDates = [...dateSet].sort()
+    const capacityDeltas = affectedDates.map(date => ({ date, before: getCapacity(before, date), after: getCapacity(next, date) }))
+    const hasDecrease = capacityDeltas.some(item => item.after < item.before)
+    const hasIncrease = capacityDeltas.some(item => item.after > item.before)
+    const pureRelaxation = hasIncrease && !hasDecrease
+    const start = affectedDates[0]
+    const end = affectedDates.at(-1)
+
+    // A restriction affects tasks currently inside the range. A pure relaxation is an optional
+    // optimization opportunity: include future unfinished work so proposals may keep the current
+    // schedule or use the newly released capacity to reduce pressure/pull work forward.
+    const affectedAssignments = pureRelaxation
+      ? next.assignments.filter(item => item.status !== 'done' && (!start || !item.scheduledDate || item.scheduledDate >= start))
+      : next.assignments.filter(item => item.scheduledDate && start && end && item.scheduledDate >= start && item.scheduledDate <= end)
+    const affectedGroups = Array.from(new Set(affectedAssignments.map(item => item.groupId)))
+    const affectedGoals = next.goals.filter(goal => affectedAssignments.some(item =>
+      goal.linkedAssignmentIds.includes(item.id)
+      || goal.linkedTaskGroupIds.includes(item.groupId)
+      || goal.completionConditions.some(condition => condition.groupId === item.groupId)
+    )).map(goal => goal.id)
+    const changeText = pureRelaxation
+      ? '可用容量增加；不会自动把任务提前，可保持当前排期或预览如何利用新增空间减负。'
+      : hasDecrease
+        ? '可用容量减少或日期受到保护；受影响任务将先做完整校验，不会删除或直接改写日历。'
+        : '日期规则发生变化；系统会重新检查相关任务，但不直接改写日历。'
     const event = planEvent({
-      type: 'availability-change', action: 'repair', title,
-      description: `发现 ${affectedAssignments.length} 项已安排任务可能受影响；不会删除任务，也不会直接改写日历。`,
-      affectedGoalIds: next.goals.filter(goal => affectedAssignments.some(item => goal.linkedAssignmentIds.includes(item.id) || goal.linkedTaskGroupIds.includes(item.groupId))).map(goal => goal.id),
-      affectedGroupIds: Array.from(new Set(affectedAssignments.map(item => item.groupId))),
-      affectedAssignmentIds: affectedAssignments.map(item => item.id), affectedDates,
+      type: 'availability-change', action: pureRelaxation ? 'optimize' : 'repair', title,
+      description: `${changeText} 当前识别 ${affectedAssignments.length} 项相关未完成/已安排任务。`,
+      affectedGoalIds: affectedGoals,
+      affectedGroupIds: affectedGroups,
+      affectedAssignmentIds: affectedAssignments.map(item => item.id),
+      affectedDates,
+      metadata: { capacityDeltas, pureRelaxation, hasIncrease, hasDecrease, preferredPreferences: pureRelaxation ? ['preserve', 'balanced', 'goal', 'rest'] : ['preserve', 'balanced', 'goal', 'rest'] },
     })
     next.changeEvents = [...next.changeEvents, event].slice(-100)
-    next.updatedAt = nowISO()
+    next.updatedAt = now
     return { state: next, event }
   }, [])
 
-  const prepareDurationChange = useCallback((suggestion: DurationSuggestion, estimate = suggestion.suggestedEstimate): PrepareStateResult => {
+  const prepareDurationChange = useCallback((suggestion: DurationSuggestion, estimate = suggestion.suggestedEstimate, reviewDate?: string): PrepareStateResult => {
     const before = stateRef.current
     const next = cloneActiveState(before)
     const now = nowISO()
+    if (reviewDate) putReviewRecord(next, reviewDate)
     const group = next.taskGroups.find(item => item.id === suggestion.groupId)
     if (group) {
       group.unitMinutes = Math.max(1, Math.round(estimate))
@@ -630,21 +790,64 @@ export function AppProvider({ children }: { children: ReactNode }) {
       affectedGoalIds: next.goals.filter(goal => goal.linkedTaskGroupIds.includes(suggestion.groupId) || goal.completionConditions.some(condition => condition.groupId === suggestion.groupId)).map(goal => goal.id),
       affectedGroupIds: [suggestion.groupId], affectedAssignmentIds: suggestion.eligibleAssignmentIds,
       affectedDates: next.assignments.filter(item => eligible.has(item.id) && item.scheduledDate).map(item => item.scheduledDate!).filter((value, index, values) => values.indexOf(value) === index),
-      metadata: { currentEstimate: suggestion.currentEstimate, suggestedEstimate: estimate, sampleCount: suggestion.sampleCount, deviationRatio: suggestion.deviationRatio },
+      metadata: { currentEstimate: suggestion.currentEstimate, suggestedEstimate: estimate, sampleCount: suggestion.sampleCount, deviationRatio: suggestion.deviationRatio, reviewDate, containsReviewRecord: Boolean(reviewDate) },
     })
     next.changeEvents = [...next.changeEvents, event].slice(-100)
     next.updatedAt = now
     return { state: updateGoalAndGroupLifecycle(next), event }
   }, [])
 
-  const generateProposals = useCallback((preparedState: AppState, event: PlanChangeEvent, baseline?: AppState, signal?: AbortSignal) => {
-    return generateSchedulingProposals(preparedState, event, { baseline: baseline ?? stateRef.current, signal })
+  const prepareReviewCompletion = useCallback((date: string, carryDates: Record<string, string>): PrepareStateResult => {
+    const before = stateRef.current
+    const next = cloneActiveState(before)
+    const record = putReviewRecord(next, date)
+    const movedAt = nowISO()
+    const movedIds: string[] = []
+    const affectedDates = new Set<string>([date])
+    for (const [assignmentId, targetDate] of Object.entries(carryDates)) {
+      if (!targetDate || targetDate <= date) continue
+      const assignment = next.assignments.find(item => item.id === assignmentId)
+      if (!assignment || assignment.status === 'done' || assignment.locked || next.timer.assignmentId === assignment.id || assignment.scheduledDate === targetDate) continue
+      if (assignment.scheduledDate) affectedDates.add(assignment.scheduledDate)
+      affectedDates.add(targetDate)
+      assignment.previousDate = assignment.scheduledDate
+      assignment.scheduledDate = targetDate
+      assignment.lastManualMoveAt = movedAt
+      assignment.scheduleSource = 'carryover'
+      assignment.intentStrength = 'manual'
+      assignment.updatedAt = movedAt
+      movedIds.push(assignment.id)
+    }
+    const groupIds = Array.from(new Set(next.assignments.filter(item => movedIds.includes(item.id)).map(item => item.groupId)))
+    const goalIds = next.goals.filter(goal => goal.linkedAssignmentIds.some(id => movedIds.includes(id)) || goal.linkedTaskGroupIds.some(id => groupIds.includes(id)) || goal.completionConditions.some(condition => groupIds.includes(condition.groupId))).map(goal => goal.id)
+    const event = planEvent({
+      type: 'execution-difference', action: 'repair', title: `完成 ${date} 复盘并处理未完成任务`,
+      description: movedIds.length
+        ? `复盘记录已进入草稿；用户选择顺延 ${movedIds.length} 项任务。系统会把组合后的容量、每日上限、目标期限与日期保护一起校验，应用前不会修改正式计划。`
+        : '复盘记录已进入草稿，没有选择顺延任务。',
+      affectedGoalIds: goalIds, affectedGroupIds: groupIds, affectedAssignmentIds: movedIds, affectedDates: [...affectedDates].sort(),
+      metadata: { reviewDate: date, reviewRecordId: record.id, containsReviewRecord: true, reviewCarryover: movedIds.length > 0, requestedCarryDates: carryDates, preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'] },
+    })
+    next.changeEvents = [...next.changeEvents, event].slice(-100)
+    next.updatedAt = movedAt
+    return { state: updateGoalAndGroupLifecycle(next), event }
+  }, [])
+
+  const generateProposals = useCallback((preparedState: AppState, event: PlanChangeEvent, baseline?: AppState, signal?: AbortSignal, expansionLevel = 0) => {
+    return generateSchedulingProposals(preparedState, event, { baseline: baseline ?? stateRef.current, signal, expansionLevel })
   }, [])
 
   const applySchedulingProposal = useCallback((proposal: SchedulingProposal, event: PlanChangeEvent) => setState(previous => {
     history.current = [...history.current.slice(-29), previous]
     let next = hydratePortableState(proposal.stateAfter, { replanHistory: previous.replanHistory, conflictBackups: previous.conflictBackups, planVersions: previous.planVersions })
     next = normalizeState(next)
+    if (proposal.exceptions.length) {
+      const acceptedAt = nowISO()
+      next.acceptedConstraintExceptions = [
+        ...(previous.acceptedConstraintExceptions ?? []),
+        ...proposal.exceptions.map(item => ({ ...item, id: uid('exception'), eventId: event.id, accepted: true as const, createdAt: acceptedAt })),
+      ].slice(-100)
+    } else next.acceptedConstraintExceptions = previous.acceptedConstraintExceptions ?? []
     next.changeEvents = Array.from(new Map([...previous.changeEvents, event].map(item => [item.id, item])).values()).slice(-100)
     next.planVersions = [...previous.planVersions, createVersionFromProposal(previous, next, event, proposal)].slice(-10)
     next.updatedAt = nowISO()
@@ -654,7 +857,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const applyPreparedWithoutScheduling = useCallback((preparedState: AppState, event: PlanChangeEvent, reason = '保留为未安排任务') => setState(previous => {
     history.current = [...history.current.slice(-29), previous]
-    const next = normalizeState(preparedState)
+    const draft = cloneActiveState(preparedState)
+    // “保留为未安排”必须真正清空本次新增任务的草稿日期；不能把一个已经
+    // 被判定为冲突的偏好日期或锁定日期带入正式计划。
+    if (event.type === 'new-task-insertion' || event.type === 'task-group-size-increase') {
+      const affected = new Set(event.affectedAssignmentIds)
+      for (const item of draft.assignments) {
+        if (!affected.has(item.id)) continue
+        item.previousDate = item.scheduledDate
+        item.scheduledDate = undefined
+        item.locked = false
+        item.intentStrength = 'normal'
+        item.scheduleSource = 'system'
+        item.updatedAt = nowISO()
+      }
+    }
+    const next = normalizeState(draft)
+    next.changeEvents = Array.from(new Map([...previous.changeEvents, event].map(item => [item.id, item])).values()).slice(-100)
     next.planVersions = [...previous.planVersions, createPlanVersion(previous, next, event, `${event.title} · ${reason}`)].slice(-10)
     next.replanHistory = previous.replanHistory
     next.conflictBackups = previous.conflictBackups
@@ -663,47 +882,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return updateGoalAndGroupLifecycle(next)
   }), [])
 
-  const previewReplan = useCallback((request?: Partial<ReplanRequest>, baseState?: AppState) => {
-    const source = baseState ?? stateRef.current
-    return generateReplanBundle(source, {
-      mode: request?.mode ?? 'repair', fromDate: request?.fromDate ?? todayISO(), strategy: request?.strategy,
-      freezeDays: request?.freezeDays ?? source.settings.freezeDays, todayExtraMinutes: request?.todayExtraMinutes ?? 0,
-      allowBufferUseDates: request?.allowBufferUseDates ?? [], limitOverrides: request?.limitOverrides ?? [],
-      localRadius: request?.localRadius ?? source.settings.localRepairRadius,
-      affectedAssignmentIds: request?.affectedAssignmentIds, event: request?.event,
-    })
-  }, [])
 
-  const applyReplan = useCallback((result: ReplanResult, editedState?: AppState, audit?: ReplanAudit) => setState(previous => {
-    history.current = [...history.current.slice(-29), previous]
-    const event = result.request.event ?? planEvent({
-      type: 'future-replanning', action: result.request.mode === 'full' ? 'rebuild' : 'repair',
-      title: `计划调整：${result.title}`, description: result.description,
-      affectedGoalIds: [], affectedGroupIds: Array.from(new Set(result.moves.map(item => previous.assignments.find(task => task.id === item.assignmentId)?.groupId).filter((id): id is string => Boolean(id)))),
-      affectedAssignmentIds: result.moves.map(item => item.assignmentId), affectedDates: result.loadChanges.map(item => item.date),
-    })
-    const entry: ReplanHistoryEntry = {
-      id: uid('history'), createdAt: nowISO(), label: `计划调整 · ${result.title}`, mode: result.request.mode,
-      moveCount: result.moves.length, snapshot: JSON.stringify(withoutNestedHistory(previous)), audit,
-    }
-    const next = normalizeState(editedState ?? result.nextState)
-    entry.afterSnapshot = JSON.stringify(withoutNestedHistory(next))
-    next.replanHistory = [...previous.replanHistory, entry].slice(-10)
-    next.conflictBackups = previous.conflictBackups
-    next.planVersions = [...previous.planVersions, createPlanVersion(previous, next, event, entry.label)].slice(-10)
-    next.changeEvents = [...previous.changeEvents, event].slice(-100)
-    next.updatedAt = nowISO()
-    if (namespaceRef.current === 'guest') next.guestModified = true
-    return updateGoalAndGroupLifecycle(next)
-  }), [])
 
   const restoreReplanHistory = useCallback((id: string) => setState(previous => {
     const entry = previous.replanHistory.find(item => item.id === id)
     if (!entry) return previous
     history.current = [...history.current.slice(-29), previous]
     try {
-      const restored = normalizeState(JSON.parse(entry.snapshot) as AppState)
-      const event = planEvent({ type: 'restore', action: 'repair', title: `恢复旧重排记录：${entry.label}`, description: '恢复前已保存当前计划，实际执行记录按恢复政策保留。', affectedGoalIds: [], affectedGroupIds: [], affectedAssignmentIds: [], affectedDates: [] })
+      const restored = restoreSnapshotState(previous, entry.snapshot)
+      const event = planEvent({ type: 'restore', action: 'repair', title: `恢复旧调整记录：${entry.label}`, description: '恢复前已保存当前计划，所有实际执行记录和后来已执行的任务都会保留。', affectedGoalIds: [], affectedGroupIds: [], affectedAssignmentIds: [], affectedDates: [] })
       restored.replanHistory = previous.replanHistory
       restored.planVersions = [...previous.planVersions, createPlanVersion(previous, restored, event, event.title)].slice(-10)
       restored.updatedAt = nowISO()
@@ -714,19 +901,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }), [])
 
   const recordReview = useCallback((date: string): ReviewRecord => {
-    const source = stateRef.current
-    const tasks = source.assignments.filter(item => item.scheduledDate === date)
-    const suggestions = allDurationSuggestions(source)
-    const record: ReviewRecord = {
-      id: uid('review'), date, createdAt: nowISO(), completedCount: tasks.filter(item => item.status === 'done').length,
-      totalCount: tasks.length, plannedMinutes: tasks.reduce((sum, item) => sum + item.estimatedMinutes, 0),
-      actualMinutes: tasks.reduce((sum, item) => sum + item.actualMinutes, 0),
-      unfinishedAssignmentIds: tasks.filter(item => item.status !== 'done').map(item => item.id),
-      durationSuggestionGroupIds: suggestions.map(item => item.groupId),
-    }
+    const record = reviewRecordFor(stateRef.current, date)
     commit(draft => { draft.reviewRecords = [...draft.reviewRecords.filter(item => item.date !== date), record].slice(-120) })
     return record
   }, [commit])
+
+  const completeReview = useCallback((date: string): ReviewRecord => {
+    const record = reviewRecordFor(stateRef.current, date)
+    setState(previous => {
+      history.current = [...history.current.slice(-29), previous]
+      const next = cloneForMutation(previous)
+      next.reviewRecords = [...next.reviewRecords.filter(item => item.date !== date), record].slice(-120)
+      next.updatedAt = nowISO()
+      if (namespaceRef.current === 'guest') next.guestModified = true
+      return updateGoalAndGroupLifecycle(next)
+    })
+    return record
+  }, [])
 
   const previewPlanVersion = useCallback((id: string, side: 'before' | 'after' = 'after') => {
     const version = stateRef.current.planVersions.find(item => item.id === id)
@@ -740,7 +931,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const restored = restoreVersionState(previous, version, side)
       const event = planEvent({ type: 'restore', action: 'repair', title: `恢复计划版本：${version.reason}`, description: '恢复前已保存当前计划；实际学习记录不会被旧快照覆盖。', affectedGoalIds: version.affectedGoalIds, affectedGroupIds: version.affectedGroupIds, affectedAssignmentIds: version.affectedAssignmentIds, affectedDates: version.affectedDates })
-      const beforeRestoreVersion: PlanVersion = createPlanVersion(previous, restored, event, `恢复前自动保存 · ${version.reason}`)
+      const beforeRestoreVersion: PlanVersion = createPlanVersion(previous, previous, event, `恢复前自动保存 · ${version.reason}`)
       restored.planVersions = [...previous.planVersions, beforeRestoreVersion].slice(-10)
       restored.changeEvents = [...previous.changeEvents, event].slice(-100)
       restored.updatedAt = nowISO()
@@ -792,18 +983,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     state, namespace, ready, loadedFromStorage, canUndo: history.current.length > 0,
     commit, replaceState, loadDataSpace, setDataSpace, clearDataSpace, undo,
     updateSettings, updateDayConfig, updateAssignment, moveAssignments, finishAssignment, reopenAssignment, addTime,
-    addTaskGroup, editTaskGroup, deleteTaskGroup, removeAssignment, moveAssignmentToGroup,
-    prepareSingleAssignment, prepareTaskGroup, prepareTaskGroupEdit, prepareGoalChange, prepareGoalDelete, prepareCalendarConstraintChange, prepareDurationChange,
+    addTaskGroup, editTaskGroup, deleteTaskGroup, removeAssignment, prepareAssignmentGroupChange,
+    prepareSingleAssignment, prepareTaskGroup, prepareTaskGroupEdit, prepareGoalChange, prepareGoalDelete, prepareCalendarConstraintChange, prepareDurationChange, prepareReviewCompletion,
     generateProposals, applySchedulingProposal, applyPreparedWithoutScheduling,
-    previewReplan, applyReplan, restoreReplanHistory, recordReview, previewPlanVersion, restorePlanVersion,
+    restoreReplanHistory, recordReview, completeReview, previewPlanVersion, restorePlanVersion,
     startTimer, pauseTimer, stopTimer, resetAll, sequenceRenumberSuggestion,
     dismissSequenceRenumberSuggestion, applySequenceRenumber,
   }), [
     state, namespace, ready, loadedFromStorage, commit, replaceState, loadDataSpace, setDataSpace, clearDataSpace, undo,
     updateSettings, updateDayConfig, updateAssignment, moveAssignments, finishAssignment, reopenAssignment, addTime,
-    addTaskGroup, editTaskGroup, deleteTaskGroup, removeAssignment, moveAssignmentToGroup, prepareSingleAssignment, prepareTaskGroup, prepareTaskGroupEdit, prepareGoalChange,
-    prepareGoalDelete, prepareCalendarConstraintChange, prepareDurationChange, generateProposals, applySchedulingProposal,
-    applyPreparedWithoutScheduling, previewReplan, applyReplan, restoreReplanHistory, recordReview,
+    addTaskGroup, editTaskGroup, deleteTaskGroup, removeAssignment, prepareAssignmentGroupChange, prepareSingleAssignment, prepareTaskGroup, prepareTaskGroupEdit, prepareGoalChange,
+    prepareGoalDelete, prepareCalendarConstraintChange, prepareDurationChange, prepareReviewCompletion, generateProposals, applySchedulingProposal,
+    applyPreparedWithoutScheduling, restoreReplanHistory, recordReview, completeReview,
     previewPlanVersion, restorePlanVersion, startTimer, pauseTimer, stopTimer, resetAll,
     sequenceRenumberSuggestion, dismissSequenceRenumberSuggestion, applySequenceRenumber,
   ])
