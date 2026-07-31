@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import { addMonths, endOfMonth, format, getDay, isWithinInterval, parseISO, startOfMonth } from 'date-fns'
 import { useApp } from './AppContext'
-import type { AppState, Assignment, BufferPreference, DayType, PlanAdjustmentPolicy, PlanChangeEvent, Priority, SchedulingProposal, SequenceRenumberSuggestion, Subject, TaskGroup } from './types'
+import type { AppState, Assignment, BufferPreference, DayType, PlanAdjustmentPolicy, PlanChangeEvent, Priority, SchedulingProposal, SequenceRenumberSuggestion, ConstraintException, Subject, TaskGroup } from './types'
 import { clampDate, constraintsForDate, dateRange, dayTypeLabel, fmtDate, fmtWeekday, getCapacity, getDayConfig, isDateProtected, minutesText, shiftDate, todayISO } from './lib/date'
 import { actualLearningSnapshot, allDurationSuggestions, analyzePlan, checkAssignmentPlacement, effectiveMinutes, planningDayLoad, predictCompletion, previewPreparedChange } from './lib/planner'
 import { allGoalProgress, nearestRelevantGoalDate } from './lib/goals'
@@ -31,6 +31,7 @@ import { FocusTimerPage, getTimerElapsedSeconds } from './components/FocusTimerP
 import { StatsPage } from './components/StatsPage'
 import { NumericInput } from './components/NumericInput'
 import { adjustmentPolicyForEvent, eventWithPreferences } from './lib/adjustment'
+import { applyConflictDecisions, mergeConstraintExceptions } from './lib/conflicts'
 import { downloadSnapshot, getSession, preparePortableState, signIn, signOut, signUp, supabase, supabaseConfigured, uploadSnapshot } from './lib/supabase'
 import './styles.css'
 
@@ -67,7 +68,7 @@ export default function App() {
   const [singleTaskIntent, setSingleTaskIntent] = useState<'system'|'prefer-date'|'lock-date'>('system')
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
   const [reviewDate, setReviewDate] = useState<string>()
-  const [proposalSession, setProposalSession] = useState<{ baseline: AppState; prepared: AppState; event: PlanChangeEvent; policy: PlanAdjustmentPolicy; proposals: SchedulingProposal[]; expansionLevel: number; moreExhausted?: boolean }>()
+  const [proposalSession, setProposalSession] = useState<{ baseline: AppState; prepared: AppState; event: PlanChangeEvent; policy: PlanAdjustmentPolicy; proposals: SchedulingProposal[]; expansionLevel: number; calculationRevision: number; acceptedExceptions?: ConstraintException[]; decisionSummary?: string; moreExhausted?: boolean }>()
   const [proposalGeneration, setProposalGeneration] = useState<{ baseline: AppState; prepared: AppState; event: PlanChangeEvent; policy: PlanAdjustmentPolicy; seedProposals: SchedulingProposal[]; worker?: Worker; error?: string }>()
   const [mobileNav, setMobileNav] = useState(false)
   const [adjustmentOpen, setAdjustmentOpen] = useState(false)
@@ -394,7 +395,7 @@ export default function App() {
     // 用户已经明确指定结果，或变化只是放宽约束时，合法结果立即进入精确预览。
     // 其他优化方案仍可由用户在预览中主动生成，不让“保持现状”也先等待一轮重排。
     if (useDirectFirst && !directPreview.infeasible) {
-      setProposalSession({ baseline, prepared, event, policy, proposals: [directPreview], expansionLevel: 0 })
+      setProposalSession({ baseline, prepared, event, policy, proposals: [directPreview], expansionLevel: 0, calculationRevision: 0 })
       return
     }
 
@@ -428,7 +429,7 @@ export default function App() {
         signatures.add(proposal.distinctSignature)
         merged.push(proposal)
       }
-      setProposalSession({ baseline, prepared, event: routedEvent, policy, proposals: merged, expansionLevel: 0 })
+      setProposalSession({ baseline, prepared, event: routedEvent, policy, proposals: merged, expansionLevel: 0, calculationRevision: 0 })
     }
 
     if (typeof Worker === 'undefined') {
@@ -511,11 +512,11 @@ export default function App() {
       }}/>
       {proposalGeneration && <Modal open title="正在生成计划调整方案" onClose={cancelProposalGeneration}>
         <div className="proposal-generation-state"><div className={proposalGeneration.error ? 'proposal-generation-error' : 'spinner'}/><h3>{proposalGeneration.error ? '方案计算未完成' : proposalGeneration.event.title}</h3><p>{proposalGeneration.error ?? '正在独立线程中核对容量、上限、目标期限、手动安排和日期保护。取消不会修改当前计划。'}</p></div>
-        <div className="modal-actions"><button className="secondary-button" onClick={cancelProposalGeneration}>{proposalGeneration.error ? '关闭' : '取消计算'}</button>{proposalGeneration.error && <button className="primary-button" onClick={() => { const { prepared, event, baseline, policy, seedProposals } = proposalGeneration; setProposalGeneration(undefined); const proposals = generateProposals(prepared, event, baseline); setProposalSession({ baseline, prepared, event, policy, proposals: [...seedProposals, ...proposals.filter(item => !seedProposals.some(seed => seed.distinctSignature === item.distinctSignature))], expansionLevel: 0 }) }}>在当前线程重试</button>}</div>
+        <div className="modal-actions"><button className="secondary-button" onClick={cancelProposalGeneration}>{proposalGeneration.error ? '关闭' : '取消计算'}</button>{proposalGeneration.error && <button className="primary-button" onClick={() => { const { prepared, event, baseline, policy, seedProposals } = proposalGeneration; setProposalGeneration(undefined); const proposals = generateProposals(prepared, event, baseline); setProposalSession({ baseline, prepared, event, policy, proposals: [...seedProposals, ...proposals.filter(item => !seedProposals.some(seed => seed.distinctSignature === item.distinctSignature))], expansionLevel: 0, calculationRevision: 0 }) }}>在当前线程重试</button>}</div>
       </Modal>}
       {proposalSession && <ProposalDialog
         open baseline={proposalSession.baseline} preparedState={proposalSession.prepared} event={proposalSession.event}
-        proposals={proposalSession.proposals} policy={proposalSession.policy} moreExhausted={proposalSession.moreExhausted}
+        proposals={proposalSession.proposals} policy={proposalSession.policy} calculationRevision={proposalSession.calculationRevision} decisionSummary={proposalSession.decisionSummary} moreExhausted={proposalSession.moreExhausted}
         onClose={() => setProposalSession(undefined)}
         onKeep={() => {
           const type = proposalSession.event.type
@@ -546,13 +547,49 @@ export default function App() {
             const nextLevel = remainingPreferences.length ? current.expansionLevel : Math.min(2, current.expansionLevel + 1)
             const preferences = remainingPreferences.length ? remainingPreferences : allPreferences
             const expandedEvent = eventWithPreferences(current.event, preferences)
-            const extra = generateProposals(current.prepared, expandedEvent, current.baseline, undefined, nextLevel)
+            const extra = generateProposals(current.prepared, expandedEvent, current.baseline, undefined, nextLevel, {
+              acceptedExceptions: current.acceptedExceptions,
+              disableAutomaticExceptions: Boolean(current.acceptedExceptions),
+            })
             const merged = [...current.proposals]
             const signatures = new Set(merged.map(item => item.distinctSignature))
             for (const proposal of extra) if (!signatures.has(proposal.distinctSignature)) { signatures.add(proposal.distinctSignature); merged.push(proposal) }
             const added = merged.length - current.proposals.length
             return { ...current, event: expandedEvent, proposals: merged, expansionLevel: nextLevel, moreExhausted: added === 0 && nextLevel >= 2 && remainingPreferences.length === 0 }
           })
+        }}
+        onResolveConflicts={(proposal, decisions, exceptionDecisions) => {
+          const applied = applyConflictDecisions(proposalSession.baseline, proposalSession.prepared, proposal, proposalSession.event, decisions, exceptionDecisions)
+          const acceptedExceptions = mergeConstraintExceptions(applied.acceptedExceptions)
+          const preferences = Array.from(new Set([proposal.preference, proposalSession.policy.primaryPreference, ...proposalSession.policy.alternativePreferences.slice(0, 1)]))
+          const routedEvent = eventWithPreferences(applied.event, preferences)
+          const recalculated = generateProposals(applied.preparedState, routedEvent, proposalSession.baseline, undefined, proposalSession.expansionLevel, {
+            acceptedExceptions,
+            disableAutomaticExceptions: true,
+          })
+          const fallback = previewPreparedChange(
+            proposalSession.baseline,
+            applied.preparedState,
+            routedEvent,
+            '按你的冲突决定重新校验',
+            acceptedExceptions,
+          )
+          const merged = [...recalculated]
+          if (!merged.some(item => item.distinctSignature === fallback.distinctSignature)) merged.unshift(fallback)
+          setProposalSession(current => current ? {
+            ...current,
+            prepared: applied.preparedState,
+            event: routedEvent,
+            proposals: merged.length ? merged : [fallback],
+            acceptedExceptions,
+            calculationRevision: current.calculationRevision + 1,
+            decisionSummary: `已处理 ${decisions.length + exceptionDecisions.length} 项决定，其中接受 ${acceptedExceptions.length} 项一次性例外；未接受的条件继续按原规则约束。`,
+            moreExhausted: false,
+          } : current)
+        }}
+        onRequestExternalChange={action => {
+          setProposalSession(undefined)
+          setPage(action === 'change-goal' ? 'goals' : 'settings')
         }}
         onApply={proposal => { applySchedulingProposal(proposal, proposalSession.event); setProposalSession(undefined) }}
       />} 
@@ -789,7 +826,7 @@ function TodayPage({ onNavigate, onPrepared, onAddTask, onReview }: { onNavigate
 
   return <>
     <section className="today-hero">
-      <div>
+      <div className="today-hero-main">
         <div className="date-switcher"><button className="icon-button" onClick={() => setDate(clampDate(format(new Date(parseISO(date).getTime()-86400000),'yyyy-MM-dd'), state.settings.startDate,state.settings.endDate))}><ChevronLeft size={19}/></button><div><h2>{fmtDate(date, 'M月d日')} · {fmtWeekday(date)}</h2><span className={`day-badge day-${config.type}`}>{dayTypeLabel[config.type]}</span></div><button className="icon-button" onClick={() => setDate(clampDate(format(new Date(parseISO(date).getTime()+86400000),'yyyy-MM-dd'), state.settings.startDate,state.settings.endDate))}><ChevronRight size={19}/></button></div>
         <p>{tasks.length ? `今天有 ${tasks.length} 项任务，预计 ${minutesText(planned)}。` : '今天暂时没有安排任务。'}</p>
       </div>

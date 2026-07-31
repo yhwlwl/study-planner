@@ -12,10 +12,10 @@ const source = {
   seed: read('src/lib/seed.ts'), state: read('src/lib/state.ts'), db: read('src/lib/db.ts'), supabase: read('src/lib/supabase.ts'),
   goals: read('src/lib/goals.ts'), styles: read('src/styles.css'), stats: read('src/components/StatsPage.tsx'),
   proposal: read('src/components/ProposalDialog.tsx'), review: read('src/components/ReviewDialog.tsx'), constraints: read('src/components/CalendarConstraintManager.tsx'), adjustment: read('src/components/AdjustmentIntentDialog.tsx'), adjustmentPolicy: read('src/lib/adjustment.ts'), taskCard: read('src/components/TaskCard.tsx'),
-  single: read('src/components/SingleTaskDialog.tsx'), group: read('src/components/TaskGroupDialog.tsx'), versions: read('src/lib/versions.ts'),
+  single: read('src/components/SingleTaskDialog.tsx'), group: read('src/components/TaskGroupDialog.tsx'), versions: read('src/lib/versions.ts'), conflicts: read('src/lib/conflicts.ts'),
 }
 const pkg = JSON.parse(read('package.json'))
-add('版本与迁移', '发布版本为 0.8.5', pkg.version === '0.8.5', `package.json: ${pkg.version}`)
+add('版本与迁移', '发布版本为 0.8.6', pkg.version === '0.8.6', `package.json: ${pkg.version}`)
 add('版本与迁移', '状态架构版本已提升（当前为 9）', /SCHEMA_VERSION\s*=\s*(?:8|9|[1-9]\d+)/.test(source.types), 'src/types.ts')
 add('版本与迁移', '存在确定性 v0.7→v0.8 迁移', /migrat|迁移/.test(source.seed) && /coreTargetDate/.test(source.seed) && /calendarConstraints/.test(source.seed), 'src/lib/seed.ts')
 add('版本与迁移', '旧全局目标日期不再出现在当前界面与当前调度计算', !/settings\.coreTargetDate|settings\.chemistryTargetDate/.test(source.app + source.stats + source.planner), '仅 seed/types 保留迁移兼容字段')
@@ -63,6 +63,12 @@ add('移动端/PWA', '安全区、100dvh、无横向溢出规则', /safe-area-in
 add('移动端/PWA', '月历移动端保留七列', /repeat\(7/.test(source.styles), 'styles.css')
 add('移动端/PWA', '复杂预览采用 100dvh 弹性全屏且正文独立滚动', /modal-mobile-fullscreen/.test(source.styles) && /height:100dvh/.test(source.styles) && /\.modal-body\{[^}]*overflow-y:auto/.test(source.styles), 'styles.css')
 add('移动端/PWA', '选择状态具有明显视觉反馈', /choice-indicator/.test(source.adjustment) && /\.adjustment-outcome-grid button\.selected/.test(source.styles) && /\.proposal-choice\.selected/.test(source.styles), 'dialogs + styles')
+add('移动端/PWA', 'Today 头部手机端按内容高度布局', /today-hero-main/.test(source.app) && /\.today-hero\{display:grid!important/.test(source.styles) && /height:auto!important;min-height:0!important/.test(source.styles) && /flex:none!important/.test(source.styles), 'App + styles')
+add('冲突决策', '硬冲突可逐项查看并选择处理方式', /ConflictDecisionPanel/.test(source.proposal) && /conflictProfile/.test(source.conflicts) && /allowedResolutions/.test(source.types), 'ProposalDialog + conflicts')
+add('冲突决策', '部分接受例外后带条件重新计算', /applyConflictDecisions/.test(source.app) && /exceptionDecisions/.test(source.conflicts) && /disableAutomaticExceptions:\s*true/.test(source.app), 'App + conflicts + planner')
+add('冲突决策', '一次性例外精确到日期规则和任务', /affectedAssignmentIds/.test(source.types) && /mergeConstraintExceptions/.test(source.conflicts) && /候选任务不在授权范围内时/.test(source.planner), 'types + conflicts + planner')
+add('冲突决策', '冲突状态不再简单禁用应用按钮', /按这些选择重新计算/.test(source.proposal) && /处理 \$\{unresolvedCount\} 个待决定问题/.test(source.proposal) && !/disabled=\{selected\?\.infeasible/.test(source.proposal), 'ProposalDialog')
+add('冲突决策', '无候选仍有可点击的解决入口', /proposal-no-solution/.test(source.proposal) && /扩大范围继续寻找/.test(source.proposal) && /调整可用时间/.test(source.proposal) && /调整目标/.test(source.proposal), 'ProposalDialog')
 add('移动端/PWA', 'PWA standalone 配置', /display:\s*'standalone'/.test(read('vite.config.ts')), 'vite.config.ts')
 add('未来边界', 'AI 仅保留解析接口，没有实现功能', exists('src/lib/intent.ts') && /interface PlanIntentParser/.test(read('src/lib/intent.ts')) && !/fetch\(|openai|deepseek/i.test(read('src/lib/intent.ts')), 'src/lib/intent.ts')
 
@@ -80,10 +86,10 @@ const tsc = spawnSync('tsc', ['-p', 'tsconfig.check.json', '--pretty', 'false'],
 add('自动验证', '严格 TypeScript 静态检查', tsc.status === 0, (tsc.stdout + tsc.stderr).trim() || '通过')
 const scale = spawnSync(process.execPath, ['scripts/performance-v08.mjs'], { cwd: root, encoding: 'utf8' })
 add('自动验证', '20目标/50组/500任务/30约束/10版本规模验证', scale.status === 0, scale.status === 0 ? '通过，详见 validation/500任务规模验证.json' : (scale.stdout + scale.stderr).trim())
-const adjustmentRuntime = spawnSync(process.execPath, ['scripts/runtime-adjustment-v085.mjs'], { cwd: root, encoding: 'utf8' })
+const adjustmentRuntime = spawnSync(process.execPath, ['scripts/runtime-adjustment-v086.mjs'], { cwd: root, encoding: 'utf8' })
 add('自动验证', '复盘精确校验与冲突项隔离运行验证', adjustmentRuntime.status === 0, adjustmentRuntime.status === 0 ? '通过，合法选择在冲突修复中保持不变' : (adjustmentRuntime.stdout + adjustmentRuntime.stderr).trim())
-const scenarios = spawnSync(process.execPath, ['scripts/scenario-v085.mjs'], { cwd: root, encoding: 'utf8' })
-add('自动验证', '核心场景与三大系统架构验证', scenarios.status === 0, scenarios.status === 0 ? '全部通过，详见 validation/v0.8.5场景架构验证.md' : (scenarios.stdout + scenarios.stderr).trim())
+const scenarios = spawnSync(process.execPath, ['scripts/scenario-v086.mjs'], { cwd: root, encoding: 'utf8' })
+add('自动验证', '核心场景与三大系统架构验证', scenarios.status === 0, scenarios.status === 0 ? '全部通过，详见 validation/v0.8.6场景架构验证.md' : (scenarios.stdout + scenarios.stderr).trim())
 
 const passed = checks.filter(item => item.pass).length
 const result = { generatedAt: new Date().toISOString(), passed, total: checks.length, failed: checks.filter(item => !item.pass), checks }

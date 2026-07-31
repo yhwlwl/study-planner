@@ -31,6 +31,22 @@ export type SchedulingPreference = ReplanStrategy
 export type ImpactLevel = 'small' | 'medium' | 'large'
 export type AdjustmentResolutionMode = 'validate-and-commit' | 'recommended-preview' | 'optional-optimization' | 'exploratory-optimization'
 
+export type ConflictCategory = 'absolute-blocker' | 'protected-intent' | 'waivable-rule' | 'structural-conflict' | 'warning'
+export type ConflictResolutionAction =
+  | 'accept-once'
+  | 'system-find-another-date'
+  | 'keep-original'
+  | 'leave-unscheduled'
+  | 'unlock-and-move'
+  | 'change-goal'
+  | 'change-capacity'
+  | 'cancel-change'
+
+export interface ConflictResolutionDecision {
+  issueId: string
+  action: ConflictResolutionAction
+}
+
 export interface PlanAdjustmentPolicy {
   mode: AdjustmentResolutionMode
   primaryPreference: SchedulingPreference
@@ -267,6 +283,8 @@ export interface ConstraintException {
   currentLimit?: number
   overrideLimit?: number
   accepted?: boolean
+  /** 最小授权：记录本次例外实际涉及的任务，不把例外扩展为整日永久许可。 */
+  affectedAssignmentIds?: string[]
 }
 
 export interface AcceptedConstraintException extends ConstraintException {
@@ -274,6 +292,11 @@ export interface AcceptedConstraintException extends ConstraintException {
   eventId: string
   accepted: true
   createdAt: string
+}
+
+export interface ConstraintExceptionResolutionDecision {
+  exception: ConstraintException
+  action: 'accept-once' | 'system-find-another-date'
 }
 
 export interface ProposalIssue {
@@ -289,6 +312,11 @@ export interface ProposalIssue {
   assignmentIds: string[]
   consequence: string
   resolution: string
+  /** 保留调度器原始约束键，支持逐项例外与重新计算。 */
+  rawConstraintKey?: string
+  suggestedLimit?: number
+  conflictCategory?: ConflictCategory
+  allowedResolutions?: ConflictResolutionAction[]
 }
 
 export interface RejectedDateReason {
@@ -591,6 +619,8 @@ export interface ReplanLimitOverride {
   date: string
   key: string
   limit: number
+  /** 例外可精确到任务；未填写时仅表示既有状态的兼容上限。 */
+  affectedAssignmentIds?: string[]
 }
 
 export interface ReplanAudit {
@@ -647,6 +677,8 @@ export interface ReplanRequest {
   freezeDays?: number
   todayExtraMinutes?: number
   allowBufferUseDates?: string[]
+  /** 受保护日期的一次性授权可精确到任务，避免整日放开。 */
+  allowProtectedDateAssignments?: Array<{ date: ISODate; assignmentIds: string[] }>
   limitOverrides?: ReplanLimitOverride[]
   localRadius?: number
   affectedAssignmentIds?: string[]

@@ -9,6 +9,7 @@ import { constraintsForDate, dateRange, getBaseCapacity, getCapacity, getDayConf
 import { uid } from './id'
 import { cloneActiveState, hydratePortableState, portableState, stableSignature } from './state'
 import { goalNamesForAssignment, goalProgress, nearestRelevantGoalDate, nearestRelevantLatestDate, relevantGoalPriority, relevantGoalsForAssignment } from './goals'
+import { mergeConstraintExceptions } from './conflicts'
 
 const before = (a: string, b: string) => isBefore(parseISO(a), parseISO(b))
 const after = (a: string, b: string) => isAfter(parseISO(a), parseISO(b))
@@ -130,11 +131,18 @@ function acceptedLimit(state: AppState, date: string, key: string, fallback?: nu
   return accepted?.overrideLimit ?? fallback
 }
 
-function overrideLimit(_state: AppState, request: ReplanRequest, date: string, key: string, fallback?: number) {
+function overrideLimit(state: AppState, request: ReplanRequest, date: string, key: string, fallback?: number, assignmentId?: string) {
   // 已接受的例外是一次性的历史记录，不会自动成为以后排期的永久新上限。
-  // 只有本次请求显式传入的覆盖值才可放宽规则。
-  const override = request.limitOverrides?.find(item => item.date === date && item.key === key)
-  return override?.limit ?? fallback
+  // 本轮覆盖可精确到任务：候选任务不在授权范围内时，不得借用别人接受的例外。
+  const matching = (request.limitOverrides ?? []).filter(item => item.date === date && item.key === key)
+  const applicable = matching.filter(item => {
+    if (!item.affectedAssignmentIds?.length) return true
+    if (assignmentId) return item.affectedAssignmentIds.includes(assignmentId)
+    // 在扫描现有日期负载时，仅当被授权任务仍实际位于该日期，才保留该例外。
+    return item.affectedAssignmentIds.some(id => state.assignments.find(candidate => candidate.id === id)?.scheduledDate === date)
+  })
+  if (!applicable.length) return fallback
+  return Math.max(fallback ?? 0, ...applicable.map(item => item.limit))
 }
 
 function currentUseForRawLimit(state: AppState, date: string, key: string) {
@@ -169,7 +177,7 @@ function grandfatheredLimitOverrides(state: AppState): ReplanLimitOverride[] {
     const limit = Math.max(base, currentUseForRawLimit(state, item.date, key))
     const signature = `${item.date}:${key}`
     const previous = result.get(signature)
-    if (!previous || limit > previous.limit) result.set(signature, { date: item.date, key, limit })
+    if (!previous || limit > previous.limit) result.set(signature, { date: item.date, key, limit, affectedAssignmentIds: item.affectedAssignmentIds ? [...item.affectedAssignmentIds] : undefined })
   }
   return [...result.values()]
 }
@@ -326,8 +334,8 @@ function addToStats(stats: Map<string, DayStats>, date: string, assignment: Assi
   stats.set(date, day)
 }
 
-function hardCapacity(state: AppState, date: string, request: ReplanRequest, day?: DayStats) {
-  const base = overrideLimit(state, request, date, 'capacity', getCapacity(state, date)) ?? getCapacity(state, date)
+function hardCapacity(state: AppState, date: string, request: ReplanRequest, day?: DayStats, assignmentId?: string) {
+  const base = overrideLimit(state, request, date, 'capacity', getCapacity(state, date), assignmentId) ?? getCapacity(state, date)
   if (date !== todayISO()) return base
   const actual = (day?.actualMinutes ?? 0) + (day?.inferredMinutes ?? 0)
   return Math.max(base, actual + Math.max(0, request.todayExtraMinutes ?? 0))
@@ -340,6 +348,12 @@ function targetUtilization(state: AppState, date: string, strategy: ReplanStrate
   if (strategy === 'rest') return 0.78
   if (strategy === 'preserve') return Math.max(state.settings.targetUtilization, 0.9)
   return state.settings.targetUtilization
+}
+
+function protectedDateAllowed(request: ReplanRequest, date: string, assignmentId: string) {
+  const scoped = request.allowProtectedDateAssignments?.filter(item => item.date === date) ?? []
+  if (scoped.length) return scoped.some(item => item.assignmentIds.includes(assignmentId))
+  return request.allowBufferUseDates?.includes(date) ?? false
 }
 
 interface PlacementViolation {
@@ -372,12 +386,12 @@ function validatePlacement(
   const goalLatest = nearestRelevantLatestDate(state, assignment)
   if (goalLatest && after(date, goalLatest)) violations.push({ key: 'goal-latest', label: `超过相关目标最晚日期 ${goalLatest}`, current: 1, limit: 0, hard: true })
   if (config.type === 'travel' && originalDate !== date) violations.push({ key: 'travel-day', label: '外出日不接收普通任务', current: 1, limit: 0, hard: true })
-  if (isDateProtected(state, date) && originalDate !== date && !request.allowBufferUseDates?.includes(date)) {
+  if (isDateProtected(state, date) && originalDate !== date && !protectedDateAllowed(request, date, assignment.id)) {
     violations.push({ key: 'date-protection', label: '日期受到保护', current: 1, limit: 0, hard: true })
   }
 
   const manualBufferProtected = Boolean(config.isBufferDay && (config.bufferProtected ?? config.userSet))
-  if (manualBufferProtected && originalDate !== date && !request.allowBufferUseDates?.includes(date)) {
+  if (manualBufferProtected && originalDate !== date && !protectedDateAllowed(request, date, assignment.id)) {
     violations.push({ key: 'protected-buffer', label: '用户设置的缓冲日受到保护', current: 1, limit: 0, hard: true })
   }
   if (config.isBufferDay && isHighIntensity(group, assignment)) {
@@ -396,13 +410,13 @@ function validatePlacement(
   }
 
   const projected = day.totalMinutes + minutes
-  const capacity = hardCapacity(state, date, request, day)
+  const capacity = hardCapacity(state, date, request, day, assignment.id)
   if (projected > capacity) violations.push({ key: 'capacity', label: '超过当天硬容量', current: projected, limit: capacity, hard: true })
 
   for (const key of activityKeys(group, assignment)) {
     const fallback = defaultLimit(state, date, key, group)
     if (fallback === undefined) continue
-    const limit = overrideLimit(state, request, date, key, fallback) ?? fallback
+    const limit = overrideLimit(state, request, date, key, fallback, assignment.id) ?? fallback
     const current = (day.counts.get(key) ?? 0) + 1
     if (current > limit) violations.push({ key, label: limitLabel(key, group), current, limit, hard: true })
   }
@@ -1370,7 +1384,8 @@ function proposalIssuesFromScenario(event: PlanChangeEvent, bundleIssues: string
       : conflict.key === 'high-intensity' ? 'high-intensity-max'
         : conflict.key.startsWith('group:') ? 'group-daily-max'
           : conflict.key.startsWith('activity:') ? 'activity-daily-max'
-            : 'capacity'
+            : conflict.key === 'date-protection' || conflict.key === 'protected-buffer' ? 'date-protection'
+              : 'capacity'
     const groupId = conflict.key.startsWith('group:') ? conflict.key.slice('group:'.length) : undefined
     const durationEvidence = groupId ? allDurationSuggestions(scenario.nextState).find(item => item.groupId === groupId) : undefined
     const durationCapSuggestion = durationEvidence
@@ -1383,10 +1398,17 @@ function proposalIssuesFromScenario(event: PlanChangeEvent, bundleIssues: string
       assignmentIds: conflict.affectedAssignmentIds,
       consequence: '当前规则下没有完全合法的放置方案。',
       resolution: [conflict.options.join('；'), durationCapSuggestion].filter(Boolean).join('；'),
+      rawConstraintKey: conflict.key,
+      suggestedLimit: conflict.suggestedLimit,
+      conflictCategory: conflict.key === 'date-protection' || conflict.key === 'protected-buffer' ? 'protected-intent' : 'waivable-rule',
+      allowedResolutions: conflict.key === 'date-protection' || conflict.key === 'protected-buffer'
+        ? ['accept-once', 'system-find-another-date', 'keep-original']
+        : ['accept-once', 'system-find-another-date', 'leave-unscheduled'],
     })
   }
+  const leaveUnscheduled = new Set(Array.isArray(event.metadata?.leaveUnscheduledIds) ? event.metadata?.leaveUnscheduledIds.filter((item): item is string => typeof item === 'string') : [])
   const unresolvedIds = scenario.nextState.assignments
-    .filter(item => event.affectedAssignmentIds.includes(item.id) && !item.scheduledDate)
+    .filter(item => event.affectedAssignmentIds.includes(item.id) && !item.scheduledDate && !leaveUnscheduled.has(item.id))
     .map(item => item.id)
   if (unresolvedIds.length) issues.push({
     id: uid('issue'), type: 'unscheduled', title: '仍有任务未安排',
@@ -1620,16 +1642,12 @@ function proposalMetrics(before: AppState, afterState: AppState, event: PlanChan
 
 
 function exceptionsFromConflicts(conflicts: ReplanConstraintConflict[]): ConstraintException[] {
-  const seen = new Set<string>()
   const result: ConstraintException[] = []
   for (const conflict of conflicts) {
     const supported = conflict.key === 'capacity' || conflict.key.startsWith('group:') || conflict.key.startsWith('activity:')
       || conflict.key === 'long' || conflict.key === 'high-intensity'
       || conflict.key === 'date-protection' || conflict.key === 'protected-buffer'
     if (!supported) continue
-    const signature = `${conflict.date}:${conflict.key}`
-    if (seen.has(signature)) continue
-    seen.add(signature)
     const protectedDate = conflict.key === 'date-protection' || conflict.key === 'protected-buffer'
     result.push({
       date: conflict.date,
@@ -1639,9 +1657,28 @@ function exceptionsFromConflicts(conflicts: ReplanConstraintConflict[]): Constra
       permanent: false,
       currentLimit: conflict.limit,
       overrideLimit: protectedDate ? undefined : conflict.suggestedLimit,
+      affectedAssignmentIds: [...conflict.affectedAssignmentIds],
     })
   }
-  return result
+  return mergeConstraintExceptions(result)
+}
+
+
+function exceptionUsedByResult(state: AppState, exception: ConstraintException, movements: TaskMovement[]) {
+  const rawKey = exception.rawKey ?? exception.key
+  if (exception.key === 'date-protection' || rawKey === 'date-protection' || rawKey === 'protected-buffer' || rawKey === 'source-date-protection') {
+    const scoped = new Set(exception.affectedAssignmentIds ?? [])
+    return movements.some(move => {
+      if (scoped.size && !scoped.has(move.assignmentId)) return false
+      return rawKey === 'source-date-protection'
+        ? move.fromDate === exception.date && move.fromDate !== move.toDate
+        : move.toDate === exception.date && move.fromDate !== move.toDate
+    })
+  }
+  if (exception.overrideLimit == null) return false
+  const base = baseLimitForRawKey(state, exception.date, rawKey)
+  if (base == null) return false
+  return currentUseForRawLimit(state, exception.date, rawKey) > base
 }
 
 function proposalFromScenario(
@@ -1669,29 +1706,23 @@ function proposalFromScenario(
   }
   const nonDateChanges = structuralChanges(baseline, afterState)
   const excludedDates = movements.flatMap(item => item.rejectedAlternatives)
-  const effectiveExceptions = [...exceptions]
-  const exceptionSignatures = new Set(effectiveExceptions.map(item => `${item.date}:${item.rawKey ?? item.key}`))
+  let effectiveExceptions = mergeConstraintExceptions(exceptions.filter(item => exceptionUsedByResult(afterState, item, movements)))
+  const addEffectiveException = (item: ConstraintException) => { effectiveExceptions = mergeConstraintExceptions([...effectiveExceptions, item]) }
   const availabilitySourceDates = event.type === 'availability-change' ? new Set(event.affectedDates) : new Set<string>()
   for (const move of movements) {
     if (move.fromDate && move.fromDate !== move.toDate && isDateProtected(baseline, move.fromDate) && !availabilitySourceDates.has(move.fromDate)) {
-      const signature = `${move.fromDate}:source-date-protection`
-      if (!exceptionSignatures.has(signature)) {
-        exceptionSignatures.add(signature)
-        effectiveExceptions.push({
-          date: move.fromDate, key: 'date-protection', rawKey: 'source-date-protection', permanent: false,
-          label: `从受保护日期 ${move.fromDate} 移出“${baseline.assignments.find(item => item.id === move.assignmentId)?.title ?? move.assignmentId}”：仅本次明确允许`,
-        })
-      }
+      addEffectiveException({
+        date: move.fromDate, key: 'date-protection', rawKey: 'source-date-protection', permanent: false,
+        label: `从受保护日期 ${move.fromDate} 移出任务：仅本次明确允许`,
+        affectedAssignmentIds: [move.assignmentId],
+      })
     }
     if (move.toDate && move.fromDate !== move.toDate && isDateProtected(afterState, move.toDate)) {
-      const signature = `${move.toDate}:date-protection`
-      if (!exceptionSignatures.has(signature)) {
-        exceptionSignatures.add(signature)
-        effectiveExceptions.push({
-          date: move.toDate, key: 'date-protection', rawKey: 'date-protection', permanent: false,
-          label: `使用受保护日期 ${move.toDate}：仅本次明确允许`,
-        })
-      }
+      addEffectiveException({
+        date: move.toDate, key: 'date-protection', rawKey: 'date-protection', permanent: false,
+        label: `使用受保护日期 ${move.toDate}：仅本次明确允许`,
+        affectedAssignmentIds: [move.assignmentId],
+      })
     }
   }
 
@@ -1729,7 +1760,8 @@ function proposalFromScenario(
     structural: nonDateChanges.map(item => [item.entityType, item.entityId, item.changeType, item.fields]),
     exceptions: effectiveExceptions.map(item => [item.date, item.rawKey, item.overrideLimit]),
   })
-  const unresolved = afterState.assignments.filter(item => event.affectedAssignmentIds.includes(item.id) && !item.scheduledDate)
+  const leaveUnscheduled = new Set(Array.isArray(event.metadata?.leaveUnscheduledIds) ? event.metadata?.leaveUnscheduledIds.filter((item): item is string => typeof item === 'string') : [])
+  const unresolved = afterState.assignments.filter(item => event.affectedAssignmentIds.includes(item.id) && !item.scheduledDate && !leaveUnscheduled.has(item.id))
   const infeasibleReasons: string[] = []
   if (unresolved.length) infeasibleReasons.push(`${unresolved.length} 项任务在当前硬约束下没有合法日期，系统未强行安排。`)
   if (newDangers.length) infeasibleReasons.push(`本候选会新增 ${newDangers.length} 个硬冲突。`)
@@ -1781,6 +1813,7 @@ export function previewPreparedChange(
   preparedState: AppState,
   event: PlanChangeEvent,
   title = '按当前选择执行',
+  acceptedExceptions: ConstraintException[] = [],
 ): SchedulingProposal {
   const beforeById = new Map(baseline.assignments.map(item => [item.id, item]))
   const afterById = new Map(preparedState.assignments.map(item => [item.id, item]))
@@ -1832,28 +1865,60 @@ export function previewPreparedChange(
     existing.assignmentIds = Array.from(new Set([...existing.assignmentIds, ...issue.assignmentIds]))
   }
   const today = todayISO()
+  const mergedAcceptedExceptions = mergeConstraintExceptions(acceptedExceptions)
   const request: ReplanRequest = {
     mode: 'repair', fromDate: today,
     todayExtraMinutes: Number(event.metadata?.todayExtraMinutes ?? 0),
-    allowBufferUseDates: [], limitOverrides: grandfatheredLimitOverrides(baseline), event,
+    allowBufferUseDates: mergedAcceptedExceptions
+      .filter(item => item.key === 'date-protection' && !item.affectedAssignmentIds?.length && item.rawKey !== 'source-date-protection')
+      .map(item => item.date),
+    allowProtectedDateAssignments: mergedAcceptedExceptions
+      .filter(item => item.key === 'date-protection' && item.affectedAssignmentIds?.length && item.rawKey !== 'source-date-protection')
+      .map(item => ({ date: item.date, assignmentIds: [...(item.affectedAssignmentIds ?? [])] })),
+    limitOverrides: [
+      ...grandfatheredLimitOverrides(baseline),
+      ...mergedAcceptedExceptions.flatMap(item => item.overrideLimit == null ? [] : [{
+        date: item.date,
+        key: item.rawKey ?? item.key,
+        limit: item.overrideLimit,
+        affectedAssignmentIds: item.affectedAssignmentIds ? [...item.affectedAssignmentIds] : undefined,
+      }]),
+    ],
+    event,
   }
   for (const { oldItem, newItem } of changed) {
     const assignmentIds = [newItem.id]
+    const availabilitySourceChange = event.type === 'availability-change' && oldItem.scheduledDate && event.affectedDates.includes(oldItem.scheduledDate)
+    const acceptedSourceProtection = Boolean(oldItem.scheduledDate && mergedAcceptedExceptions.some(item =>
+      item.rawKey === 'source-date-protection' && item.date === oldItem.scheduledDate
+      && (!item.affectedAssignmentIds?.length || item.affectedAssignmentIds.includes(newItem.id))))
+    if (oldItem.scheduledDate && oldItem.scheduledDate !== newItem.scheduledDate && isDateProtected(baseline, oldItem.scheduledDate)
+      && !availabilitySourceChange && !acceptedSourceProtection) addIssue(`source-protected:${oldItem.scheduledDate}:${newItem.id}`, {
+      id: uid('issue'), type: 'date-protection', title: '原日期受到保护',
+      detail: `“${oldItem.title}”当前位于受保护日期 ${oldItem.scheduledDate}，移出也需要你的明确授权。`,
+      date: oldItem.scheduledDate, assignmentIds, consequence: '会改变用户明确保护的日期内容。',
+      resolution: '只对这项任务接受一次性移出授权，或保留原日期。', rawConstraintKey: 'source-date-protection',
+      conflictCategory: 'protected-intent', allowedResolutions: ['accept-once', 'keep-original', 'cancel-change'],
+    })
     if (oldItem.status === 'done') addIssue(`done:${newItem.id}`, {
       id: uid('issue'), type: 'task-lock', title: '已完成任务不能改期', detail: `“${oldItem.title}”已经完成，计划调整不能改写其日期。`,
       assignmentIds, consequence: '会破坏真实执行历史。', resolution: '保持原日期；如需修正记录，应从任务详情单独处理。',
+      rawConstraintKey: 'completed-history', conflictCategory: 'absolute-blocker', allowedResolutions: ['keep-original', 'cancel-change'],
     })
     if (oldItem.locked) addIssue(`locked:${newItem.id}`, {
       id: uid('issue'), type: 'task-lock', title: '任务已锁定', detail: `“${oldItem.title}”已锁定，不能移动到 ${newItem.scheduledDate ?? '未安排'}。`,
       assignmentIds, consequence: '会违背用户明确锁定。', resolution: '保持原日期，或先由用户主动解除锁定。',
+      rawConstraintKey: 'task-lock', conflictCategory: 'protected-intent', allowedResolutions: ['keep-original', 'unlock-and-move', 'cancel-change'],
     })
     if (baseline.timer.assignmentId === newItem.id) addIssue(`timer:${newItem.id}`, {
       id: uid('issue'), type: 'active-timer', title: '正在计时的任务不能移动', detail: `“${oldItem.title}”正在计时。`,
       assignmentIds, consequence: '会破坏当前执行上下文。', resolution: '结束或暂停计时后再调整。',
+      rawConstraintKey: 'active-timer', conflictCategory: 'absolute-blocker', allowedResolutions: ['keep-original', 'cancel-change'],
     })
     if ((oldItem.scheduledDate && before(oldItem.scheduledDate, today)) || (newItem.scheduledDate && before(newItem.scheduledDate, today))) addIssue(`past:${newItem.id}`, {
       id: uid('issue'), type: 'past-freeze', title: '过去日期已冻结', detail: `“${oldItem.title}”的变化涉及过去日期。`,
       assignmentIds, consequence: '会改写历史计划。', resolution: '保留过去日期，只调整今天之后的任务。',
+      rawConstraintKey: 'past', conflictCategory: 'absolute-blocker', allowedResolutions: ['keep-original', 'cancel-change'],
     })
     if (!newItem.scheduledDate) continue
     const group = groups.get(newItem.groupId)
@@ -1870,6 +1935,18 @@ export function previewPreparedChange(
         currentValue: String(Math.round(violation.current)), allowedValue: String(Math.round(violation.limit)), assignmentIds,
         consequence: '按当前选择直接执行会产生新的硬冲突。',
         resolution: '只修改这项冲突选择，或让系统为冲突项生成替代日期；其他合法选择保持不变。',
+        rawConstraintKey: violation.key,
+        suggestedLimit: violation.current,
+        conflictCategory: violation.key === 'date-protection' || violation.key === 'protected-buffer' ? 'protected-intent'
+          : violation.key === 'capacity' || violation.key.startsWith('group:') || violation.key.startsWith('activity:') || violation.key === 'long' || violation.key === 'high-intensity' ? 'waivable-rule'
+            : violation.key === 'past' || violation.key === 'plan-range' ? 'absolute-blocker' : 'structural-conflict',
+        allowedResolutions: violation.key === 'date-protection' || violation.key === 'protected-buffer'
+          ? ['accept-once', 'system-find-another-date', 'keep-original']
+          : violation.key === 'capacity' || violation.key.startsWith('group:') || violation.key.startsWith('activity:') || violation.key === 'long' || violation.key === 'high-intensity'
+            ? ['accept-once', 'system-find-another-date', 'leave-unscheduled']
+            : violation.key === 'past' || violation.key === 'plan-range'
+              ? ['keep-original', 'cancel-change']
+              : ['system-find-another-date', 'keep-original', 'change-capacity', 'cancel-change'],
       })
     }
   }
@@ -1877,18 +1954,27 @@ export function previewPreparedChange(
   // 预计时长、容量和规则变化可能没有移动日期，但仍可能让现有日期新增硬冲突。
   const fromDate = proposalPlanningStart(preparedState, event)
   const baselineDangers = new Set(analyzePlan(baseline, fromDate).filter(item => item.level === 'danger').map(item => `${item.date ?? ''}:${item.message}`))
+  const analysisPreparedState = cloneActiveState(preparedState)
+  analysisPreparedState.acceptedConstraintExceptions = [
+    ...grandfatheredAcceptedExceptions(baseline),
+    ...mergedAcceptedExceptions.map(item => ({
+      ...item, id: uid('preview-exception'), eventId: event.id, accepted: true as const, createdAt: new Date().toISOString(),
+    })),
+  ]
   const specificallyValidatedDates = new Set([...issuesByKey.values()].flatMap(item => item.date ? [item.date] : []))
-  for (const danger of analyzePlan(preparedState, fromDate).filter(item => item.level === 'danger')) {
+  for (const danger of analyzePlan(analysisPreparedState, fromDate).filter(item => item.level === 'danger')) {
     const signature = `${danger.date ?? ''}:${danger.message}`
     if (baselineDangers.has(signature) || (danger.date && specificallyValidatedDates.has(danger.date))) continue
     addIssue(`analysis:${signature}`, {
       id: uid('issue'), type: 'capacity', title: '变化后出现新的硬冲突', detail: danger.message, date: danger.date,
       assignmentIds: danger.date ? preparedState.assignments.filter(item => item.scheduledDate === danger.date && item.status !== 'done').map(item => item.id) : event.affectedAssignmentIds,
       consequence: '当前日期安排不再完全可执行。', resolution: '保持基础变化，并只对新增冲突生成最小修复方案。',
+      conflictCategory: 'structural-conflict', allowedResolutions: ['system-find-another-date', 'keep-original', 'change-capacity', 'cancel-change'],
     })
   }
 
   const issues = [...issuesByKey.values()]
+  const effectiveAcceptedExceptions = mergeConstraintExceptions(mergedAcceptedExceptions.filter(item => exceptionUsedByResult(preparedState, item, movements)))
   const goalImpacts = proposalGoalImpacts(baseline, preparedState)
   const nonDateChanges = structuralChanges(baseline, preparedState)
   const metrics = proposalMetrics(baseline, preparedState, event, issues, movements, dateChanges, goalImpacts)
@@ -1898,6 +1984,7 @@ export function previewPreparedChange(
     dates: dateChanges.map(item => [item.date, item.afterMinutes]),
     structural: nonDateChanges.map(item => [item.entityType, item.entityId, item.changeType, item.fields]),
     issues: issues.map(item => [item.type, item.date, item.assignmentIds]),
+    exceptions: effectiveAcceptedExceptions.map(item => [item.date, item.rawKey ?? item.key, item.overrideLimit, item.affectedAssignmentIds]),
   })
   return {
     id: uid('proposal'), eventId: event.id, title,
@@ -1907,7 +1994,7 @@ export function previewPreparedChange(
     action: event.action, preference: 'preserve', generatedAt: new Date().toISOString(),
     stateBefore: portableState(baseline), stateAfter: portableState(preparedState),
     issues, movements, dateChanges, goalImpacts, structuralChanges: nonDateChanges,
-    exceptions: [], excludedDates: [], metrics, distinctSignature: signature,
+    exceptions: effectiveAcceptedExceptions, excludedDates: [], metrics, distinctSignature: signature,
     infeasible: issues.length > 0,
     infeasibleReason: issues.length ? `当前选择中有 ${issues.length} 个硬冲突；合法项不会被重新重排。` : undefined,
   }
@@ -1919,6 +2006,10 @@ export interface GenerateProposalOptions {
   signal?: AbortSignal
   todayExtraMinutes?: number
   allowProtectedDates?: string[]
+  /** 用户逐项接受的一次性例外；只作用于本轮重新计算。 */
+  acceptedExceptions?: ConstraintException[]
+  /** 逐项决策重算时不再自动打包所有未接受例外。 */
+  disableAutomaticExceptions?: boolean
   /** 生成更多方案时逐步扩大候选半径；0 为默认，1/2 为更宽但仍受同一硬约束。 */
   expansionLevel?: number
 }
@@ -1951,7 +2042,13 @@ export function generateSchedulingProposals(input: AppState, event: PlanChangeEv
     todayExtraMinutes: options.todayExtraMinutes ?? Number(event.metadata?.todayExtraMinutes ?? 0),
     // Earlier accepted date-protection exceptions are audit records, not standing permission for future changes.
     allowBufferUseDates: Array.from(new Set(options.allowProtectedDates ?? [])),
-    limitOverrides: grandfatheredLimitOverrides(baseline),
+    allowProtectedDateAssignments: (options.acceptedExceptions ?? [])
+      .filter(item => item.key === 'date-protection' && item.affectedAssignmentIds?.length)
+      .map(item => ({ date: item.date, assignmentIds: [...(item.affectedAssignmentIds ?? [])] })),
+    limitOverrides: [
+      ...grandfatheredLimitOverrides(baseline),
+      ...(options.acceptedExceptions ?? []).flatMap(item => item.overrideLimit == null ? [] : [{ date: item.date, key: item.rawKey ?? item.key, limit: item.overrideLimit, affectedAssignmentIds: item.affectedAssignmentIds ? [...item.affectedAssignmentIds] : undefined }]),
+    ],
     localRadius: (() => {
       const level = Math.max(0, Math.min(2, Math.round(options.expansionLevel ?? 0)))
       const base = input.settings.localRepairRadius
@@ -1977,27 +2074,32 @@ export function generateSchedulingProposals(input: AppState, event: PlanChangeEv
     if (options.signal?.aborted) break
     const scenario = bundle.scenarios.find(item => item.strategy === preference)
     if (!scenario) continue
-    append(proposalFromScenario(baseline, input, event, bundle.issues, scenario))
+    append(proposalFromScenario(baseline, input, event, bundle.issues, scenario, options.acceptedExceptions ?? []))
   }
 
   // 只有普通硬限制（容量、每日上限、保护日期）阻止合法安排时，才生成一个
   // 明确标记的一次性例外候选；锁定、过去和 Goal 最晚日期永远不会在这里放宽。
   const seedScenario = preferred.map(preference => bundle.scenarios.find(item => item.strategy === preference))
     .find(item => item && item.constraintConflicts.length > 0)
-  if (seedScenario && !options.signal?.aborted) {
-    const exceptions = exceptionsFromConflicts(seedScenario.constraintConflicts)
+  if (seedScenario && !options.signal?.aborted && !options.disableAutomaticExceptions) {
+    const generatedExceptions = exceptionsFromConflicts(seedScenario.constraintConflicts)
+    const exceptions = mergeConstraintExceptions([...(options.acceptedExceptions ?? []), ...generatedExceptions])
     if (exceptions.length) {
       const overrideRequest: ReplanRequest = {
         ...request,
         strategy: seedScenario.strategy,
         limitOverrides: [
           ...(request.limitOverrides ?? []),
-          ...exceptions.filter(item => item.overrideLimit != null).map(item => ({ date: item.date, key: item.rawKey ?? item.key, limit: item.overrideLimit! })),
+          ...exceptions.filter(item => item.overrideLimit != null).map(item => ({ date: item.date, key: item.rawKey ?? item.key, limit: item.overrideLimit!, affectedAssignmentIds: item.affectedAssignmentIds ? [...item.affectedAssignmentIds] : undefined })),
         ],
         allowBufferUseDates: Array.from(new Set([
           ...(request.allowBufferUseDates ?? []),
-          ...exceptions.filter(item => item.key === 'date-protection').map(item => item.date),
+          ...exceptions.filter(item => item.key === 'date-protection' && !item.affectedAssignmentIds?.length).map(item => item.date),
         ])),
+        allowProtectedDateAssignments: [
+          ...(request.allowProtectedDateAssignments ?? []),
+          ...exceptions.filter(item => item.key === 'date-protection' && item.affectedAssignmentIds?.length).map(item => ({ date: item.date, assignmentIds: [...(item.affectedAssignmentIds ?? [])] })),
+        ],
       }
       const exceptionBundle = generateReplanBundle(input, overrideRequest)
       const exceptionScenario = exceptionBundle.scenarios.find(item => item.strategy === seedScenario.strategy)
@@ -2089,12 +2191,14 @@ export function reviseSchedulingProposal(
         date: item.date,
         key: item.rawKey ?? (item.key === 'group-daily-max' ? `group:${assignment.groupId}` : item.key === 'activity-daily-max' ? `activity:${taskActivity(validationGroup)}` : item.key === 'long-task-max' ? 'long' : item.key === 'high-intensity-max' ? 'high-intensity' : item.key),
         limit: item.overrideLimit,
+        affectedAssignmentIds: item.affectedAssignmentIds ? [...item.affectedAssignmentIds] : undefined,
       }])
       const request: ReplanRequest = {
         mode: 'repair',
         fromDate: todayISO(),
         todayExtraMinutes: automaticTodayRemaining,
-        allowBufferUseDates: proposal.exceptions.filter(item => item.key === 'date-protection' || item.rawKey === 'date-protection' || item.rawKey === 'protected-buffer').map(item => item.date),
+        allowBufferUseDates: proposal.exceptions.filter(item => (item.key === 'date-protection' || item.rawKey === 'date-protection' || item.rawKey === 'protected-buffer') && !item.affectedAssignmentIds?.length).map(item => item.date),
+        allowProtectedDateAssignments: proposal.exceptions.filter(item => (item.key === 'date-protection' || item.rawKey === 'date-protection' || item.rawKey === 'protected-buffer') && item.affectedAssignmentIds?.length).map(item => ({ date: item.date, assignmentIds: [...(item.affectedAssignmentIds ?? [])] })),
         limitOverrides: [...grandfatheredLimitOverrides(baseline), ...explicitOverrides],
       }
       placementProblems = validatePlacement(
@@ -2146,7 +2250,8 @@ export function reviseSchedulingProposal(
     consequence: '应用后会产生新的不可执行位置。', resolution: '调整该任务日期或恢复原候选。',
   })
 
-  const unresolved = afterState.assignments.filter(item => event.affectedAssignmentIds.includes(item.id) && !item.scheduledDate)
+  const leaveUnscheduled = new Set(Array.isArray(event.metadata?.leaveUnscheduledIds) ? event.metadata?.leaveUnscheduledIds.filter((item): item is string => typeof item === 'string') : [])
+  const unresolved = afterState.assignments.filter(item => event.affectedAssignmentIds.includes(item.id) && !item.scheduledDate && !leaveUnscheduled.has(item.id))
   if (unresolved.length) issues.push({
     id: uid('issue'), type: 'unscheduled', title: '仍有任务未安排', detail: `${unresolved.length} 项本次相关任务仍未安排。`,
     assignmentIds: unresolved.map(item => item.id), consequence: '这些任务不会被强行塞入冲突日期。', resolution: '改选日期或使用“保留为未安排”操作。',

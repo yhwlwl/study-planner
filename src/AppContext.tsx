@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type {
   AppSettings, AppState, Assignment, CalendarConstraint, CreateResult, DayConfig, DurationSuggestion, Goal, GoalDraft,
   NewTaskDraft, PlanChangeEvent, PlanVersion, ReplanHistoryEntry,
-  ReviewRecord, SchedulingProposal, SequenceRenumberSuggestion, TaskGroup, TaskGroupDraft,
+  ReviewRecord, SchedulingProposal, SequenceRenumberSuggestion, TaskGroup, TaskGroupDraft, ConstraintException,
 } from './types'
 import {
   buildBlankState, buildGuestDemoState, buildInitialState, createAssignmentsForGroup, normalizeState,
@@ -52,7 +52,7 @@ interface AppContextValue {
   prepareCalendarConstraintChange: (constraint?: CalendarConstraint, removeId?: string) => PrepareStateResult
   prepareDurationChange: (suggestion: DurationSuggestion, estimate?: number, reviewDate?: string) => PrepareStateResult
   prepareReviewCompletion: (date: string, carryDates: Record<string, string>) => PrepareStateResult
-  generateProposals: (preparedState: AppState, event: PlanChangeEvent, baseline?: AppState, signal?: AbortSignal, expansionLevel?: number) => SchedulingProposal[]
+  generateProposals: (preparedState: AppState, event: PlanChangeEvent, baseline?: AppState, signal?: AbortSignal, expansionLevel?: number, resolutionOptions?: { acceptedExceptions?: ConstraintException[]; disableAutomaticExceptions?: boolean }) => SchedulingProposal[]
   applySchedulingProposal: (proposal: SchedulingProposal, event: PlanChangeEvent) => void
   applyPreparedWithoutScheduling: (preparedState: AppState, event: PlanChangeEvent, reason?: string) => void
   restoreReplanHistory: (id: string) => void
@@ -833,8 +833,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return { state: updateGoalAndGroupLifecycle(next), event }
   }, [])
 
-  const generateProposals = useCallback((preparedState: AppState, event: PlanChangeEvent, baseline?: AppState, signal?: AbortSignal, expansionLevel = 0) => {
-    return generateSchedulingProposals(preparedState, event, { baseline: baseline ?? stateRef.current, signal, expansionLevel })
+  const generateProposals = useCallback((preparedState: AppState, event: PlanChangeEvent, baseline?: AppState, signal?: AbortSignal, expansionLevel = 0, resolutionOptions?: { acceptedExceptions?: ConstraintException[]; disableAutomaticExceptions?: boolean }) => {
+    return generateSchedulingProposals(preparedState, event, {
+      baseline: baseline ?? stateRef.current,
+      signal,
+      expansionLevel,
+      acceptedExceptions: resolutionOptions?.acceptedExceptions,
+      disableAutomaticExceptions: resolutionOptions?.disableAutomaticExceptions,
+    })
   }, [])
 
   const applySchedulingProposal = useCallback((proposal: SchedulingProposal, event: PlanChangeEvent) => setState(previous => {
