@@ -1,17 +1,29 @@
-# Study Planner v0.8.4 完成性与验证报告
+# Study Planner v0.8.5 完成性与验证报告
 
 ## 结论
 
-v0.8.4 重新按 v0.7.0 以来的对话要求复核计划调整、复盘和目标系统，并修复了“结构存在但行为未闭环”的部分。详细结论见 `V0.8.4_THREE_SYSTEM_ARCHITECTURE_AUDIT.md`。
+v0.8.5 以 v0.8.4 为代码基础，以 v0.7.0 为稳定行为基线，重构了计划调整的场景编排与信息展示，而没有重复实现已有领域系统。
+
+本轮重点完成：
+
+- 用户已明确日期时只做精确校验，不再二次重排；
+- 系统推荐与用户偏好分离；
+- 推荐优先、多方案后置；
+- 所有智能改动先预览后应用；
+- 摘要优先、细节逐层展开；
+- 手机空白、选中态和日期负载红绿变化统一修复。
 
 ## 已执行验证
 
-- `npm run typecheck`：通过。
-- `npm run validate:v08`：53 / 53。
-- `npm run test:scenarios`：18 / 18。
-- `npm run test:scale`：通过。
+| 命令 | 结果 |
+|---|---|
+| `npm run typecheck` | 通过 |
+| `npm run test:adjustment` | 通过：混合合法/冲突复盘场景只识别 2 个具体问题，合法日期保持不变 |
+| `npm run test:scenarios` | 27 / 27 |
+| `npm run test:scale` | 通过 |
+| `npm run validate:v08` | 62 / 62 |
 
-规模夹具：
+规模夹具包含：
 
 - 20 个目标；
 - 50 个任务组；
@@ -19,13 +31,21 @@ v0.8.4 重新按 v0.7.0 以来的对话要求复核计划调整、复盘和目�
 - 30 个日期约束；
 - 10 个本地计划版本。
 
-## 生产构建
+## 覆盖的核心场景
 
-当前容器缺少项目 `node_modules`。`npm run build` 会因 React、Vite、date-fns、Supabase 等真实依赖未安装而失败，因此没有把生产构建标记为通过。完整日志位于 `validation/生产构建尝试.log`。
+目标提前、目标放宽、补充缺失子任务、计划太累、旅行范围、新增任务组、老师阶段检查、时长变化、复盘逐项顺延、批量移动、推荐与备选、渐进式信息、选中态、红绿负载、手机全屏弹窗和七列月历。
 
-Vercel 或本地正常网络环境需要执行：
+## 生产构建说明
+
+当前执行环境没有项目 `node_modules`，且外部依赖无法从当前依赖源完整安装。`npm run build` 会因 React、Vite、date-fns、Supabase 等模块不可解析而失败，因此没有把生产构建标记为通过。
+
+在正常网络环境执行：
 
 ```bash
 npm install
+npm run typecheck
+npm run validate:v08
 npm run build
 ```
+
+完整构建日志位于 `validation/生产构建尝试_v0.8.5.log`。

@@ -7,9 +7,9 @@ import {
 } from 'lucide-react'
 import { addMonths, endOfMonth, format, getDay, isWithinInterval, parseISO, startOfMonth } from 'date-fns'
 import { useApp } from './AppContext'
-import type { AppState, Assignment, BufferPreference, DayType, PlanChangeEvent, Priority, SchedulingProposal, SequenceRenumberSuggestion, Subject, TaskGroup } from './types'
+import type { AppState, Assignment, BufferPreference, DayType, PlanAdjustmentPolicy, PlanChangeEvent, Priority, SchedulingProposal, SequenceRenumberSuggestion, Subject, TaskGroup } from './types'
 import { clampDate, constraintsForDate, dateRange, dayTypeLabel, fmtDate, fmtWeekday, getCapacity, getDayConfig, isDateProtected, minutesText, shiftDate, todayISO } from './lib/date'
-import { actualLearningSnapshot, allDurationSuggestions, analyzePlan, checkAssignmentPlacement, effectiveMinutes, planningDayLoad, predictCompletion } from './lib/planner'
+import { actualLearningSnapshot, allDurationSuggestions, analyzePlan, checkAssignmentPlacement, effectiveMinutes, planningDayLoad, predictCompletion, previewPreparedChange } from './lib/planner'
 import { allGoalProgress, nearestRelevantGoalDate } from './lib/goals'
 import { uid } from './lib/id'
 import { cloneActiveState } from './lib/state'
@@ -30,6 +30,7 @@ import { HistoryDiffDialog } from './components/HistoryDiffDialog'
 import { FocusTimerPage, getTimerElapsedSeconds } from './components/FocusTimerPage'
 import { StatsPage } from './components/StatsPage'
 import { NumericInput } from './components/NumericInput'
+import { adjustmentPolicyForEvent, eventWithPreferences } from './lib/adjustment'
 import { downloadSnapshot, getSession, preparePortableState, signIn, signOut, signUp, supabase, supabaseConfigured, uploadSnapshot } from './lib/supabase'
 import './styles.css'
 
@@ -66,8 +67,8 @@ export default function App() {
   const [singleTaskIntent, setSingleTaskIntent] = useState<'system'|'prefer-date'|'lock-date'>('system')
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
   const [reviewDate, setReviewDate] = useState<string>()
-  const [proposalSession, setProposalSession] = useState<{ baseline: AppState; prepared: AppState; event: PlanChangeEvent; proposals: SchedulingProposal[]; expansionLevel: number; moreExhausted?: boolean }>()
-  const [proposalGeneration, setProposalGeneration] = useState<{ baseline: AppState; prepared: AppState; event: PlanChangeEvent; worker?: Worker; error?: string }>()
+  const [proposalSession, setProposalSession] = useState<{ baseline: AppState; prepared: AppState; event: PlanChangeEvent; policy: PlanAdjustmentPolicy; proposals: SchedulingProposal[]; expansionLevel: number; moreExhausted?: boolean }>()
+  const [proposalGeneration, setProposalGeneration] = useState<{ baseline: AppState; prepared: AppState; event: PlanChangeEvent; policy: PlanAdjustmentPolicy; seedProposals: SchedulingProposal[]; worker?: Worker; error?: string }>()
   const [mobileNav, setMobileNav] = useState(false)
   const [adjustmentOpen, setAdjustmentOpen] = useState(false)
   const [adjustmentDate, setAdjustmentDate] = useState<string>()
@@ -386,25 +387,68 @@ export default function App() {
 
   const openPrepared = (prepared: AppState, event: PlanChangeEvent) => {
     const baseline = stateRef.current
+    const policy = adjustmentPolicyForEvent(event)
+    const directPreview = previewPreparedChange(baseline, prepared, event, policy.directPreviewLabel)
+    const useDirectFirst = policy.mode === 'validate-and-commit' || policy.mode === 'optional-optimization'
+
+    // 用户已经明确指定结果，或变化只是放宽约束时，合法结果立即进入精确预览。
+    // 其他优化方案仍可由用户在预览中主动生成，不让“保持现状”也先等待一轮重排。
+    if (useDirectFirst && !directPreview.infeasible) {
+      setProposalSession({ baseline, prepared, event, policy, proposals: [directPreview], expansionLevel: 0 })
+      return
+    }
+
+    // 精确选择存在冲突时，仅把冲突任务交给系统；其余合法选择继续固定。
+    const conflictIds = directPreview.infeasible
+      ? Array.from(new Set(directPreview.issues.flatMap(issue => issue.assignmentIds))).filter(id => event.affectedAssignmentIds.includes(id))
+      : []
+    const eventForRouting: PlanChangeEvent = {
+      ...event,
+      affectedAssignmentIds: conflictIds.length ? conflictIds : event.affectedAssignmentIds,
+      metadata: {
+        ...(event.metadata ?? {}),
+        directValidationConflictIds: conflictIds,
+        fixedAssignmentIds: conflictIds.length ? event.affectedAssignmentIds.filter(id => !conflictIds.includes(id)) : [],
+      },
+    }
+
+    // 推荐类事件预先计算一个推荐方案和一个实质不同的备选；界面默认只展开推荐方案。
+    // 放宽类事件把“保持当前日期”作为首选，再准备一个可选优化方案。
+    const firstAlternative = policy.alternativePreferences[0]
+    const initialPreferences = Array.from(new Set(
+      [policy.primaryPreference, firstAlternative].filter(Boolean)
+    )) as typeof policy.alternativePreferences
+    const routedEvent = eventWithPreferences(eventForRouting, initialPreferences)
+    const seedProposals = useDirectFirst || directPreview.infeasible ? [directPreview] : []
+
+    const complete = (generated: SchedulingProposal[]) => {
+      const merged = [...seedProposals]
+      const signatures = new Set(merged.map(item => item.distinctSignature))
+      for (const proposal of generated) if (!signatures.has(proposal.distinctSignature)) {
+        signatures.add(proposal.distinctSignature)
+        merged.push(proposal)
+      }
+      setProposalSession({ baseline, prepared, event: routedEvent, policy, proposals: merged, expansionLevel: 0 })
+    }
+
     if (typeof Worker === 'undefined') {
-      const proposals = generateProposals(prepared, event, baseline)
-      setProposalSession({ baseline, prepared, event, proposals, expansionLevel: 0 })
+      complete(generateProposals(prepared, routedEvent, baseline))
       return
     }
     const worker = new Worker(new URL('./workers/proposal.worker.ts', import.meta.url), { type: 'module' })
-    setProposalGeneration({ baseline, prepared, event, worker })
+    setProposalGeneration({ baseline, prepared, event: routedEvent, policy, seedProposals, worker })
     worker.onmessage = (message: MessageEvent<{ ok: boolean; proposals?: SchedulingProposal[]; message?: string }>) => {
       worker.terminate()
       if (message.data.ok) {
         setProposalGeneration(undefined)
-        setProposalSession({ baseline, prepared, event, proposals: message.data.proposals ?? [], expansionLevel: 0 })
-      } else setProposalGeneration({ baseline, prepared, event, error: message.data.message ?? '方案计算失败' })
+        complete(message.data.proposals ?? [])
+      } else setProposalGeneration({ baseline, prepared, event: routedEvent, policy, seedProposals, error: message.data.message ?? '方案计算失败' })
     }
     worker.onerror = eventValue => {
       worker.terminate()
-      setProposalGeneration({ baseline, prepared, event, error: eventValue.message || '方案计算失败' })
+      setProposalGeneration({ baseline, prepared, event: routedEvent, policy, seedProposals, error: eventValue.message || '方案计算失败' })
     }
-    worker.postMessage({ preparedState: prepared, baseline, event })
+    worker.postMessage({ preparedState: prepared, baseline, event: routedEvent })
   }
   const cancelProposalGeneration = () => {
     proposalGeneration?.worker?.terminate()
@@ -467,11 +511,11 @@ export default function App() {
       }}/>
       {proposalGeneration && <Modal open title="正在生成计划调整方案" onClose={cancelProposalGeneration}>
         <div className="proposal-generation-state"><div className={proposalGeneration.error ? 'proposal-generation-error' : 'spinner'}/><h3>{proposalGeneration.error ? '方案计算未完成' : proposalGeneration.event.title}</h3><p>{proposalGeneration.error ?? '正在独立线程中核对容量、上限、目标期限、手动安排和日期保护。取消不会修改当前计划。'}</p></div>
-        <div className="modal-actions"><button className="secondary-button" onClick={cancelProposalGeneration}>{proposalGeneration.error ? '关闭' : '取消计算'}</button>{proposalGeneration.error && <button className="primary-button" onClick={() => { const { prepared, event, baseline } = proposalGeneration; setProposalGeneration(undefined); const proposals = generateProposals(prepared, event, baseline); setProposalSession({ baseline, prepared, event, proposals, expansionLevel: 0 }) }}>在当前线程重试</button>}</div>
+        <div className="modal-actions"><button className="secondary-button" onClick={cancelProposalGeneration}>{proposalGeneration.error ? '关闭' : '取消计算'}</button>{proposalGeneration.error && <button className="primary-button" onClick={() => { const { prepared, event, baseline, policy, seedProposals } = proposalGeneration; setProposalGeneration(undefined); const proposals = generateProposals(prepared, event, baseline); setProposalSession({ baseline, prepared, event, policy, proposals: [...seedProposals, ...proposals.filter(item => !seedProposals.some(seed => seed.distinctSignature === item.distinctSignature))], expansionLevel: 0 }) }}>在当前线程重试</button>}</div>
       </Modal>}
       {proposalSession && <ProposalDialog
         open baseline={proposalSession.baseline} preparedState={proposalSession.prepared} event={proposalSession.event}
-        proposals={proposalSession.proposals} moreExhausted={proposalSession.moreExhausted}
+        proposals={proposalSession.proposals} policy={proposalSession.policy} moreExhausted={proposalSession.moreExhausted}
         onClose={() => setProposalSession(undefined)}
         onKeep={() => {
           const type = proposalSession.event.type
@@ -496,18 +540,23 @@ export default function App() {
         onGenerateMore={() => {
           setProposalSession(current => {
             if (!current || current.moreExhausted) return current
-            const nextLevel = Math.min(2, current.expansionLevel + 1)
-            const extra = generateProposals(current.prepared, current.event, current.baseline, undefined, nextLevel)
+            const allPreferences = [current.policy.primaryPreference, ...current.policy.alternativePreferences]
+            const generatedPreferences = new Set(current.proposals.map(item => item.preference))
+            const remainingPreferences = allPreferences.filter(item => !generatedPreferences.has(item))
+            const nextLevel = remainingPreferences.length ? current.expansionLevel : Math.min(2, current.expansionLevel + 1)
+            const preferences = remainingPreferences.length ? remainingPreferences : allPreferences
+            const expandedEvent = eventWithPreferences(current.event, preferences)
+            const extra = generateProposals(current.prepared, expandedEvent, current.baseline, undefined, nextLevel)
             const merged = [...current.proposals]
             const signatures = new Set(merged.map(item => item.distinctSignature))
             for (const proposal of extra) if (!signatures.has(proposal.distinctSignature)) { signatures.add(proposal.distinctSignature); merged.push(proposal) }
             const added = merged.length - current.proposals.length
-            return { ...current, proposals: merged, expansionLevel: nextLevel, moreExhausted: added === 0 && nextLevel >= 2 }
+            return { ...current, event: expandedEvent, proposals: merged, expansionLevel: nextLevel, moreExhausted: added === 0 && nextLevel >= 2 && remainingPreferences.length === 0 }
           })
         }}
         onApply={proposal => { applySchedulingProposal(proposal, proposalSession.event); setProposalSession(undefined) }}
       />} 
-      <ReviewDialog open={Boolean(reviewDate)} date={reviewDate ?? todayISO()} onClose={() => setReviewDate(undefined)} onPreparedDuration={openPrepared} onOpenAdjustment={date => openAdjustment(date, 'execution-difference')}/>
+      <ReviewDialog open={Boolean(reviewDate)} date={reviewDate ?? todayISO()} onClose={() => setReviewDate(undefined)} onPreparedDuration={openPrepared}/>
       <SequenceRenumberDialog
         suggestion={sequenceRenumberSuggestion}
         onKeep={dismissSequenceRenumberSuggestion}

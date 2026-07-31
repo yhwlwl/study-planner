@@ -5,12 +5,11 @@ import { actualMinutesForAssignmentOnDate, allDurationSuggestions, effectiveMinu
 import { fmtDate, getCapacity, minutesText, todayISO } from '../lib/date'
 import { Modal } from './Modal'
 
-export function ReviewDialog({ open, date, onClose, onPreparedDuration, onOpenAdjustment }: {
+export function ReviewDialog({ open, date, onClose, onPreparedDuration }: {
   open: boolean
   date: string
   onClose: () => void
   onPreparedDuration: (state: AppState, event: PlanChangeEvent) => void
-  onOpenAdjustment: (date: string) => void
 }) {
   const { state, completeReview, prepareDurationChange, prepareReviewCompletion } = useApp()
   const snapshot = useMemo(() => reviewDaySnapshot(state, date), [state, date])
@@ -114,11 +113,6 @@ export function ReviewDialog({ open, date, onClose, onPreparedDuration, onOpenAd
     completeReview(date)
     onClose()
   }
-  const openAdjustment = () => {
-    completeReview(date)
-    onClose()
-    onOpenAdjustment(date)
-  }
   const acceptSuggestion = (suggestion: DurationSuggestion) => {
     const prepared = prepareDurationChange(suggestion, suggestion.suggestedEstimate, date)
     onClose()
@@ -166,7 +160,6 @@ export function ReviewDialog({ open, date, onClose, onPreparedDuration, onOpenAd
           <label className="review-carry-choice"><span>结束今天后的安排</span><select disabled={!movable} value={carryDates[item.id] ?? ''} onChange={event => setCarryDates(current => ({ ...current, [item.id]: event.target.value }))}><option value="">保留在 {fmtDate(date)}，之后显示为逾期</option>{options.map(target => <option key={target} value={target}>{projectedLabel(item.id, target)}</option>)}</select>{!movable && <small>锁定或正在计时的任务不能在这里移动。</small>}</label>
         </article>
       })}</div>}
-      {unfinished.length > 0 && <div className="review-adjustment-callout"><div><strong>简单顺延不够合适？</strong><span>完整方案会同时检查容量、每日上限、目标日期、手动安排和缓冲日。</span></div><button className="secondary-button" onClick={openAdjustment}>比较完整调整方案</button></div>}
     </section>
 
     <section id="review-completed" className="review-section">
@@ -179,13 +172,13 @@ export function ReviewDialog({ open, date, onClose, onPreparedDuration, onOpenAd
     </section>
 
     <section id="review-duration" className="review-section review-duration-section">
-      <header><div><span className="review-section-index">03</span><div><h3>自适应时长建议</h3><p>历史只提出新预计；接受后仍需从多个排期方案中选择，也可完全不改。</p></div></div><strong>{suggestions.length} 项</strong></header>
+      <header><div><span className="review-section-index">03</span><div><h3>自适应时长建议</h3><p>历史只提出新预计；先验证现有日期，只有新增冲突才建议最小修复。</p></div></div><strong>{suggestions.length} 项</strong></header>
       {suggestions.length === 0 ? <div className="review-empty-neutral"><strong>暂时没有稳定偏差</strong><span>达到有效样本数和偏差阈值后才会主动建议。</span></div> : <div className="duration-suggestion-list">{suggestions.map(item => {
         const title = groups.get(item.groupId)?.title ?? item.groupId
         const change = item.suggestedEstimate - item.currentEstimate
         return <article key={item.groupId}>
           <div><strong>{title}</strong><span>当前 {item.currentEstimate} 分钟 · 最近 {item.sampleCount} 个有效样本平均 {Math.round(item.recentAverage)} 分钟</span><small>重复偏差 {Math.round(item.deviationRatio * 100)}% · 建议 {item.suggestedEstimate} 分钟</small><div className="duration-delta-track"><i style={{ width: `${Math.min(100, item.currentEstimate / Math.max(item.currentEstimate, item.suggestedEstimate, 1) * 100)}%` }}/><b style={{ width: `${Math.min(100, item.suggestedEstimate / Math.max(item.currentEstimate, item.suggestedEstimate, 1) * 100)}%` }}/></div><em className={change > 0 ? 'over' : 'under'}>{change > 0 ? `建议增加 ${change} 分钟` : `建议减少 ${Math.abs(change)} 分钟`}</em></div>
-          <div><button className="secondary-button" onClick={() => acceptSuggestion(item)}>查看调整方案</button></div>
+          <div><button className="secondary-button" onClick={() => acceptSuggestion(item)}>预览更新影响</button></div>
           <details><summary>查看样本（{item.samples.length}）</summary><div className="review-sample-grid">{item.samples.map(sample => <div key={sample.assignmentId}><strong>{state.assignments.find(task => task.id === sample.assignmentId)?.title ?? sample.assignmentId}</strong><span>预计 {sample.estimatedMinutes} / 实际 {sample.actualMinutes} 分钟</span></div>)}</div></details>
         </article>
       })}</div>}

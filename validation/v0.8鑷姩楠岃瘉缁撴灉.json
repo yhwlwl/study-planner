@@ -1,0 +1,380 @@
+{
+  "generatedAt": "2026-07-31T06:48:59.103Z",
+  "passed": 62,
+  "total": 62,
+  "failed": [],
+  "checks": [
+    {
+      "group": "版本与迁移",
+      "name": "发布版本为 0.8.5",
+      "pass": true,
+      "evidence": "package.json: 0.8.5"
+    },
+    {
+      "group": "版本与迁移",
+      "name": "状态架构版本已提升（当前为 9）",
+      "pass": true,
+      "evidence": "src/types.ts"
+    },
+    {
+      "group": "版本与迁移",
+      "name": "存在确定性 v0.7→v0.8 迁移",
+      "pass": true,
+      "evidence": "src/lib/seed.ts"
+    },
+    {
+      "group": "版本与迁移",
+      "name": "旧全局目标日期不再出现在当前界面与当前调度计算",
+      "pass": true,
+      "evidence": "仅 seed/types 保留迁移兼容字段"
+    },
+    {
+      "group": "领域模型",
+      "name": "Goal 与三种完成条件",
+      "pass": true,
+      "evidence": "src/types.ts"
+    },
+    {
+      "group": "领域模型",
+      "name": "多目标关联与直接任务关联",
+      "pass": true,
+      "evidence": "src/types.ts"
+    },
+    {
+      "group": "领域模型",
+      "name": "没有独立 Milestone 实体",
+      "pass": true,
+      "evidence": "src 全量扫描"
+    },
+    {
+      "group": "领域模型",
+      "name": "统一 CalendarConstraint 支持范围",
+      "pass": true,
+      "evidence": "types + CalendarConstraintManager"
+    },
+    {
+      "group": "领域模型",
+      "name": "变化事件、方案、计划版本齐全",
+      "pass": true,
+      "evidence": "src/types.ts"
+    },
+    {
+      "group": "创建系统",
+      "name": "单项任务与任务组入口分离",
+      "pass": true,
+      "evidence": "App + dialogs"
+    },
+    {
+      "group": "创建系统",
+      "name": "单项任务支持归组、独立、系统/偏好/锁定日期",
+      "pass": true,
+      "evidence": "SingleTaskDialog"
+    },
+    {
+      "group": "创建系统",
+      "name": "任务创建先准备再预览",
+      "pass": true,
+      "evidence": "AppContext + App"
+    },
+    {
+      "group": "创建系统",
+      "name": "任务组增减保护已完成/有记录/锁定/计时任务",
+      "pass": true,
+      "evidence": "AppContext"
+    },
+    {
+      "group": "目标系统",
+      "name": "目标为顶级导航页",
+      "pass": true,
+      "evidence": "App.tsx"
+    },
+    {
+      "group": "目标系统",
+      "name": "最近相关期限，不按目标数量加权",
+      "pass": true,
+      "evidence": "src/lib/goals.ts"
+    },
+    {
+      "group": "目标系统",
+      "name": "多目标统计去重",
+      "pass": true,
+      "evidence": "goals + stats"
+    },
+    {
+      "group": "目标系统",
+      "name": "目标和任务组自动完成生命周期",
+      "pass": true,
+      "evidence": "src/lib/goals.ts"
+    },
+    {
+      "group": "调度核心",
+      "name": "Insert/Repair/Optimize/Rebuild 共用一个入口",
+      "pass": true,
+      "evidence": "types + planner"
+    },
+    {
+      "group": "调度核心",
+      "name": "过去/今日、计时、锁定、手动意图、容量与上限仍受校验",
+      "pass": true,
+      "evidence": "src/lib/planner.ts"
+    },
+    {
+      "group": "调度核心",
+      "name": "目标最晚日期作为硬约束",
+      "pass": true,
+      "evidence": "src/lib/planner.ts"
+    },
+    {
+      "group": "调度核心",
+      "name": "无合法位置时不强塞",
+      "pass": true,
+      "evidence": "planner + proposal UI"
+    },
+    {
+      "group": "调度核心",
+      "name": "方案计算可取消且不阻塞主线程",
+      "pass": true,
+      "evidence": "Web Worker + cancel"
+    },
+    {
+      "group": "调度核心",
+      "name": "时长证据只建议放宽上限，不自动修改",
+      "pass": true,
+      "evidence": "src/lib/planner.ts"
+    },
+    {
+      "group": "可解释方案",
+      "name": "所有摘要计数可展开到具体项目",
+      "pass": true,
+      "evidence": "ProposalDialog"
+    },
+    {
+      "group": "可解释方案",
+      "name": "任务、日期、负载、目标均有前后对比",
+      "pass": true,
+      "evidence": "ProposalDialog"
+    },
+    {
+      "group": "可解释方案",
+      "name": "解释为什么不选其他日期",
+      "pass": true,
+      "evidence": "proposal + planner"
+    },
+    {
+      "group": "可解释方案",
+      "name": "更多替代方案按结果签名去重",
+      "pass": true,
+      "evidence": "planner + UI"
+    },
+    {
+      "group": "可解释方案",
+      "name": "推荐与备选预先计算但默认只展示推荐",
+      "pass": true,
+      "evidence": "App orchestration + ProposalDialog"
+    },
+    {
+      "group": "可解释方案",
+      "name": "系统将执行的全部变化都经过预览",
+      "pass": true,
+      "evidence": "App + ProposalDialog"
+    },
+    {
+      "group": "可解释方案",
+      "name": "负载增减使用红绿方向提示",
+      "pass": true,
+      "evidence": "ProposalDialog + styles"
+    },
+    {
+      "group": "事件编排",
+      "name": "复盘已选日期只校验不二次重排",
+      "pass": true,
+      "evidence": "Review + policy"
+    },
+    {
+      "group": "事件编排",
+      "name": "合法精确选择在冲突修复中保持固定",
+      "pass": true,
+      "evidence": "App + planner"
+    },
+    {
+      "group": "事件编排",
+      "name": "目标放宽和容量增加默认为保持现状",
+      "pass": true,
+      "evidence": "adjustment policy"
+    },
+    {
+      "group": "复盘与时长",
+      "name": "复盘默认摘要优先，图表按需展开",
+      "pass": true,
+      "evidence": "ReviewDialog"
+    },
+    {
+      "group": "复盘与时长",
+      "name": "最近 10 个有效样本与 IQR 异常值处理",
+      "pass": true,
+      "evidence": "src/lib/planner.ts"
+    },
+    {
+      "group": "复盘与时长",
+      "name": "时长建议先预览且不静默重排",
+      "pass": true,
+      "evidence": "Review + adjustment policy + App"
+    },
+    {
+      "group": "复盘与时长",
+      "name": "复盘包含任务/任务组/日趋势/完成率/误差/组均值图表",
+      "pass": true,
+      "evidence": "ReviewDialog"
+    },
+    {
+      "group": "复盘与时长",
+      "name": "不评价正确率、掌握或学习质量",
+      "pass": true,
+      "evidence": "ReviewDialog"
+    },
+    {
+      "group": "版本与统计",
+      "name": "重大变化创建本地计划版本",
+      "pass": true,
+      "evidence": "AppContext"
+    },
+    {
+      "group": "版本与统计",
+      "name": "恢复前保存当前状态并保留执行记录",
+      "pass": true,
+      "evidence": "src/lib/versions.ts"
+    },
+    {
+      "group": "版本与统计",
+      "name": "云端可移植状态排除大版本历史",
+      "pass": true,
+      "evidence": "state + supabase"
+    },
+    {
+      "group": "账号与数据",
+      "name": "游客修改注册时提供导入/分离选择",
+      "pass": true,
+      "evidence": "App.tsx"
+    },
+    {
+      "group": "账号与数据",
+      "name": "游客、账号命名空间隔离",
+      "pass": true,
+      "evidence": "AppContext"
+    },
+    {
+      "group": "移动端/PWA",
+      "name": "Today 浮动按钮与快捷面板已移除",
+      "pass": true,
+      "evidence": "App + styles"
+    },
+    {
+      "group": "移动端/PWA",
+      "name": "安全区、100dvh、无横向溢出规则",
+      "pass": true,
+      "evidence": "styles.css"
+    },
+    {
+      "group": "移动端/PWA",
+      "name": "月历移动端保留七列",
+      "pass": true,
+      "evidence": "styles.css"
+    },
+    {
+      "group": "移动端/PWA",
+      "name": "复杂预览采用 100dvh 弹性全屏且正文独立滚动",
+      "pass": true,
+      "evidence": "styles.css"
+    },
+    {
+      "group": "移动端/PWA",
+      "name": "选择状态具有明显视觉反馈",
+      "pass": true,
+      "evidence": "dialogs + styles"
+    },
+    {
+      "group": "移动端/PWA",
+      "name": "PWA standalone 配置",
+      "pass": true,
+      "evidence": "vite.config.ts"
+    },
+    {
+      "group": "未来边界",
+      "name": "AI 仅保留解析接口，没有实现功能",
+      "pass": true,
+      "evidence": "src/lib/intent.ts"
+    },
+    {
+      "group": "典型场景",
+      "name": "目标事件日期不再误作调度起点",
+      "pass": true,
+      "evidence": "goal/trip/new task can use current future window"
+    },
+    {
+      "group": "典型场景",
+      "name": "部分目标只约束满足条件所需任务",
+      "pass": true,
+      "evidence": "50% teacher check does not pull the other 50% forward"
+    },
+    {
+      "group": "典型场景",
+      "name": "目标变更事件只纳入条件实际计数任务",
+      "pass": true,
+      "evidence": "partial Goal edits do not nominate the whole linked group for movement"
+    },
+    {
+      "group": "典型场景",
+      "name": "计划太累转化为具体减负结果",
+      "pass": true,
+      "evidence": "AdjustmentIntentDialog + orchestration policy"
+    },
+    {
+      "group": "交互融合",
+      "name": "结束今天与复盘已合并为单一入口",
+      "pass": true,
+      "evidence": "Today + ReviewDialog"
+    },
+    {
+      "group": "交互融合",
+      "name": "完成任务更多按钮使用固定横向图形",
+      "pass": true,
+      "evidence": "TaskCard"
+    },
+    {
+      "group": "交互融合",
+      "name": "桌面日期与操作不再被单字拆行",
+      "pass": true,
+      "evidence": "styles.css"
+    },
+    {
+      "group": "交互融合",
+      "name": "复盘具有视觉摘要、任务决策卡与按需图表",
+      "pass": true,
+      "evidence": "ReviewDialog + styles"
+    },
+    {
+      "group": "自动验证",
+      "name": "严格 TypeScript 静态检查",
+      "pass": true,
+      "evidence": "通过"
+    },
+    {
+      "group": "自动验证",
+      "name": "20目标/50组/500任务/30约束/10版本规模验证",
+      "pass": true,
+      "evidence": "通过，详见 validation/500任务规模验证.json"
+    },
+    {
+      "group": "自动验证",
+      "name": "复盘精确校验与冲突项隔离运行验证",
+      "pass": true,
+      "evidence": "通过，合法选择在冲突修复中保持不变"
+    },
+    {
+      "group": "自动验证",
+      "name": "核心场景与三大系统架构验证",
+      "pass": true,
+      "evidence": "全部通过，详见 validation/v0.8.5场景架构验证.md"
+    }
+  ]
+}

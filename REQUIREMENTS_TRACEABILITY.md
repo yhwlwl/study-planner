@@ -1,4 +1,4 @@
-# Study Planner v0.8.4 需求追踪表
+# Study Planner v0.8.5 需求追踪表
 
 本表以最终冻结的 v0.8 架构与验收规格为唯一需求来源。状态含义：
 
@@ -79,7 +79,7 @@
 | 需求 | 状态 | 主要实现 |
 |---|---:|---|
 | Insert/Repair/Optimize/Rebuild 共用核心 | ✅ | `generateSchedulingProposals` |
-| 变化原因、动作范围、偏好分离 | ✅ | `PlanChangeEvent` + action + preference |
+| 变化原因、处理模式、动作范围、偏好分离 | ✅ | `adjustment.ts` + `PlanChangeEvent` + action + preference |
 | 过去冻结、今日半冻结 | ✅ | v0.7 约束核心保留 |
 | 今日实际/推定用时消耗容量 | ✅ | actual workload snapshot |
 | 完成任务继续计入每日上限 | ✅ | day stats |
@@ -102,7 +102,7 @@
 
 | 需求 | 状态 | 主要实现 |
 |---|---:|---|
-| 所有计数可展开到具体项目 | ✅ | ProposalDialog details |
+| 所有计数可逐层展开到具体项目和原因 | ✅ | ProposalDialog 渐进式详情 |
 | 任务前后日期、负载、原因、目标、手动影响 | ✅ | TaskMovement cards |
 | 日期前后总分钟和任务集合 | ✅ | DateLoadChange |
 | 目标前后进度、预计完成和风险 | ✅ | GoalImpact |
@@ -112,7 +112,7 @@
 | 小/中/大影响等级 | ✅ | proposal metrics |
 | 稳定度 | ✅ | stability score |
 | 更多方案真正不同并去重 | ✅ | distinct signature |
-| 手机端垂直前后布局、完整换行 | ✅ | CSS |
+| 手机端垂直前后布局、完整换行、无大块空白 | ✅ | 100dvh 弹性全屏 CSS |
 
 ## 七、复盘与自适应时长
 
@@ -184,3 +184,18 @@
 | 高级重复任务例外模型 | ⛔ 延期 |
 | 云端完整重型版本历史 | ⛔ 延期 |
 | 正式 Cancelled 生命周期 | ⛔ 延期 |
+
+## 十、v0.8.5 新增行为追踪
+
+| 要求 | 状态 | 主要实现 |
+|---|---:|---|
+| 复盘已选日期不再二次重排 | ✅ | `previewPreparedChange`、fixedAssignmentIds、ReviewDialog |
+| 合法选择固定，只处理冲突项 | ✅ | planner candidate filtering + 运行级测试 |
+| 目标放宽默认保持当前排期 | ✅ | `adjustmentPolicyForEvent` |
+| 推荐方案优先，备选由用户比较 | ✅ | App proposal session + ProposalDialog |
+| 系统智能改动全部先预览 | ✅ | exact/recommended/optional/exploratory 全部进入 proposal preview |
+| 5 个问题先显示计数，再展开五项 | ✅ | collapsible summary/detail hierarchy |
+| 日期负载增减红绿提示 | ✅ | load-delta-positive/negative/neutral |
+| 选中状态显著可辨 | ✅ | adjustment-choice selected、proposal selected |
+| 手机复杂弹窗消除空白 | ✅ | modal-mobile-fullscreen flex + independent body scroll |
+| 手机月历完整七列 | ✅ | mobile calendar grid override |

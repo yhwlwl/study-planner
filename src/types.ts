@@ -29,6 +29,16 @@ export type SchedulingIntent = 'system' | 'prefer-date' | 'lock-date'
 export type SchedulingAction = 'insert' | 'repair' | 'optimize' | 'rebuild'
 export type SchedulingPreference = ReplanStrategy
 export type ImpactLevel = 'small' | 'medium' | 'large'
+export type AdjustmentResolutionMode = 'validate-and-commit' | 'recommended-preview' | 'optional-optimization' | 'exploratory-optimization'
+
+export interface PlanAdjustmentPolicy {
+  mode: AdjustmentResolutionMode
+  primaryPreference: SchedulingPreference
+  alternativePreferences: SchedulingPreference[]
+  allowKeepPrepared: boolean
+  directPreviewLabel: string
+  explanation: string
+}
 export type CreationSource = 'user' | 'template' | 'import' | 'system' | 'migration'
 
 export interface DurationSettings {
@@ -302,6 +312,8 @@ export interface DateLoadChange {
   date: ISODate
   beforeMinutes: number
   afterMinutes: number
+  beforeCapacity?: number
+  afterCapacity?: number
   beforeTaskIds: string[]
   afterTaskIds: string[]
 }

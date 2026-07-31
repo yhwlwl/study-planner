@@ -500,6 +500,11 @@ function frozenDates(request: ReplanRequest) {
   return new Set(count ? dateRange(start, shiftDate(start, count - 1)) : [])
 }
 
+function fixedAssignmentIds(request: ReplanRequest) {
+  const raw = request.event?.metadata?.fixedAssignmentIds
+  return new Set(Array.isArray(raw) ? raw.filter((item): item is string => typeof item === 'string') : [])
+}
+
 function movableRank(state: AppState, assignments: Assignment[]) {
   const groups = groupMap(state)
   return [...assignments].sort((a, b) => {
@@ -522,12 +527,13 @@ function identifyRepairCandidates(state: AppState, request: ReplanRequest) {
   const candidateIds = new Set<string>()
   const softManualIds = new Set<string>()
   const hardRequired = new Set<string>()
+  const fixedIds = fixedAssignmentIds(request)
   const issues: string[] = []
   const start = before(request.fromDate, todayISO()) ? todayISO() : request.fromDate
   const stats = statsMap(state)
 
   const mark = (assignment: Assignment, hard: boolean, message?: string) => {
-    if (assignment.locked || assignment.status === 'done' || state.timer.assignmentId === assignment.id) return
+    if (fixedIds.has(assignment.id) || assignment.locked || assignment.status === 'done' || state.timer.assignmentId === assignment.id) return
     if (assignment.intentStrength === 'manual') softManualIds.add(assignment.id)
     else candidateIds.add(assignment.id)
     if (hard) hardRequired.add(assignment.id)
@@ -688,6 +694,7 @@ function supportCandidateIds(state: AppState, request: ReplanRequest, alreadySel
 
   const groups = groupMap(state)
   const frozen = frozenDates(request)
+  const fixedIds = fixedAssignmentIds(request)
   const radius = Math.max(1, request.localRadius ?? state.settings.localRepairRadius)
   const anchors = new Set<string>(request.event.affectedDates)
   for (const id of request.event.affectedAssignmentIds) {
@@ -701,7 +708,7 @@ function supportCandidateIds(state: AppState, request: ReplanRequest, alreadySel
   const affectedGoals = new Set(request.event.affectedGoalIds)
   const candidates = state.assignments.filter(item => {
     const group = groups.get(item.groupId)
-    if (!group || group.recurring || !item.scheduledDate || alreadySelected.has(item.id)) return false
+    if (!group || group.recurring || !item.scheduledDate || alreadySelected.has(item.id) || fixedIds.has(item.id)) return false
     if (item.status !== 'todo' || item.progress > 0 || item.actualMinutes > 0) return false
     if (item.locked || item.intentStrength === 'manual' || state.timer.assignmentId === item.id) return false
     if (before(item.scheduledDate, planningStart(request)) || frozen.has(item.scheduledDate)) return false
@@ -720,11 +727,12 @@ function supportCandidateIds(state: AppState, request: ReplanRequest, alreadySel
 function assignmentCandidates(state: AppState, request: ReplanRequest, repair: ReturnType<typeof identifyRepairCandidates>) {
   const groups = groupMap(state)
   const frozen = frozenDates(request)
+  const fixedIds = fixedAssignmentIds(request)
   const start = planningStart(request)
   const ids = new Set<string>()
   for (const assignment of state.assignments) {
     const group = groups.get(assignment.groupId)
-    if (!group || group.recurring || assignment.status === 'done' || assignment.locked || state.timer.assignmentId === assignment.id) continue
+    if (!group || group.recurring || fixedIds.has(assignment.id) || assignment.status === 'done' || assignment.locked || state.timer.assignmentId === assignment.id) continue
     const date = assignment.scheduledDate
     if (request.affectedAssignmentIds?.includes(assignment.id)) {
       ids.add(assignment.id)
@@ -1412,8 +1420,9 @@ function proposalMovements(before: AppState, afterState: AppState, scenario: Rep
   })
 }
 
-function proposalDateChanges(before: AppState, afterState: AppState, scenario: ReplanResult): DateLoadChange[] {
+function proposalDateChanges(before: AppState, afterState: AppState, scenario: ReplanResult, event: PlanChangeEvent): DateLoadChange[] {
   const dates = new Set<string>([
+    ...event.affectedDates,
     ...scenario.loadChanges.map(item => item.date),
     ...scenario.moves.flatMap(item => [item.from, item.to].filter((date): date is string => Boolean(date))),
   ])
@@ -1421,9 +1430,11 @@ function proposalDateChanges(before: AppState, afterState: AppState, scenario: R
     date,
     beforeMinutes: planningDayLoad(before, date),
     afterMinutes: planningDayLoad(afterState, date),
+    beforeCapacity: getCapacity(before, date),
+    afterCapacity: getCapacity(afterState, date),
     beforeTaskIds: before.assignments.filter(item => item.scheduledDate === date).map(item => item.id),
     afterTaskIds: afterState.assignments.filter(item => item.scheduledDate === date).map(item => item.id),
-  })).filter(item => item.beforeMinutes !== item.afterMinutes || stableSignature(item.beforeTaskIds) !== stableSignature(item.afterTaskIds))
+  })).filter(item => item.beforeMinutes !== item.afterMinutes || item.beforeCapacity !== item.afterCapacity || stableSignature(item.beforeTaskIds) !== stableSignature(item.afterTaskIds))
 }
 
 function proposalGoalImpacts(before: AppState, afterState: AppState): GoalImpact[] {
@@ -1644,7 +1655,7 @@ function proposalFromScenario(
   const afterState = scenario.nextState
   const issues = proposalIssuesFromScenario(event, bundleIssues, scenario)
   const movements = proposalMovements(baseline, afterState, scenario)
-  const dateChanges = proposalDateChanges(baseline, afterState, scenario)
+  const dateChanges = proposalDateChanges(baseline, afterState, scenario, event)
   const goalImpacts = proposalGoalImpacts(baseline, afterState)
   for (const impact of goalImpacts.filter(item => (!item.latestRiskBefore && item.latestRiskAfter) || (!item.desiredRiskBefore && item.desiredRiskAfter))) {
     const goal = afterState.goals.find(item => item.id === impact.goalId) ?? baseline.goals.find(item => item.id === impact.goalId)
@@ -1745,6 +1756,160 @@ function proposalFromScenario(
     distinctSignature: signature,
     infeasible: infeasibleReasons.length > 0,
     infeasibleReason: infeasibleReasons.join(' '),
+  }
+}
+
+
+function directIssueType(key: string): ProposalIssue['type'] {
+  if (key === 'capacity' || key === 'today-extra' || key === 'today-closed' || key === 'travel-day' || key === 'buffer-high-intensity' || key === 'buffer-long-task') return 'capacity'
+  if (key.startsWith('group:')) return 'group-daily-max'
+  if (key.startsWith('activity:')) return 'activity-daily-max'
+  if (key === 'long') return 'long-task-max'
+  if (key === 'high-intensity') return 'high-intensity-max'
+  if (key === 'date-protection' || key === 'protected-buffer') return 'date-protection'
+  if (key === 'past' || key === 'plan-range') return 'past-freeze'
+  if (key === 'goal-latest') return 'goal-risk'
+  return 'unscheduled'
+}
+
+/**
+ * 对“用户已经明确指定结果”或“默认保持日期”的变化生成精确预览。
+ * 此函数不重新选择日期，只检查准备态相对当前正式计划新增了哪些硬冲突。
+ */
+export function previewPreparedChange(
+  baseline: AppState,
+  preparedState: AppState,
+  event: PlanChangeEvent,
+  title = '按当前选择执行',
+): SchedulingProposal {
+  const beforeById = new Map(baseline.assignments.map(item => [item.id, item]))
+  const afterById = new Map(preparedState.assignments.map(item => [item.id, item]))
+  const groups = groupMap(preparedState)
+  const changed = [...new Set([...beforeById.keys(), ...afterById.keys()])].flatMap(id => {
+    const oldItem = beforeById.get(id)
+    const newItem = afterById.get(id)
+    if (!oldItem || !newItem || oldItem.scheduledDate === newItem.scheduledDate) return []
+    return [{ oldItem, newItem }]
+  })
+  const movements: TaskMovement[] = changed.map(({ oldItem, newItem }) => ({
+    assignmentId: newItem.id,
+    fromDate: oldItem.scheduledDate,
+    toDate: newItem.scheduledDate,
+    reason: event.type === 'execution-difference'
+      ? '按用户在复盘中逐项选择的日期执行；系统只负责完整校验。'
+      : event.type === 'bulk-move'
+        ? '按用户指定的批量目标日期执行；系统只负责完整校验。'
+        : '保持当前准备态中的明确日期变化。',
+    beforeLoad: oldItem.scheduledDate ? planningDayLoad(baseline, oldItem.scheduledDate) : 0,
+    afterLoad: newItem.scheduledDate ? planningDayLoad(preparedState, newItem.scheduledDate) : 0,
+    goalImpact: goalNamesForAssignment(preparedState, newItem).length
+      ? `关联目标：${goalNamesForAssignment(preparedState, newItem).join('、')}`
+      : '不直接关联目标',
+    manualIntentImpact: oldItem.locked ? 'locked-blocked'
+      : oldItem.intentStrength === 'manual' && oldItem.scheduledDate !== newItem.scheduledDate ? 'moved-manual'
+        : oldItem.intentStrength === 'manual' ? 'preserved' : 'none',
+    rejectedAlternatives: [],
+  }))
+  const changedDates = new Set<string>(event.affectedDates)
+  for (const move of movements) {
+    if (move.fromDate) changedDates.add(move.fromDate)
+    if (move.toDate) changedDates.add(move.toDate)
+  }
+  const dateChanges: DateLoadChange[] = [...changedDates].sort().map(date => ({
+    date,
+    beforeMinutes: planningDayLoad(baseline, date),
+    afterMinutes: planningDayLoad(preparedState, date),
+    beforeCapacity: getCapacity(baseline, date),
+    afterCapacity: getCapacity(preparedState, date),
+    beforeTaskIds: baseline.assignments.filter(item => item.scheduledDate === date).map(item => item.id),
+    afterTaskIds: preparedState.assignments.filter(item => item.scheduledDate === date).map(item => item.id),
+  })).filter(item => item.beforeMinutes !== item.afterMinutes || item.beforeCapacity !== item.afterCapacity || stableSignature(item.beforeTaskIds) !== stableSignature(item.afterTaskIds))
+
+  const issuesByKey = new Map<string, ProposalIssue>()
+  const addIssue = (signature: string, issue: ProposalIssue) => {
+    const existing = issuesByKey.get(signature)
+    if (!existing) { issuesByKey.set(signature, issue); return }
+    existing.assignmentIds = Array.from(new Set([...existing.assignmentIds, ...issue.assignmentIds]))
+  }
+  const today = todayISO()
+  const request: ReplanRequest = {
+    mode: 'repair', fromDate: today,
+    todayExtraMinutes: Number(event.metadata?.todayExtraMinutes ?? 0),
+    allowBufferUseDates: [], limitOverrides: grandfatheredLimitOverrides(baseline), event,
+  }
+  for (const { oldItem, newItem } of changed) {
+    const assignmentIds = [newItem.id]
+    if (oldItem.status === 'done') addIssue(`done:${newItem.id}`, {
+      id: uid('issue'), type: 'task-lock', title: '已完成任务不能改期', detail: `“${oldItem.title}”已经完成，计划调整不能改写其日期。`,
+      assignmentIds, consequence: '会破坏真实执行历史。', resolution: '保持原日期；如需修正记录，应从任务详情单独处理。',
+    })
+    if (oldItem.locked) addIssue(`locked:${newItem.id}`, {
+      id: uid('issue'), type: 'task-lock', title: '任务已锁定', detail: `“${oldItem.title}”已锁定，不能移动到 ${newItem.scheduledDate ?? '未安排'}。`,
+      assignmentIds, consequence: '会违背用户明确锁定。', resolution: '保持原日期，或先由用户主动解除锁定。',
+    })
+    if (baseline.timer.assignmentId === newItem.id) addIssue(`timer:${newItem.id}`, {
+      id: uid('issue'), type: 'active-timer', title: '正在计时的任务不能移动', detail: `“${oldItem.title}”正在计时。`,
+      assignmentIds, consequence: '会破坏当前执行上下文。', resolution: '结束或暂停计时后再调整。',
+    })
+    if ((oldItem.scheduledDate && before(oldItem.scheduledDate, today)) || (newItem.scheduledDate && before(newItem.scheduledDate, today))) addIssue(`past:${newItem.id}`, {
+      id: uid('issue'), type: 'past-freeze', title: '过去日期已冻结', detail: `“${oldItem.title}”的变化涉及过去日期。`,
+      assignmentIds, consequence: '会改写历史计划。', resolution: '保留过去日期，只调整今天之后的任务。',
+    })
+    if (!newItem.scheduledDate) continue
+    const group = groups.get(newItem.groupId)
+    if (!group) continue
+    const stats = statsMap(preparedState, new Set([newItem.id]))
+    for (const violation of validatePlacement(preparedState, stats, newItem, group, newItem.scheduledDate, request, oldItem.scheduledDate)) {
+      if (!violation.hard) continue
+      const type = directIssueType(violation.key)
+      const signature = `${newItem.scheduledDate}:${violation.key}`
+      addIssue(signature, {
+        id: uid('issue'), type, title: violation.label,
+        detail: `${newItem.scheduledDate}：调整后 ${Math.round(violation.current)}，允许 ${Math.round(violation.limit)}。`,
+        date: newItem.scheduledDate, groupId: violation.key.startsWith('group:') ? newItem.groupId : undefined,
+        currentValue: String(Math.round(violation.current)), allowedValue: String(Math.round(violation.limit)), assignmentIds,
+        consequence: '按当前选择直接执行会产生新的硬冲突。',
+        resolution: '只修改这项冲突选择，或让系统为冲突项生成替代日期；其他合法选择保持不变。',
+      })
+    }
+  }
+
+  // 预计时长、容量和规则变化可能没有移动日期，但仍可能让现有日期新增硬冲突。
+  const fromDate = proposalPlanningStart(preparedState, event)
+  const baselineDangers = new Set(analyzePlan(baseline, fromDate).filter(item => item.level === 'danger').map(item => `${item.date ?? ''}:${item.message}`))
+  const specificallyValidatedDates = new Set([...issuesByKey.values()].flatMap(item => item.date ? [item.date] : []))
+  for (const danger of analyzePlan(preparedState, fromDate).filter(item => item.level === 'danger')) {
+    const signature = `${danger.date ?? ''}:${danger.message}`
+    if (baselineDangers.has(signature) || (danger.date && specificallyValidatedDates.has(danger.date))) continue
+    addIssue(`analysis:${signature}`, {
+      id: uid('issue'), type: 'capacity', title: '变化后出现新的硬冲突', detail: danger.message, date: danger.date,
+      assignmentIds: danger.date ? preparedState.assignments.filter(item => item.scheduledDate === danger.date && item.status !== 'done').map(item => item.id) : event.affectedAssignmentIds,
+      consequence: '当前日期安排不再完全可执行。', resolution: '保持基础变化，并只对新增冲突生成最小修复方案。',
+    })
+  }
+
+  const issues = [...issuesByKey.values()]
+  const goalImpacts = proposalGoalImpacts(baseline, preparedState)
+  const nonDateChanges = structuralChanges(baseline, preparedState)
+  const metrics = proposalMetrics(baseline, preparedState, event, issues, movements, dateChanges, goalImpacts)
+  const signature = stableSignature({
+    direct: true,
+    moves: movements.map(item => [item.assignmentId, item.toDate]),
+    dates: dateChanges.map(item => [item.date, item.afterMinutes]),
+    structural: nonDateChanges.map(item => [item.entityType, item.entityId, item.changeType, item.fields]),
+    issues: issues.map(item => [item.type, item.date, item.assignmentIds]),
+  })
+  return {
+    id: uid('proposal'), eventId: event.id, title,
+    description: issues.length
+      ? `已按用户明确选择生成精确预览；发现 ${issues.length} 个需要先处理的问题，系统没有重新决定其他合法项。`
+      : '已按用户明确选择完成全部约束校验；应用后只执行预览中列出的变化。',
+    action: event.action, preference: 'preserve', generatedAt: new Date().toISOString(),
+    stateBefore: portableState(baseline), stateAfter: portableState(preparedState),
+    issues, movements, dateChanges, goalImpacts, structuralChanges: nonDateChanges,
+    exceptions: [], excludedDates: [], metrics, distinctSignature: signature,
+    infeasible: issues.length > 0,
+    infeasibleReason: issues.length ? `当前选择中有 ${issues.length} 个硬冲突；合法项不会被重新重排。` : undefined,
   }
 }
 
@@ -1882,6 +2047,8 @@ function dateChangesFromStates(beforeState: AppState, afterState: AppState, move
     date,
     beforeMinutes: planningDayLoad(beforeState, date),
     afterMinutes: planningDayLoad(afterState, date),
+    beforeCapacity: getCapacity(beforeState, date),
+    afterCapacity: getCapacity(afterState, date),
     beforeTaskIds: beforeState.assignments.filter(item => item.scheduledDate === date).map(item => item.id),
     afterTaskIds: afterState.assignments.filter(item => item.scheduledDate === date).map(item => item.id),
   })).filter(item => item.beforeMinutes !== item.afterMinutes || stableSignature(item.beforeTaskIds) !== stableSignature(item.afterTaskIds))
