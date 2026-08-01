@@ -17,7 +17,7 @@ export function Drawer({
   wide?: boolean
 }) {
   if (!open) return null
-  return <div className="drawer-backdrop" onMouseDown={onClose}>
+  return <div className="drawer-backdrop">
     <aside className={`side-drawer ${wide ? 'side-drawer-wide' : ''}`} onMouseDown={event => event.stopPropagation()}>
       <header className="drawer-header">
         <div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>

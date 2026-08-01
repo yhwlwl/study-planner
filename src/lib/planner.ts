@@ -1319,6 +1319,32 @@ function worsenedHardConstraintFacts(baseline: AppState, candidate: AppState, fr
   })
 }
 
+function hardConstraintIssueDelta(baseline: AppState, candidate: AppState, fromDate: string) {
+  const before = new Map(hardConstraintFacts(baseline, fromDate).map(item => [item.id, item]))
+  const after = new Map(hardConstraintFacts(candidate, fromDate).map(item => [item.id, item]))
+  let resolvedPreExistingCount = 0
+  let improvedPreExistingCount = 0
+  let remainingPreExistingCount = 0
+  for (const [id, oldFact] of before) {
+    const nextFact = after.get(id)
+    if (!nextFact) {
+      resolvedPreExistingCount += 1
+      continue
+    }
+    remainingPreExistingCount += 1
+    const oldExcess = Math.max(0, oldFact.current - oldFact.limit)
+    const nextExcess = Math.max(0, nextFact.current - nextFact.limit)
+    if (nextExcess + 1e-6 < oldExcess) improvedPreExistingCount += 1
+  }
+  return {
+    preExistingCount: before.size,
+    remainingPreExistingCount,
+    resolvedPreExistingCount,
+    improvedPreExistingCount,
+    newOrWorsenedCount: worsenedHardConstraintFacts(baseline, candidate, fromDate).length,
+  }
+}
+
 export function analyzePlan(state: AppState, fromDate = state.settings.startDate): PlanIssue[] {
   const groups = groupMap(state)
   const stats = statsMap(state)
@@ -2087,6 +2113,7 @@ export function previewPreparedChange(
   }
 
   const issues = [...issuesByKey.values()]
+  const issueDelta = hardConstraintIssueDelta(baseline, analysisPreparedState, fromDate)
   const effectiveAcceptedExceptions = mergeConstraintExceptions(mergedAcceptedExceptions.filter(item => exceptionUsedByResult(preparedState, item, movements)))
   const goalImpacts = proposalGoalImpacts(baseline, preparedState)
   const nonDateChanges = structuralChanges(baseline, preparedState)
@@ -2107,7 +2134,7 @@ export function previewPreparedChange(
     action: event.action, preference: 'preserve', generatedAt: new Date().toISOString(),
     stateBefore: portableState(baseline), stateAfter: portableState(preparedState),
     issues, movements, dateChanges, goalImpacts, structuralChanges: nonDateChanges,
-    exceptions: effectiveAcceptedExceptions, excludedDates: [], metrics, distinctSignature: signature,
+    exceptions: effectiveAcceptedExceptions, excludedDates: [], metrics, issueDelta, distinctSignature: signature,
     infeasible: issues.length > 0,
     infeasibleReason: issues.length ? `当前选择中有 ${issues.length} 个硬冲突；合法项不会被重新重排。` : undefined,
   }

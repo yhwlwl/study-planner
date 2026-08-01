@@ -67,13 +67,15 @@ export function TaskGroupDialog({ open, onClose, state, initial, onCreate, onEdi
       <label className="field span-2"><span>任务组名称</span><input autoFocus value={title} onChange={event => setTitle(event.target.value)} placeholder="例如：化学预习" /></label>
       <label className="field"><span>科目／类别</span><select value={subject} onChange={event => { setSubject(event.target.value); setCustomSubject('') }}>{subjects.map(item => <option key={item}>{item}</option>)}</select></label>
       <label className="field"><span>新建自定义类别（可选）</span><input value={customSubject} onChange={event => setCustomSubject(event.target.value)} placeholder="例如：竞赛研究" /></label>
-      <label className="field"><span>优先级</span><select value={priority} onChange={event => setPriority(Number(event.target.value) as Priority)}>{priorities.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
+      <label className="field"><span>优先级</span><select value={priority} onChange={event => setPriority(Number(event.target.value) as Priority)}>{priorities.map(item => <option key={item} value={item}>{item === 5 ? '核心' : item === 3 ? '高' : item === 2 ? '中' : item === 1 ? '低' : '可选'}</option>)}</select></label>
       <label className="field"><span>数量</span><NumericInput min={1} max={999} value={quantity} onValueChange={setQuantity}/></label>
       <label className="field"><span>单项预计（分钟）</span><NumericInput min={1} max={1440} value={minutes} onValueChange={setMinutes}/></label>
-      <label className="field"><span>每日最多数量</span><NumericInput min={1} max={99} value={dailyMax} placeholder="使用活动类型默认上限" onValueChange={setDailyMax} onEmpty={() => setDailyMax(undefined)}/></label>
-      <label className="field span-2"><span>任务活动类型</span><select value={activityType} onChange={event => setActivityType(event.target.value)}>{activityOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select><small>类型上限由同一个约束核心校验；单次放宽必须在方案中明确接受。</small></label>
-      <label className="field checkbox-field"><input type="checkbox" checked={highIntensity} onChange={event => setHighIntensity(event.target.checked)}/><span>高强度任务（默认每天最多2项）</span></label>
-      <label className="field checkbox-field"><input type="checkbox" checked={countInStats} onChange={event => setCountInStats(event.target.checked)}/><span>计入计划与统计时间</span></label>
+      <details className="form-advanced span-2"><summary>高级规则</summary><div className="form-grid">
+        <label className="field"><span>每日最多数量</span><NumericInput min={1} max={99} value={dailyMax} placeholder="使用活动类型默认上限" onValueChange={setDailyMax} onEmpty={() => setDailyMax(undefined)}/></label>
+        <label className="field"><span>任务活动类型</span><select value={activityType} onChange={event => setActivityType(event.target.value)}>{activityOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select><small>类型上限由同一个约束核心校验。</small></label>
+        <label className="field checkbox-field"><input type="checkbox" checked={highIntensity} onChange={event => setHighIntensity(event.target.checked)}/><span>高强度任务（默认每天最多2项）</span></label>
+        <label className="field checkbox-field"><input type="checkbox" checked={countInStats} onChange={event => setCountInStats(event.target.checked)}/><span>计入计划与统计时间</span></label>
+      </div></details>
       {becomesMultiItem && <fieldset className="field span-2 numbering-choice"><legend>这个任务组将首次从 1 项扩展为多项</legend>
         <label><input type="radio" name="group-edit-numbering" checked={numberingChoice === 'preserve'} onChange={() => setNumberingChoice('preserve')}/><span><strong>保留原任务名称</strong><small>原任务会标记为自定义标题，新增任务按后续序号命名。</small></span></label>
         <label><input type="radio" name="group-edit-numbering" checked={numberingChoice === 'number-all'} onChange={() => setNumberingChoice('number-all')}/><span><strong>统一按当前顺序编号</strong><small>只修改非自定义标题，下一步会完整预览。</small></span></label>

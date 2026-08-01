@@ -1,7 +1,7 @@
 {
   "name": "study-planner",
   "private": true,
-  "version": "0.8.8",
+  "version": "0.8.10",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,9 +10,10 @@
     "preview": "vite preview",
     "test:scale": "node scripts/performance-v08.mjs",
     "validate:v08": "node scripts/validate-v08.mjs",
-    "test:scenarios": "node scripts/scenario-v088.mjs",
-    "test:adjustment": "node scripts/runtime-adjustment-v088.mjs",
-    "test:ui": "node scripts/ui-audit-v088.mjs"
+    "test:scenarios": "node scripts/scenario-v0810.mjs",
+    "test:adjustment": "node scripts/runtime-adjustment-v0810.mjs",
+    "test:ui": "node scripts/ui-audit-v0810.mjs",
+    "test:efficiency": "node scripts/user-efficiency-v0810.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.52.1",

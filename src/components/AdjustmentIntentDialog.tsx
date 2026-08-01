@@ -53,7 +53,8 @@ export function AdjustmentIntentDialog({ open, state, initialDate, initialReason
     setCustomMinutes(30)
   }, [open, initialReason, initialDate])
   const copy = reasonCopy[reason]
-  const todayExtraMinutes = todayMode === '30' ? 30 : todayMode === '60' ? 60 : todayMode === 'custom' ? customMinutes : 0
+  const showTodayCapacity = (initialDate ?? todayISO()) === todayISO() && (reason === 'current-conflicts' || reason === 'future-replan')
+  const todayExtraMinutes = showTodayCapacity ? (todayMode === '30' ? 30 : todayMode === '60' ? 60 : todayMode === 'custom' ? customMinutes : 0) : 0
   const selectedPreference = reason === 'too-tiring' ? loadOutcomes[loadOutcome].preference : reason === 'future-replan' ? replanOutcomes[replanOutcome].preference : 'preserve'
   const preferenceOrder = useMemo(() => [selectedPreference, ...(['preserve', 'balanced', 'goal', 'rest'] as SchedulingPreference[]).filter(item => item !== selectedPreference)], [selectedPreference])
   const outcomeLabel = reason === 'too-tiring' ? loadOutcomes[loadOutcome].title : reason === 'future-replan' ? replanOutcomes[replanOutcome].title : undefined
@@ -105,7 +106,7 @@ export function AdjustmentIntentDialog({ open, state, initialDate, initialReason
         </main>
 
         <aside className="adjustment-sidebar">
-          <section className="adjustment-section adjustment-today-section">
+          {showTodayCapacity ? <section className="adjustment-section adjustment-today-section">
             <header><div><strong>今天还能接收多少新任务？</strong><span>只有你明确开放的分钟数可接收未来任务。</span></div></header>
             <div className="adjustment-today-control">
               <button type="button" className={todayMode === 'none' ? 'active' : ''} onClick={() => setTodayMode('none')}><strong>不再新增</strong><span>今天保持现状</span></button>
@@ -114,7 +115,7 @@ export function AdjustmentIntentDialog({ open, state, initialDate, initialReason
               <button type="button" className={todayMode === 'custom' ? 'active' : ''} onClick={() => setTodayMode('custom')}><strong>自定义</strong><span>精确设置分钟</span></button>
             </div>
             {todayMode === 'custom' && <label className="field compact-field"><span>额外分钟</span><NumericInput min={0} max={720} value={customMinutes} onValueChange={setCustomMinutes}/></label>}
-          </section>
+          </section> : <div className="adjustment-context-note"><strong>本次不需要重新询问今天容量</strong><span>{reason === 'too-tiring' ? '减负只调整未来负载，不会向今天新增任务。' : reason === 'execution-difference' ? '复盘中的日期决定已经由用户逐项给出。' : '当前变化不涉及向今天接收新任务。'}</span></div>}
           <div className="adjustment-guarantees"><strong>系统始终保护</strong><span>过去日期、已完成任务、正在计时任务、锁定任务、目标最晚日期和受保护日期。手动安排不是锁定，但会被高权重保留。</span></div>
         </aside>
       </div>

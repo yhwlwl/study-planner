@@ -43,6 +43,8 @@ interface AppContextValue {
   editTaskGroup: (group: TaskGroup) => void
   deleteTaskGroup: (id: string) => void
   removeAssignment: (id: string) => void
+  prepareTaskGroupDelete: (id: string) => PrepareStateResult
+  prepareAssignmentDelete: (id: string) => PrepareStateResult
   prepareAssignmentGroupChange: (id: string, groupId: string, options: { adoptDefaultDuration: boolean; numberingChoice: 'preserve' | 'number-all' }) => PrepareStateResult
   prepareSingleAssignment: (draft: NewTaskDraft) => CreateResult
   prepareTaskGroup: (draft: TaskGroupDraft) => CreateResult
@@ -362,6 +364,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }), [commit])
 
+  const prepareTaskGroupDelete = useCallback((id: string): PrepareStateResult => {
+    const before = stateRef.current
+    const next = cloneActiveState(before)
+    const group = next.taskGroups.find(item => item.id === id)
+    if (!group) throw new Error('任务组不存在，无法生成删除预览。')
+    const affected = next.assignments.filter(item => item.groupId === id)
+    const affectedGoalIds = next.goals
+      .filter(goal => goal.linkedTaskGroupIds.includes(id) || goal.completionConditions.some(condition => condition.groupId === id))
+      .map(goal => goal.id)
+    next.taskGroups = next.taskGroups.filter(item => item.id !== id)
+    next.assignments = next.assignments.filter(item => item.groupId !== id)
+    next.goals = next.goals.map(goal => ({
+      ...goal,
+      linkedTaskGroupIds: goal.linkedTaskGroupIds.filter(groupId => groupId !== id),
+      completionConditions: goal.completionConditions.filter(condition => condition.groupId !== id),
+      linkedAssignmentIds: goal.linkedAssignmentIds.filter(assignmentId => !affected.some(item => item.id === assignmentId)),
+      updatedAt: nowISO(),
+    }))
+    const event = planEvent({
+      type: 'group-deletion', action: 'repair', title: `删除任务组：${group.title}`,
+      description: `第一方案只删除该任务组及其 ${affected.length} 项任务，并同步移除相关目标引用；不会移动其他任务，也不会顺便修复计划原有问题。`,
+      affectedGoalIds, affectedGroupIds: [id], affectedAssignmentIds: affected.map(item => item.id),
+      affectedDates: [...new Set(affected.map(item => item.scheduledDate).filter((date): date is string => Boolean(date)))],
+      metadata: {
+        explicitLocalOperation: true,
+        operationScope: 'requested-change-only',
+        requestedChangeLabel: `仅删除任务组“${group.title}”`,
+        requestedChangeKind: 'group-deletion',
+      },
+    })
+    next.changeEvents = [...next.changeEvents, event].slice(-100)
+    next.updatedAt = nowISO()
+    return { state: updateGoalAndGroupLifecycle(next), event }
+  }, [])
+
   const deleteTaskGroup = useCallback((id: string) => setState(previous => {
     const group = previous.taskGroups.find(item => item.id === id)
     if (!group) return previous
@@ -378,6 +415,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (namespaceRef.current === 'guest') next.guestModified = true
     return updateGoalAndGroupLifecycle(next)
   }), [])
+
+  const prepareAssignmentDelete = useCallback((id: string): PrepareStateResult => {
+    const before = stateRef.current
+    const next = cloneActiveState(before)
+    const target = next.assignments.find(item => item.id === id)
+    if (!target) throw new Error('任务不存在，无法生成删除预览。')
+    const affectedGoalIds = next.goals
+      .filter(goal => goal.linkedAssignmentIds.includes(id) || goal.linkedTaskGroupIds.includes(target.groupId) || goal.completionConditions.some(condition => condition.groupId === target.groupId))
+      .map(goal => goal.id)
+    next.assignments = next.assignments.filter(item => item.id !== id)
+    next.goals = next.goals.map(goal => ({ ...goal, linkedAssignmentIds: goal.linkedAssignmentIds.filter(assignmentId => assignmentId !== id), updatedAt: nowISO() }))
+    const group = next.taskGroups.find(item => item.id === target.groupId)
+    if (group) {
+      group.quantity = next.assignments.filter(item => item.groupId === group.id).length
+      group.updatedAt = nowISO()
+    }
+    if (group?.hiddenStandalone && !next.assignments.some(item => item.groupId === group.id) && !next.goals.some(goal => goal.linkedTaskGroupIds.includes(group.id) || goal.completionConditions.some(condition => condition.groupId === group.id))) {
+      next.taskGroups = next.taskGroups.filter(item => item.id !== group.id)
+    }
+    const event = planEvent({
+      type: 'assignment-deletion', action: 'repair', title: `移除任务：${target.title}`,
+      description: '第一方案只移除这一个任务并更新直接关联的数据；其他任务日期保持不变，计划原有冲突不会被自动扩大为重排。',
+      affectedGoalIds, affectedGroupIds: [target.groupId], affectedAssignmentIds: [id],
+      affectedDates: target.scheduledDate ? [target.scheduledDate] : [],
+      metadata: {
+        explicitLocalOperation: true,
+        operationScope: 'requested-change-only',
+        requestedChangeLabel: `仅移除“${target.title}”`,
+        requestedChangeKind: 'assignment-deletion',
+        taskHadExecutionRecord: target.actualMinutes > 0 || target.progress > 0 || target.timeEntries.length > 0,
+      },
+    })
+    next.changeEvents = [...next.changeEvents, event].slice(-100)
+    next.updatedAt = nowISO()
+    return { state: updateGoalAndGroupLifecycle(next), event }
+  }, [])
 
   const removeAssignment = useCallback((id: string) => setState(previous => {
     const target = previous.assignments.find(item => item.id === id)
@@ -460,7 +533,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       description: `任务将从“${oldGroup?.title ?? oldGroupId}”转入“${newGroup.title}”。进度、实际用时、计时记录和备注保持不变；当前日期会按新组规则与目标重新校验。`,
       affectedGoalIds: Array.from(new Set([...oldGoalIds, ...newGoalIds])), affectedGroupIds: [oldGroupId, groupId], affectedAssignmentIds: [id],
       affectedDates: assignment.scheduledDate ? [assignment.scheduledDate] : [],
-      metadata: { oldGroupId, newGroupId: groupId, adoptDefaultDuration: options.adoptDefaultDuration && canAdopt, numberingChoice: options.numberingChoice },
+      metadata: { oldGroupId, newGroupId: groupId, adoptDefaultDuration: options.adoptDefaultDuration && canAdopt, numberingChoice: options.numberingChoice, explicitLocalOperation: true, operationScope: 'requested-change-only', requestedChangeLabel: `仅将“${assignment.title}”移入“${newGroup.title}”` },
     })
     next.changeEvents = [...next.changeEvents, event].slice(-100)
     next.updatedAt = now
@@ -640,7 +713,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       affectedGoalIds: next.goals.filter(goal => goal.linkedTaskGroupIds.includes(group.id) || goal.completionConditions.some(condition => condition.groupId === group.id)).map(goal => goal.id),
       affectedGroupIds: [group.id], affectedAssignmentIds: affectedIds,
       affectedDates: [...new Set(next.assignments.filter(item => affectedIds.includes(item.id)).map(item => item.scheduledDate).filter((date): date is string => Boolean(date)))],
-      metadata: { createdIds, removedIds, protectedIds, previousQuantity: existing.length, requestedQuantity, numberingChoice: firstExpansion ? numberingChoice : undefined },
+      metadata: { createdIds, removedIds, protectedIds, previousQuantity: existing.length, requestedQuantity, numberingChoice: firstExpansion ? numberingChoice : undefined, explicitLocalOperation: true, operationScope: 'requested-change-only', requestedChangeLabel: createdIds.length ? `仅保存任务组调整并新增 ${createdIds.length} 项任务` : '仅保存任务组调整' },
     })
     next.changeEvents = [...next.changeEvents, event].slice(-100)
     next.updatedAt = now
@@ -696,6 +769,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       affectedGoalIds: [goal.id], affectedGroupIds: goal.linkedTaskGroupIds,
       affectedAssignmentIds: goalProgress(before, goal).countedAssignmentIds,
       affectedDates: [goal.desiredDate, goal.latestDate].filter((date): date is string => Boolean(date)),
+      metadata: { explicitLocalOperation: true, operationScope: 'requested-change-only', requestedChangeLabel: `仅删除目标“${goal.title}”` },
     })
     next.changeEvents = [...next.changeEvents, event].slice(-100)
     next.updatedAt = nowISO()
@@ -989,7 +1063,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     state, namespace, ready, loadedFromStorage, canUndo: history.current.length > 0,
     commit, replaceState, loadDataSpace, setDataSpace, clearDataSpace, undo,
     updateSettings, updateDayConfig, updateAssignment, moveAssignments, finishAssignment, reopenAssignment, addTime,
-    addTaskGroup, editTaskGroup, deleteTaskGroup, removeAssignment, prepareAssignmentGroupChange,
+    addTaskGroup, editTaskGroup, deleteTaskGroup, removeAssignment, prepareTaskGroupDelete, prepareAssignmentDelete, prepareAssignmentGroupChange,
     prepareSingleAssignment, prepareTaskGroup, prepareTaskGroupEdit, prepareGoalChange, prepareGoalDelete, prepareCalendarConstraintChange, prepareDurationChange, prepareReviewCompletion,
     generateProposals, applySchedulingProposal, applyPreparedWithoutScheduling,
     restoreReplanHistory, recordReview, completeReview, previewPlanVersion, restorePlanVersion,
@@ -998,7 +1072,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }), [
     state, namespace, ready, loadedFromStorage, commit, replaceState, loadDataSpace, setDataSpace, clearDataSpace, undo,
     updateSettings, updateDayConfig, updateAssignment, moveAssignments, finishAssignment, reopenAssignment, addTime,
-    addTaskGroup, editTaskGroup, deleteTaskGroup, removeAssignment, prepareAssignmentGroupChange, prepareSingleAssignment, prepareTaskGroup, prepareTaskGroupEdit, prepareGoalChange,
+    addTaskGroup, editTaskGroup, deleteTaskGroup, removeAssignment, prepareTaskGroupDelete, prepareAssignmentDelete, prepareAssignmentGroupChange, prepareSingleAssignment, prepareTaskGroup, prepareTaskGroupEdit, prepareGoalChange,
     prepareGoalDelete, prepareCalendarConstraintChange, prepareDurationChange, prepareReviewCompletion, generateProposals, applySchedulingProposal,
     applyPreparedWithoutScheduling, restoreReplanHistory, recordReview, completeReview,
     previewPlanVersion, restorePlanVersion, startTimer, pauseTimer, stopTimer, resetAll,

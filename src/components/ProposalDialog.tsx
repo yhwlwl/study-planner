@@ -20,7 +20,11 @@ const preferenceLabels: Record<string, string> = {
   preserve: '尽量保持当前计划', balanced: '均衡执行', goal: '优先保障目标', rest: '增加休息空间'
 }
 
-function recommendedProposal(proposals: SchedulingProposal[]) {
+function recommendedProposal(proposals: SchedulingProposal[], event?: PlanChangeEvent) {
+  if (event?.metadata?.explicitLocalOperation === true || event?.metadata?.operationScope === 'requested-change-only') {
+    const requestedLabel = typeof event.metadata?.requestedChangeLabel === 'string' ? event.metadata.requestedChangeLabel : undefined
+    return proposals.find(item => requestedLabel ? item.title === requestedLabel : item.preference === 'preserve') ?? proposals[0]
+  }
   return proposals.find(item => !item.infeasible) ?? proposals[0]
 }
 
@@ -66,7 +70,8 @@ export function ProposalDialog({
   onResolveConflicts: (proposal: SchedulingProposal, decisions: ConflictResolutionDecision[], exceptionDecisions: ConstraintExceptionResolutionDecision[]) => void
   onRequestExternalChange?: (action: 'change-goal' | 'change-capacity') => void
 }) {
-  const initial = recommendedProposal(proposals)
+  const initial = recommendedProposal(proposals, event)
+  const explicitLocalOperation = event.metadata?.explicitLocalOperation === true || event.metadata?.operationScope === 'requested-change-only'
   const [visibleCount, setVisibleCount] = useState(initialVisibleCount(proposals))
   const [selectedId, setSelectedId] = useState(initial?.id ?? '')
   const [drafts, setDrafts] = useState<Record<string, SchedulingProposal>>({})
@@ -74,7 +79,7 @@ export function ProposalDialog({
   const [exceptionDecisions, setExceptionDecisions] = useState<Record<string, 'accept-once' | 'system-find-another-date'>>({})
 
   useEffect(() => {
-    const next = recommendedProposal(proposals)
+    const next = recommendedProposal(proposals, event)
     setVisibleCount(initialVisibleCount(proposals))
     setSelectedId(next?.id ?? '')
     setDrafts({})
@@ -82,9 +87,9 @@ export function ProposalDialog({
     setExceptionDecisions({})
   }, [event.id, calculationRevision])
 
-  const selectedBase = useMemo(() => proposals.find(item => item.id === selectedId) ?? recommendedProposal(proposals), [proposals, selectedId])
+  const selectedBase = useMemo(() => proposals.find(item => item.id === selectedId) ?? recommendedProposal(proposals, event), [proposals, selectedId, event])
   const selected = selectedBase ? drafts[selectedBase.id] ?? selectedBase : undefined
-  const recommendedId = recommendedProposal(proposals)?.id
+  const recommendedId = recommendedProposal(proposals, event)?.id
   const assignmentMap = useMemo(() => new Map<string, Assignment>([...baseline.assignments, ...preparedState.assignments].map(item => [item.id, item])), [baseline, preparedState])
   const goalMap = useMemo(() => new Map<string, Goal>([...baseline.goals, ...preparedState.goals].map(item => [item.id, item])), [baseline, preparedState])
   const directConflict = proposals.find(item => item.infeasible && item.title === policy.directPreviewLabel)
@@ -168,6 +173,7 @@ export function ProposalDialog({
       <span className="proposal-event-kicker">发生了什么</span>
       <strong>{event.title}</strong><p>{event.description}</p>
       <div className="proposal-policy-note"><strong>本次处理方式</strong><span>{policy.explanation}</span></div>
+      {explicitLocalOperation && <div className="proposal-local-operation-note"><div><strong>用户操作优先</strong><span>第一方案只完成你刚才明确要求的操作，不移动其他任务，也不处理计划原有问题。</span></div><small>需要顺便修复或优化时，再主动获取更多方案。</small></div>}
       {decisionSummary && <div className="proposal-decision-summary"><strong>已按你的选择重新计算</strong><span>{decisionSummary}</span></div>}
     </section>
 
@@ -188,7 +194,8 @@ export function ProposalDialog({
         const selectedChoice = selectedBase?.id === proposal.id
         return <button key={proposal.id} className={`proposal-choice ${selectedChoice ? 'selected' : ''} ${proposal.infeasible ? 'proposal-choice-infeasible' : ''}`} onClick={() => selectProposal(proposal.id)}>
           <div className="proposal-choice-title"><div><strong>{display.title}</strong><small>{preferenceLabels[display.preference] ?? display.preference} · 影响{display.metrics.impactLevel === 'small' ? '较小' : display.metrics.impactLevel === 'medium' ? '中等' : '较大'}</small></div><span>{proposal.id === recommendedId ? '推荐' : selectedChoice ? '已选择' : '可选'}</span></div>
-          <div className="proposal-choice-metrics"><span>{display.metrics.movedTaskCount} 项移动</span><span>{display.metrics.affectedDateCount} 天变化</span><span>{display.metrics.issueCount} 个问题</span><span>{display.metrics.stabilityScore}% 稳定性</span>{display.exceptions.length > 0 && <em>{display.exceptions.length} 项例外需逐项决定</em>}</div>
+          <div className="proposal-choice-metrics"><span>{display.metrics.movedTaskCount} 项移动</span><span>{display.metrics.affectedDateCount} 天变化</span><span>{display.metrics.issueCount} 个本次问题</span>{display.exceptions.length > 0 && <em>{display.exceptions.length} 项例外需逐项决定</em>}</div>
+          {display.issueDelta && explicitLocalOperation && <div className="proposal-existing-issue-summary"><span>计划原有 {display.issueDelta.preExistingCount} 个硬问题</span><span>本次解决 {display.issueDelta.resolvedPreExistingCount} 个</span><span>本次新增/恶化 {display.issueDelta.newOrWorsenedCount} 个</span></div>}
           <p>{display.infeasible ? display.infeasibleReason : display.description}</p>
         </button>
       })}
@@ -319,7 +326,9 @@ function openSection(proposalId: string, section: string) {
 function ProposalDetails({ proposal, event, baseline, assignmentMap, goalMap, onRevise }: { proposal: SchedulingProposal; event: PlanChangeEvent; baseline: AppState; assignmentMap: Map<string, Assignment>; goalMap: Map<string, Goal>; onRevise: (revision: ProposalMovementRevision) => void }) {
   const newTaskIds = event.type === 'new-task-insertion' || event.type === 'task-group-size-increase' ? event.affectedAssignmentIds : []
   const manualMoves = proposal.movements.filter(item => item.manualIntentImpact === 'moved-manual')
+  const explicitLocalOperation = event.metadata?.explicitLocalOperation === true || event.metadata?.operationScope === 'requested-change-only'
   return <div className="proposal-details">
+    {explicitLocalOperation && proposal.issueDelta && <section className="proposal-scope-summary"><div><span>本次作用范围</span><strong>只执行用户操作</strong><p>其他任务移动 {proposal.movements.length} 项；计划原有问题不会阻止本次操作，也不会自动触发全面重排。</p></div><div className="proposal-scope-stats"><span><small>原有硬问题</small><strong>{proposal.issueDelta.preExistingCount}</strong></span><span><small>本次已解决</small><strong>{proposal.issueDelta.resolvedPreExistingCount}</strong></span><span><small>本次有所缓解</small><strong>{proposal.issueDelta.improvedPreExistingCount}</strong></span><span className={proposal.issueDelta.newOrWorsenedCount ? 'danger' : 'success'}><small>新增或恶化</small><strong>{proposal.issueDelta.newOrWorsenedCount}</strong></span></div></section>}
     {proposal.infeasible && <div className="proposal-warning"><strong>这个方案需要先处理问题</strong><p>{proposal.infeasibleReason}</p><small>你可以逐项接受可豁免规则、拒绝并要求换日，或恢复原安排；系统不会只把按钮禁用。</small></div>}
     <section className="proposal-human-summary"><span>方案结果</span><h3>{proposal.infeasible ? `发现 ${proposal.issues.length} 个问题` : proposal.goalImpacts.some(item => item.latestRiskAfter) ? '可执行，但仍有最晚期限风险' : '已通过完整执行检查'}</h3><p>{proposal.metrics.manualTaskMoveCount ? '该方案会触及手动安排，请重点检查对应明细。' : '手动安排保持受保护。'} 默认只展示结论；点击数字可展开完整任务、日期、目标和计算依据。</p></section>
     <div className="proposal-summary-grid">

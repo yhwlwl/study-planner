@@ -32,7 +32,10 @@ export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact =
   const elapsed = active ? timer.accumulatedSeconds + (timer.running && timer.startedAt ? Math.floor((Date.now() - timer.startedAt) / 1000) : 0) : 0
 
   const complete = () => {
-    if (assignment.status !== 'done') onComplete(assignment)
+    if (assignment.status === 'done') return
+    // 正在计时的任务必须回到统一的计时结束流程，避免首页勾选后丢失尚未结算的秒数。
+    if (active) { onOpenTimer(assignment); return }
+    onComplete(assignment)
   }
 
   const reopen = () => {
@@ -65,7 +68,7 @@ export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact =
           : anotherTimerActive
             ? <button className="text-button timer-start-button" onClick={() => onOpenTimer(assignment)} title="请先结束当前任务的计时"><Clock3 size={15}/>查看当前计时</button>
             : <button className="text-button timer-start-button" onClick={() => { startTimer(assignment.id); onOpenTimer(assignment) }}><Play size={15}/>开始计时</button>)}
-        <button className="icon-button subtle" onClick={() => updateAssignment(assignment.id, { locked: !assignment.locked })}>{assignment.locked ? <Lock size={16}/> : <Unlock size={16}/>}</button>
+        <button className="icon-button subtle task-lock-action" aria-label={assignment.locked ? '解锁任务' : '锁定任务'} onClick={() => updateAssignment(assignment.id, { locked: !assignment.locked })}>{assignment.locked ? <Lock size={16}/> : <Unlock size={16}/>}<span className="mobile-action-label">{assignment.locked ? '解锁' : '锁定'}</span></button>
         {assignment.status === 'done' && <div className="task-more" ref={menuRef}>
           <button className="icon-button subtle" onClick={() => setMenuOpen(value => !value)} aria-label="更多任务操作" title="更多"><Ellipsis size={18} aria-hidden="true"/></button>
           {menuOpen && <div className="task-more-menu"><button onClick={reopen}>重新打开任务</button><small>会先再次确认，已记录时间不会删除。</small></div>}

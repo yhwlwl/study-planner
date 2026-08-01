@@ -211,7 +211,7 @@ export function ReviewDialog({ open, date, onClose, onPreparedDuration, onApplyC
       <div className="review-finish-options">
         <button className="review-finish-option primary-option" onClick={applyCurrentReviewPlan}><strong>{selectedCarryCount > 0 ? `完成复盘，并按当前方案顺延 ${selectedCarryCount} 项` : '完成复盘'}</strong><span>{selectedCarryCount > 0 ? '快速校验通过后直接提交；若发现真正新增的冲突，只处理冲突项。' : '保存今日完成状态、实际时间和复盘记录。'}</span></button>
         <button className="review-finish-option" onClick={requestMoreReviewPlans} disabled={unfinished.length === 0}><strong>获取更多方案</strong><span>把当前逐项选择作为方案 A，再生成可比较的其他顺延方案。</span></button>
-        <button className="review-finish-option quiet-option" onClick={closeAndRecord}><strong>仅保存复盘，暂不顺延</strong><span>保留未完成任务当前日期，之后可从计划调整中继续处理。</span></button>
+        <button className="review-finish-option quiet-option" onClick={closeAndRecord}><strong>仅保存复盘，暂不顺延</strong><span>保留未完成任务当前日期，并集中显示在“任务 → 待处理”中，稍后再决定。</span></button>
       </div>
     </section>
     </div>

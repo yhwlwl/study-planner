@@ -9,42 +9,20 @@ import {
 } from 'recharts'
 import { getDay, parseISO } from 'date-fns'
 import { useApp } from '../AppContext'
-import type { Assignment, Subject, TaskGroup, TimeEntry } from '../types'
+import type { Assignment, Subject, TaskGroup } from '../types'
 import { dateRange, fmtDate, fmtWeekday, minutesText, shiftDate, todayISO } from '../lib/date'
 import { allDurationSuggestions, predictCompletion } from '../lib/planner'
 import { allGoalProgress } from '../lib/goals'
+import { aggregateDaily, type DailyRow } from '../lib/stats'
 
 type StatsTab = 'overview' | 'trend' | 'subjects' | 'quality'
 type RangePreset = 'today' | '7d' | 'week' | 'all' | 'custom'
 type HeatMetric = 'minutes' | 'completion'
 type ViewMode = 'chart' | 'table'
-type EntrySource = NonNullable<TimeEntry['source']> | 'legacy'
 
 interface StatsPageProps {
   onOpenReplan?: (date: string) => void
 }
-
-interface DailyRow {
-  date: string
-  label: string
-  shortLabel: string
-  planned: number
-  actual: number
-  extraActual: number
-  timerActual: number
-  manualActual: number
-  legacyActual: number
-  movingAverage: number
-  plannedTasks: number
-  doneTasks: number
-  partialTasks: number
-  completedEquivalent: number
-  taskCompletion: number
-  workloadCompletion: number
-  lateTasks: number
-  focusSessions: number
-}
-
 interface SubjectRow {
   subject: Subject
   planned: number
@@ -134,104 +112,6 @@ function rangeForPreset(preset: RangePreset, planStart: string, planEnd: string,
   if (preset === 'custom') { start = customStart || planStart; end = customEnd || planEnd }
   if (start > end) [start, end] = [end, start]
   return { start, end }
-}
-
-function aggregateDaily(
-  assignments: Assignment[],
-  groups: Map<string, TaskGroup>,
-  countWordsTime: boolean,
-  start: string,
-  end: string
-) {
-  const rows = new Map<string, DailyRow>()
-  for (const date of dateRange(start, end)) {
-    rows.set(date, {
-      date,
-      label: `${fmtDate(date, 'M月d日')} · ${fmtWeekday(date)}`,
-      shortLabel: date.slice(5).replace('-', '.'),
-      planned: 0,
-      actual: 0,
-      extraActual: 0,
-      timerActual: 0,
-      manualActual: 0,
-      legacyActual: 0,
-      movingAverage: 0,
-      plannedTasks: 0,
-      doneTasks: 0,
-      partialTasks: 0,
-      completedEquivalent: 0,
-      taskCompletion: 0,
-      workloadCompletion: 0,
-      lateTasks: 0,
-      focusSessions: 0
-    })
-  }
-
-  const completedWork = new Map<string, number>()
-  const plannedWork = new Map<string, number>()
-  const today = todayISO()
-
-  const addActual = (date: string | undefined, minutes: number, counted: boolean, source: EntrySource) => {
-    if (!date || minutes <= 0 || !within(date, start, end)) return
-    const row = rows.get(date)
-    if (!row) return
-    if (!counted) {
-      row.extraActual += minutes
-      return
-    }
-    row.actual += minutes
-    if (source === 'timer') {
-      row.timerActual += minutes
-      if (minutes >= 1) row.focusSessions += 1
-    } else if (source === 'manual' || source === 'finish') {
-      row.manualActual += minutes
-    } else {
-      row.legacyActual += minutes
-    }
-  }
-
-  for (const assignment of assignments) {
-    const group = groups.get(assignment.groupId)
-    if (!isActiveGroup(group)) continue
-    const counted = isCountedGroup(group, countWordsTime)
-    const scheduled = assignment.scheduledDate
-    if (scheduled && within(scheduled, start, end)) {
-      const row = rows.get(scheduled)!
-      row.plannedTasks += 1
-      row.completedEquivalent += progressFraction(assignment)
-      if (assignment.status === 'done') row.doneTasks += 1
-      if (assignment.status === 'partial') row.partialTasks += 1
-      if (scheduled < today && assignment.status !== 'done') row.lateTasks += 1
-      if (counted) {
-        row.planned += assignment.estimatedMinutes
-        plannedWork.set(scheduled, (plannedWork.get(scheduled) ?? 0) + assignment.estimatedMinutes)
-        completedWork.set(scheduled, (completedWork.get(scheduled) ?? 0) + assignment.estimatedMinutes * progressFraction(assignment))
-      }
-    }
-
-    let recorded = 0
-    for (const entry of assignment.timeEntries ?? []) {
-      const minutes = Math.max(0, Number(entry.minutes) || 0)
-      recorded += minutes
-      addActual(safeDate(entry.createdAt), minutes, counted, entry.source ?? 'legacy')
-    }
-    const residual = Math.max(0, assignment.actualMinutes - recorded)
-    if (residual > 0) {
-      addActual(safeDate(assignment.completedAt) ?? scheduled, residual, counted, 'legacy')
-    }
-  }
-
-  const result = [...rows.values()]
-  for (const row of result) {
-    row.taskCompletion = row.plannedTasks ? row.completedEquivalent / row.plannedTasks * 100 : 0
-    const planned = plannedWork.get(row.date) ?? 0
-    row.workloadCompletion = planned ? (completedWork.get(row.date) ?? 0) / planned * 100 : 0
-  }
-  for (let index = 0; index < result.length; index += 1) {
-    const slice = result.slice(Math.max(0, index - 6), index + 1)
-    result[index].movingAverage = Math.round(slice.reduce((sum, item) => sum + item.actual, 0) / slice.length)
-  }
-  return result
 }
 
 function aggregateSubjects(assignments: Assignment[], groupList: TaskGroup[], countWordsTime: boolean, start: string, end: string, subjectNames: Subject[] = SUBJECTS): SubjectRow[] {
@@ -398,8 +278,8 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
   const priorityData = [5, 3, 2, 1, 0].map(priority => {
     const ids = new Set(state.taskGroups.filter(group => group.priority === priority && !group.hidden).map(group => group.id))
     const items = state.assignments.filter(item => ids.has(item.groupId))
-    return { priority: `P${priority}`, completion: items.length ? items.reduce((sum, item) => sum + progressFraction(item), 0) / items.length * 100 : 0 }
-  }).filter(item => item.completion > 0 || item.priority !== 'P0')
+    return { priority: priority === 5 ? '核心' : priority === 3 ? '高' : priority === 2 ? '中' : priority === 1 ? '低' : '可选', completion: items.length ? items.reduce((sum, item) => sum + progressFraction(item), 0) / items.length * 100 : 0 }
+  }).filter(item => item.completion > 0 || item.priority !== '可选')
 
   const insights = useMemo<InsightItem[]>(() => {
     const result: InsightItem[] = []
@@ -424,7 +304,8 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
     return result.slice(0, 4)
   }, [allDaily, subjects, state.settings.subjectShareLimit, goalRows, state.goals])
 
-  const maxHeatMinutes = Math.max(1, ...allDaily.map(row => row.actual))
+  const positiveHeatMinutes = allDaily.map(row => row.actual).filter(value => value > 0).sort((a, b) => a - b)
+  const maxHeatMinutes = positiveHeatMinutes.length ? Math.max(1, positiveHeatMinutes[Math.min(positiveHeatMinutes.length - 1, Math.floor(positiveHeatMinutes.length * .9))]) : 1
   const heatOffset = (getDay(parseISO(state.settings.startDate)) + 6) % 7
   const heatCells: Array<DailyRow | undefined> = [...Array.from({ length: heatOffset }, () => undefined), ...allDaily]
   const subjectRanking = [...subjects].sort((a, b) => b.actual - a.actual)
@@ -447,7 +328,7 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
   const rangeLabel = preset === 'today' ? '今日' : preset === '7d' ? '近7天' : preset === 'week' ? '本周' : preset === 'all' ? '全部计划' : `${fmtDate(range.start, 'M.d')}—${fmtDate(range.end, 'M.d')}`
 
   return <div className="stats-page">
-    <section className="plan-perspective-bar"><div className="segmented-control"><button className={planPerspective === 'current' ? 'active' : ''} onClick={() => setPlanPerspective('current')}>当前计划</button><button className={planPerspective === 'history' ? 'active' : ''} onClick={() => setPlanPerspective('history')}>历史计划</button></div><span>{planPerspective === 'current' ? '查看当前目标、负载和预计' : `本机保存 ${state.planVersions.length} 个重大版本`}</span></section>
+    <section className="plan-perspective-bar"><div className="segmented-control"><button className={planPerspective === 'current' ? 'active' : ''} onClick={() => setPlanPerspective('current')}>目标概览</button><button className={planPerspective === 'history' ? 'active' : ''} onClick={() => setPlanPerspective('history')}>版本概览</button></div><span>{planPerspective === 'current' ? '查看当前目标、负载和预计' : `本机保存 ${state.planVersions.length} 个重大版本`}</span></section>
     {planPerspective === 'current' ? <section className="stats-goal-overview"><header><div><h2>当前目标概览</h2><p>全局时间与完成总数按任务去重；每个目标仍独立计算自己的条件。</p></div><span>时长建议 {durationSuggestions.length}</span></header><div>{goalRows.length ? goalRows.map(row => { const goal = state.goals.find(item => item.id === row.goalId)!; return <article key={row.goalId}><strong>{goal.title}</strong><span>{row.completedCount}/{row.requiredCount} · {Math.round(row.progress*100)}%</span><small>预计 {row.expectedCompletion ? fmtDate(row.expectedCompletion) : row.completed ? '已完成' : '无法预计'} · 剩余 {minutesText(row.estimatedRemainingMinutes)}</small><em className={row.latestRisk ? 'risk' : row.desiredRisk ? 'warning' : ''}>{row.latestRisk ? '最晚日期风险' : row.desiredRisk ? '期望日期风险' : '正常'}</em></article> }) : <p className="muted-text">暂无目标。</p>}</div></section> : <section className="stats-version-overview"><header><h2>历史计划演变</h2><p>展示重大版本的目标、任务量、负载和移动历史；完整快照仅保存在当前设备。</p></header>{state.planVersions.length ? <div>{[...state.planVersions].reverse().map(version => <article key={version.id}><div><strong>{version.reason}</strong><span>{new Date(version.timestamp).toLocaleString()}</span></div><div><span>目标 {version.summary.goalCount}</span><span>任务组 {version.summary.groupCount}</span><span>任务 {version.summary.assignmentCount}</span><span>完成 {version.summary.completedCount}</span><span>移动 {version.summary.movedTaskCount}</span><span>计划负载 {minutesText(version.summary.scheduledMinutes)}</span></div></article>)}</div> : <p className="muted-text">尚无重大版本。</p>}</section>}
     <section className="stats-toolbar">
       <div className="stats-tabs">{([['overview', '概览'], ['trend', '趋势'], ['subjects', '科目'], ['quality', '执行状态']] as const).map(([value, label]) => <button key={value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{label}</button>)}</div>
@@ -462,6 +343,7 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
         <MetricCard icon={Target} label="预计完成" value={overallPrediction === '已完成' ? '全部完成' : overallPrediction ? fmtDate(overallPrediction, 'M月d日') : '存在未排期'} detail={`优先级5：${corePrediction === '已完成' ? '已完成' : corePrediction ? fmtDate(corePrediction, 'M月d日') : '待排期'}`} tone={goalRows.some(row => row.latestRisk) ? 'warning' : 'success'}/>
       </section>
 
+      <details className="stats-overview-more"><summary>查看连续记录和学习热力图</summary><div className="stats-overview-more-body">
       <section className="stats-streak-row"><div><Flame size={20}/><strong>{learningStreak} 天</strong><span>连续学习（每天至少30分钟）</span></div><div><Target size={20}/><strong>{targetStreak} 天</strong><span>连续达标（完成计划50%）</span></div><div><Focus size={20}/><strong>{totals.focusSessions} 次</strong><span>{rangeLabel}有效专注 · 平均 {minutesText(averageFocus)}</span></div></section>
 
       <section className="stats-insights"><header><div><TrendingUp size={20}/><div><h3>本周洞察</h3><p>只展示能影响下一步行动的数据变化。</p></div></div></header><div>{insights.length ? insights.map((item, index) => <article key={index} className={item.tone}><div>{item.tone === 'warning' ? <AlertTriangle size={18}/> : item.tone === 'positive' ? <CheckCircle2 size={18}/> : <Activity size={18}/>}<span><strong>{item.title}</strong><small>{item.detail}</small></span></div>{item.action && <button className="secondary-button" onClick={() => item.action === 'replan' ? onOpenReplan?.(todayISO()) : setTab('subjects')}>{item.action === 'replan' ? '查看调整建议' : '查看科目分析'}<ChevronRight size={15}/></button>}</article>) : <p className="muted-text">积累更多实际记录后，这里会自动产生趋势洞察。</p>}</div></section>
@@ -470,6 +352,7 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
         <div className="stats-heatmap-shell"><div className="stats-heat-weekdays"><span>一</span><span></span><span>三</span><span></span><span>五</span><span></span><span>日</span></div><div className="stats-heatmap">{heatCells.map((row, index) => row ? <button key={row.date} className={`level-${heatLevel(row)}`} onClick={() => setSelectedDate(row.date)} title={`${row.label} · ${heatMetric === 'minutes' ? minutesText(row.actual) : percent(row.workloadCompletion)}`}><span>{Number(row.date.slice(8))}</span><small>{row.date.endsWith('-01') || index === heatOffset ? `${Number(row.date.slice(5, 7))}月` : ''}</small></button> : <i className="heat-empty" key={`empty-${index}`}/>)}</div></div>
         <div className="stats-heat-legend"><span>少</span>{[0,1,2,3,4].map(level => <i key={level} className={`level-${level}`}/>)}<span>多</span></div>
       </ChartPanel>
+      </div></details>
 
       <ChartPanel title="每日计划与实际" subtitle="柱形为真实学习时间，灰线为计划，紫线为7日移动平均" onExpand={() => setExpanded(true)} actions={<ViewToggle value={trendView} onChange={setTrendView}/>}>
         {trendView === 'table' ? <DailyTable rows={daily} onSelect={setSelectedDate}/> : <div className="stats-chart-lg"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={daily} onClick={(event: any) => event?.activePayload?.[0] && setSelectedDate(event.activePayload[0].payload.date)}><CartesianGrid strokeDasharray="3 3" vertical={false}/><XAxis dataKey="shortLabel" minTickGap={22}/><YAxis tickFormatter={(value: number) => `${Math.round(value / 60)}h`}/><Tooltip content={<ChartTooltip/>}/><Legend/><Bar dataKey="actual" name="实际" fill="#2563eb" radius={[6,6,0,0]}/><Line type="monotone" dataKey="planned" name="计划" stroke="#94a3b8" strokeWidth={2} dot={false}/><Line type="monotone" dataKey="movingAverage" name="7日均值" stroke="#8b5cf6" strokeWidth={2} dot={false}/></ComposedChart></ResponsiveContainer></div>}

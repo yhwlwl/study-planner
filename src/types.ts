@@ -30,6 +30,7 @@ export type SchedulingAction = 'insert' | 'repair' | 'optimize' | 'rebuild'
 export type SchedulingPreference = ReplanStrategy
 export type ImpactLevel = 'small' | 'medium' | 'large'
 export type AdjustmentResolutionMode = 'validate-and-commit' | 'recommended-preview' | 'optional-optimization' | 'exploratory-optimization'
+export type AdjustmentOperationScope = 'requested-change-only' | 'directly-affected-items' | 'broader-future-plan'
 
 export type ConflictCategory = 'absolute-blocker' | 'protected-intent' | 'waivable-rule' | 'structural-conflict' | 'warning'
 export type ConflictResolutionAction =
@@ -54,6 +55,7 @@ export interface PlanAdjustmentPolicy {
   allowKeepPrepared: boolean
   directPreviewLabel: string
   explanation: string
+  defaultScope: AdjustmentOperationScope
 }
 export type CreationSource = 'user' | 'template' | 'import' | 'system' | 'migration'
 
@@ -240,6 +242,7 @@ export type PlanChangeEventType =
   | 'load-preference-change'
   | 'future-replanning'
   | 'rule-change'
+  | 'assignment-deletion'
   | 'bulk-move'
   | 'group-deletion'
   | 'goal-deletion'
@@ -390,6 +393,20 @@ export interface ProposalMetrics {
   impactLevel: ImpactLevel
 }
 
+
+export interface ProposalIssueDelta {
+  /** 操作前已经存在的硬约束事实数量。 */
+  preExistingCount: number
+  /** 本次操作后仍存在，但没有新增或恶化的既有问题。 */
+  remainingPreExistingCount: number
+  /** 本次操作直接解决的既有问题。 */
+  resolvedPreExistingCount: number
+  /** 本次操作让超额程度下降、但尚未完全解决的既有问题。 */
+  improvedPreExistingCount: number
+  /** 本次操作新产生或恶化的问题；只有这些属于本次必须处理的范围。 */
+  newOrWorsenedCount: number
+}
+
 export interface SchedulingProposal {
   id: string
   eventId: string
@@ -409,6 +426,7 @@ export interface SchedulingProposal {
   exceptions: ConstraintException[]
   excludedDates: RejectedDateReason[]
   metrics: ProposalMetrics
+  issueDelta?: ProposalIssueDelta
   distinctSignature: string
   infeasible: boolean
   infeasibleReason?: string

@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 
-const APP_VERSION = '0.7.0'
+const APP_VERSION = '0.8.10'
 const SESSION_KEY = 'study-planner:visit-session-id'
 const STATUS_KEY = 'study-planner:visit-log-status'
 let activeRequest: Promise<void> | undefined

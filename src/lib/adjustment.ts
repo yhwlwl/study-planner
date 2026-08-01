@@ -19,24 +19,28 @@ export function adjustmentPolicyForEvent(event: PlanChangeEvent): PlanAdjustment
   const direct = (label: string, explanation: string, primary: SchedulingPreference = 'preserve'): PlanAdjustmentPolicy => ({
     mode: 'validate-and-commit', primaryPreference: primary,
     alternativePreferences: alternatives(primary, preferred), allowKeepPrepared: true,
-    directPreviewLabel: label, explanation,
+    directPreviewLabel: label, explanation, defaultScope: 'requested-change-only',
   })
   const recommended = (label: string, explanation: string, primary: SchedulingPreference = 'preserve'): PlanAdjustmentPolicy => ({
     mode: 'recommended-preview', primaryPreference: primary,
     alternativePreferences: alternatives(primary, preferred), allowKeepPrepared: false,
-    directPreviewLabel: label, explanation,
+    directPreviewLabel: label, explanation, defaultScope: 'directly-affected-items',
   })
   const optional = (label: string, explanation: string, primary: SchedulingPreference = 'preserve', ordered: SchedulingPreference[] = []): PlanAdjustmentPolicy => ({
     mode: 'optional-optimization', primaryPreference: primary,
     alternativePreferences: alternatives(primary, preferred, ordered), allowKeepPrepared: true,
-    directPreviewLabel: label, explanation,
+    directPreviewLabel: label, explanation, defaultScope: 'requested-change-only',
   })
   const exploratory = (label: string, explanation: string, primary: SchedulingPreference, ordered: SchedulingPreference[] = []): PlanAdjustmentPolicy => ({
     mode: 'exploratory-optimization', primaryPreference: primary,
     alternativePreferences: alternatives(primary, preferred, ordered), allowKeepPrepared: false,
-    directPreviewLabel: label, explanation,
+    directPreviewLabel: label, explanation, defaultScope: 'broader-future-plan',
   })
 
+  if (metadata.explicitLocalOperation === true || event.type === 'assignment-deletion' || event.type === 'group-deletion') {
+    const localLabel = typeof metadata.requestedChangeLabel === 'string' ? metadata.requestedChangeLabel : '仅执行本次操作'
+    return optional(localLabel, '第一方案只实现用户刚才明确要求的变化；其他任务保持不变。计划原有问题只提示，不会借机扩大为整份计划重排。更大范围修复仅在用户主动获取更多方案时生成。')
+  }
   if (event.type === 'execution-difference' && metadata.requestedCarryDates) {
     return direct('按你在复盘中的选择执行', '先逐项校验用户已经选定的日期；合法项不会再交给系统重新决定。')
   }

@@ -10,14 +10,12 @@ import { NumericInput } from './NumericInput'
 export function CalendarConstraintManager({ onPrepared }: { onPrepared: (state: AppState, event: PlanChangeEvent) => void }) {
   const { state, prepareCalendarConstraintChange } = useApp()
   const [editing, setEditing] = useState<CalendarConstraint | null | undefined>()
-  const [removing, setRemoving] = useState<CalendarConstraint>()
   const submit = (constraint: CalendarConstraint) => { const prepared = prepareCalendarConstraintChange(constraint); setEditing(undefined); onPrepared(prepared.state, prepared.event) }
-  const remove = () => { if (!removing) return; const prepared = prepareCalendarConstraintChange(undefined, removing.id); setRemoving(undefined); onPrepared(prepared.state, prepared.event) }
   return <section className="settings-section constraint-manager"><div><h2>日期可用性与保护</h2><p>统一管理休息、行程、降容、特殊容量和受保护缓冲日；支持整段日期。</p></div><div>
     <button className="primary-button" onClick={() => setEditing(null)}><Plus size={16}/>添加日期约束</button>
-    <div className="constraint-list">{state.calendarConstraints.length === 0 ? <p className="muted-text">暂无日期约束。</p> : state.calendarConstraints.slice().sort((a,b) => a.startDate.localeCompare(b.startDate)).map(item => <article key={item.id}><div><strong>{item.reason || constraintLabel(item.kind)}</strong><span>{fmtDate(item.startDate)}{item.endDate !== item.startDate ? ` 至 ${fmtDate(item.endDate)}` : ''}</span><small>{constraintLabel(item.kind)}{item.capacityMinutes != null ? ` · ${item.capacityMinutes}分钟` : ''}{item.protected ? ' · 日期保护' : ''}</small></div><div className="row-actions"><button className="secondary-button" onClick={() => setEditing(item)}>编辑</button><button className="icon-button danger" onClick={() => setRemoving(item)}><Trash2 size={16}/></button></div></article>)}</div>
+    <div className="constraint-list">{state.calendarConstraints.length === 0 ? <p className="muted-text">暂无日期约束。</p> : state.calendarConstraints.slice().sort((a,b) => a.startDate.localeCompare(b.startDate)).map(item => <article key={item.id}><div><strong>{item.reason || constraintLabel(item.kind)}</strong><span>{fmtDate(item.startDate)}{item.endDate !== item.startDate ? ` 至 ${fmtDate(item.endDate)}` : ''}</span><small>{constraintLabel(item.kind)}{item.capacityMinutes != null ? ` · ${item.capacityMinutes}分钟` : ''}{item.protected ? ' · 日期保护' : ''}</small></div><div className="row-actions"><button className="secondary-button" onClick={() => setEditing(item)}>编辑</button><button className="icon-button danger" aria-label={`移除日期约束${item.reason || constraintLabel(item.kind)}`} onClick={() => { const prepared = prepareCalendarConstraintChange(undefined, item.id); onPrepared(prepared.state, prepared.event) }}><Trash2 size={16}/></button></div></article>)}</div>
     <ConstraintDialog open={editing !== undefined} initial={editing ?? undefined} state={state} onClose={() => setEditing(undefined)} onSave={submit}/>
-    <Modal open={Boolean(removing)} title="移除日期约束" onClose={() => setRemoving(undefined)}>{removing && <><p>移除后不会自动恢复旧日历。系统会提供“保持当前排期”“利用新容量减压”“拉取选定任务”等候选方向。</p><div className="modal-actions"><button className="secondary-button" onClick={() => setRemoving(undefined)}>取消</button><button className="primary-button" onClick={remove}>预览影响</button></div></>}</Modal>
+
   </div></section>
 }
 
