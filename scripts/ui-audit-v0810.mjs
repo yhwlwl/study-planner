@@ -22,14 +22,14 @@ add('计划调整手机回落单栏', css.includes('@media(max-width:760px)') &&
 add('方案摘要桌面四列手机两列', css.includes('.proposal-summary-grid{grid-template-columns:repeat(4,minmax(0,1fr))') && css.includes('.proposal-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))'), '桌面 4 列 / 手机 2 列')
 add('复盘手机保留紧凑双列摘要', css.includes('.review-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))'), '手机 2 列')
 add('手机复杂弹窗保持 100dvh 全屏', css.includes('.modal-card.modal-mobile-fullscreen') && css.includes('height:100dvh'), 'iPhone 全屏与安全区')
-add('桌面与手机底部操作区分别适配', css.includes('.adjustment-actions{position:sticky') && css.includes('.proposal-sticky-actions{position:sticky') && css.includes('env(safe-area-inset-bottom)'), '桌面粘性 footer + 手机安全区')
+add('桌面与手机底部操作区分别适配', modal.includes('footer?: ReactNode') && proposal.includes('footer={footer}') && css.includes('.modal-footer') && css.includes('env(safe-area-inset-bottom)'), '方案操作区位于滚动正文外，桌面固定在弹窗底部，手机保留安全区')
 add('其余主要页面统一卡片层级', css.includes('.goal-card,.stats-panel,.stats-kpi,.settings-section,.group-card,.chart-card'), '目标、统计、设置、任务卡统一阴影')
 add('约束列表桌面与手机分别布局', css.includes('.constraint-list article{display:grid;grid-template-columns:minmax(0,1fr) auto') && css.includes('.constraint-list article{grid-template-columns:1fr'), '桌面双区 / 手机单列')
 add('表单输入保持统一高度和视觉', css.includes('.field input,.field select,.field textarea{min-height:42px}'), '表单控件统一')
 
 
-add('局部操作在桌面端显示作用范围摘要', proposal.includes('proposal-scope-summary') && css.includes('.proposal-scope-summary{display:grid;grid-template-columns:'), '原操作与既有问题分层')
-add('局部操作摘要在手机端回落单列', css.includes('.proposal-scope-summary{grid-template-columns:1fr') && css.includes('.proposal-scope-stats{grid-template-columns:repeat(2'), '手机单列与 2×2 数据摘要')
+add('局部操作在桌面端显示精简结果摘要', proposal.includes('proposal-local-result') && css.includes('.proposal-local-result-grid{display:grid'), '原操作、其他任务移动和新增问题分层')
+add('局部操作摘要在手机端使用 2×2 数据卡', css.includes('.proposal-local-result-grid{grid-template-columns:repeat(2') && css.includes('.proposal-local-result{padding:13px'), '手机 2×2 数据摘要')
 
 
 add('任务中心提供完整任务收件箱', css.includes('.task-inbox-summary') && css.includes('.assignment-list-card'), '待处理、未安排与逾期任务都有桌面和手机布局')
@@ -40,11 +40,16 @@ add('移动端任务收件箱回落单列', css.includes('.task-inbox-summary{gr
 add('编号整理使用非阻断结果条', css.includes('.sequence-renumber-toast'), '主要操作完成后不立即弹出第二个全屏流程')
 add('手机关键图标显示文字标签', css.includes('.mobile-action-label') && css.includes('.goal-card .row-actions'), '编辑、归档、删除和锁定在触屏端可理解')
 add('统计次要概览默认折叠', css.includes('.stats-overview-more') && css.includes('.stats-overview-more-body'), '连续记录与热力图不再挤占首屏')
+
+add('单一局部操作不再显示伪方案选择', proposal.includes('singleLocalProposal') && proposal.includes('!singleLocalProposal && <section className="proposal-options-heading"') && proposal.includes('LocalOperationResult'), '只有一个精确方案时直接展示本次结果')
+add('方案底部按钮不遮挡正文', modal.includes('{footer && <footer className="modal-footer">') && proposal.includes('proposal-footer-actions') && !proposal.includes('proposal-sticky-actions'), 'footer 与 modal-body 为同级独立区域')
+add('手机方案弹窗最终覆盖为完整 100dvh', css.includes('.modal-card.modal-wide.modal-mobile-fullscreen.modal-with-footer') && css.includes('max-height:100dvh'), '避免 modal-wide 的 90vh 规则留下底部空白')
+
 const passed = checks.filter(item => item.pass).length
-const output = { version: '0.8.10', generatedAt: new Date().toISOString(), passed, total: checks.length, checks }
+const output = { version: '0.8.12', generatedAt: new Date().toISOString(), passed, total: checks.length, checks }
 fs.mkdirSync(path.join(root, 'validation'), { recursive: true })
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.10界面布局审计.json'), JSON.stringify(output, null, 2))
-const md = ['# Study Planner v0.8.10 界面布局审计', '', `- 通过：${passed} / ${checks.length}`, `- 生成时间：${output.generatedAt}`, '', ...checks.map(item => `- ${item.pass ? '✅' : '❌'} **${item.name}**：${item.evidence}`)]
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.10界面布局审计.md'), md.join('\n') + '\n')
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.12界面布局审计.json'), JSON.stringify(output, null, 2))
+const md = ['# Study Planner v0.8.12 界面布局审计', '', `- 通过：${passed} / ${checks.length}`, `- 生成时间：${output.generatedAt}`, '', ...checks.map(item => `- ${item.pass ? '✅' : '❌'} **${item.name}**：${item.evidence}`)]
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.12界面布局审计.md'), md.join('\n') + '\n')
 console.log(md.join('\n'))
 process.exit(passed === checks.length ? 0 : 1)

@@ -222,7 +222,7 @@ add('部分目标与后续完整目标不会互相覆盖', runtimePartialGoalPas
 add('明确局部操作第一方案只执行用户操作',
   /explicitLocalOperation/.test(context) && /operationScope:\s*'requested-change-only'/.test(context)
     && /明确的局部操作永远先展示/.test(app) && /proposals:\s*\[directPreview\]/.test(app)
-    && /用户操作优先/.test(proposal),
+    && /只执行本次调整/.test(proposal),
   '删除、换组和任务组编辑先展示精确变化，不自动启动更大范围调度。')
 
 add('单任务删除不借机移动其他任务',
@@ -264,8 +264,8 @@ add('复盘暂不顺延任务仍可集中找回',
 const passed = results.filter(item => item.pass).length
 const output = { generatedAt: new Date().toISOString(), passed, total: results.length, results }
 fs.mkdirSync(path.join(root, 'validation'), { recursive: true })
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.10场景架构验证.json'), JSON.stringify(output, null, 2))
-const md = ['# Study Planner v0.8.10 场景架构验证', '', `- 通过：${passed} / ${results.length}`, `- 生成时间：${output.generatedAt}`, '', ...results.map(item => `- ${item.pass ? '✅' : '❌'} **${item.scenario}**：${item.evidence}`)]
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.10场景架构验证.md'), md.join('\n') + '\n')
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.12场景架构验证.json'), JSON.stringify(output, null, 2))
+const md = ['# Study Planner v0.8.12 场景架构验证', '', `- 通过：${passed} / ${results.length}`, `- 生成时间：${output.generatedAt}`, '', ...results.map(item => `- ${item.pass ? '✅' : '❌'} **${item.scenario}**：${item.evidence}`)]
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.12场景架构验证.md'), md.join('\n') + '\n')
 console.log(md.join('\n'))
 if (passed !== results.length) process.exit(1)

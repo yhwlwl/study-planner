@@ -15,7 +15,7 @@ const source = {
   single: read('src/components/SingleTaskDialog.tsx'), group: read('src/components/TaskGroupDialog.tsx'), versions: read('src/lib/versions.ts'), conflicts: read('src/lib/conflicts.ts'),
 }
 const pkg = JSON.parse(read('package.json'))
-add('版本与迁移', '发布版本为 0.8.10', pkg.version === '0.8.10', `package.json: ${pkg.version}`)
+add('版本与迁移', '发布版本为 0.8.12', pkg.version === '0.8.12', `package.json: ${pkg.version}`)
 add('版本与迁移', '状态架构版本已提升（当前为 9）', /SCHEMA_VERSION\s*=\s*(?:8|9|[1-9]\d+)/.test(source.types), 'src/types.ts')
 add('版本与迁移', '存在确定性 v0.7→v0.8 迁移', /migrat|迁移/.test(source.seed) && /coreTargetDate/.test(source.seed) && /calendarConstraints/.test(source.seed), 'src/lib/seed.ts')
 add('版本与迁移', '旧全局目标日期不再出现在当前界面与当前调度计算', !/settings\.coreTargetDate|settings\.chemistryTargetDate/.test(source.app + source.stats + source.planner), '仅 seed/types 保留迁移兼容字段')
@@ -49,7 +49,7 @@ add('事件编排', '复盘已选日期只校验不二次重排', /requestedCarr
 add('事件编排', '复盘完成页提供直接执行、更多方案和仅保存三条路径', /完成复盘，并按当前方案顺延/.test(source.review) && /获取更多方案/.test(source.review) && /仅保存复盘，暂不顺延/.test(source.review) && /forceAlternatives/.test(source.app), 'Review + App orchestration')
 add('调度核心', '已完成历史不会单独生成待处理硬冲突', /已经完成\/已经发生的用时与任务数量只作为历史基线/.test(source.planner) && /ordinaryUnfinished\.length > 0 && day\.plannedMinutes > 0/.test(source.planner) && /worsenedHardConstraintFacts/.test(source.planner), 'planner historical/adjustable split')
 add('事件编排', '合法精确选择在冲突修复中保持固定', /fixedAssignmentIds/.test(source.app) && /fixedAssignmentIds\(request\)/.test(source.planner), 'App + planner')
-add('事件编排', '明确局部操作第一方案只执行用户操作', /explicitLocalOperation/.test(source.context) && /operationScope:\s*'requested-change-only'/.test(source.context) && /明确的局部操作永远先展示/.test(source.app) && /用户操作优先/.test(source.proposal), 'AppContext + policy + ProposalDialog')
+add('事件编排', '明确局部操作第一方案只执行用户操作', /explicitLocalOperation/.test(source.context) && /operationScope:\s*'requested-change-only'/.test(source.context) && /明确的局部操作永远先展示/.test(source.app) && /只执行本次调整/.test(source.proposal), 'AppContext + policy + ProposalDialog')
 add('事件编排', '既有问题不扩大本次操作范围', /ProposalIssueDelta/.test(source.types) && /hardConstraintIssueDelta/.test(source.planner) && /计划原有/.test(source.proposal) && /新增或恶化/.test(source.proposal), 'planner delta + UI')
 add('事件编排', '删除任务与任务组先走最小作用域预览', /prepareAssignmentDelete/.test(source.context) && /prepareTaskGroupDelete/.test(source.context) && /prepareAssignmentDelete\(taskOpen\.id\)/.test(source.app) && /prepareTaskGroupDelete\(group\.id\)/.test(source.app), 'AppContext + App')
 add('事件编排', '目标放宽和容量增加默认为保持现状', /optional-optimization/.test(source.adjustmentPolicy) && /保存目标变化并保持当前排期/.test(source.adjustmentPolicy) && /保存新的可用时间并保持当前排期/.test(source.adjustmentPolicy), 'adjustment policy')
@@ -95,11 +95,11 @@ add('自动验证', '20目标/50组/500任务/30约束/10版本规模验证', sc
 const adjustmentRuntime = spawnSync(process.execPath, ['scripts/runtime-adjustment-v0810.mjs'], { cwd: root, encoding: 'utf8' })
 add('自动验证', '复盘、历史冲突与局部操作作用域运行验证', adjustmentRuntime.status === 0, adjustmentRuntime.status === 0 ? '通过；既有冲突不阻止局部删除，且其他任务移动为 0' : (adjustmentRuntime.stdout + adjustmentRuntime.stderr).trim())
 const scenarios = spawnSync(process.execPath, ['scripts/scenario-v0810.mjs'], { cwd: root, encoding: 'utf8' })
-add('自动验证', '核心场景与三大系统架构验证', scenarios.status === 0, scenarios.status === 0 ? '全部通过，详见 validation/v0.8.10场景架构验证.md' : (scenarios.stdout + scenarios.stderr).trim())
+add('自动验证', '核心场景与三大系统架构验证', scenarios.status === 0, scenarios.status === 0 ? '全部通过，详见 validation/v0.8.12场景架构验证.md' : (scenarios.stdout + scenarios.stderr).trim())
 const uiAudit = spawnSync(process.execPath, ['scripts/ui-audit-v0810.mjs'], { cwd: root, encoding: 'utf8' })
-add('自动验证', '桌面与手机界面布局审计', uiAudit.status === 0, uiAudit.status === 0 ? '全部通过，详见 validation/v0.8.10界面布局审计.md' : (uiAudit.stdout + uiAudit.stderr).trim())
+add('自动验证', '桌面与手机界面布局审计', uiAudit.status === 0, uiAudit.status === 0 ? '全部通过，详见 validation/v0.8.12界面布局审计.md' : (uiAudit.stdout + uiAudit.stderr).trim())
 const efficiency = spawnSync(process.execPath, ['scripts/user-efficiency-v0810.mjs'], { cwd: root, encoding: 'utf8' })
-add('自动验证', '全流程用户效率与统计口径验证', efficiency.status === 0, efficiency.status === 0 ? '全部通过，详见 validation/v0.8.10用户效率验证.md' : (efficiency.stdout + efficiency.stderr).trim())
+add('自动验证', '全流程用户效率与统计口径验证', efficiency.status === 0, efficiency.status === 0 ? '全部通过，详见 validation/v0.8.12用户效率验证.md' : (efficiency.stdout + efficiency.stderr).trim())
 
 const passed = checks.filter(item => item.pass).length
 const result = { generatedAt: new Date().toISOString(), passed, total: checks.length, failed: checks.filter(item => !item.pass), checks }

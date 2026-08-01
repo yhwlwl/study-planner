@@ -166,7 +166,7 @@ export function ReviewDialog({ open, date, onClose, onPreparedDuration, onApplyC
             <div className="review-task-title"><span className={`subject-pill subject-${group?.subject ?? '其他'}`}>{group?.subject ?? '其他'}</span><strong>{item.title}</strong>{item.locked && <em>已锁定</em>}{state.timer.assignmentId === item.id && <em>正在计时</em>}</div>
             <div className="review-task-progress"><div><i style={{ width: `${Math.max(0, Math.min(100, item.progress))}%` }}/></div><span>{item.progress}% · 剩余约 {minutesText(item.remainingMinutes ?? Math.max(0, item.estimatedMinutes - item.actualMinutes))}</span></div>
           </div>
-          <label className="review-carry-choice"><span>结束今天后的安排</span><select disabled={!movable} value={carryDates[item.id] ?? ''} onChange={event => setCarryDates(current => ({ ...current, [item.id]: event.target.value }))}><option value="">保留在 {fmtDate(date)}，之后显示为逾期</option>{options.map(target => <option key={target} value={target}>{projectedLabel(item.id, target)}</option>)}</select>{!movable && <small>锁定或正在计时的任务不能在这里移动。</small>}</label>
+          <label className="review-carry-choice"><span>接下来怎么安排</span><select disabled={!movable} value={carryDates[item.id] ?? ''} onChange={event => setCarryDates(current => ({ ...current, [item.id]: event.target.value }))}><option value="">保留在 {fmtDate(date)}，之后显示为逾期</option>{options.map(target => <option key={target} value={target}>{projectedLabel(item.id, target)}</option>)}</select>{!movable && <small>锁定或正在计时的任务不能在这里移动。</small>}</label>
         </article>
       })}</div>}
     </section>

@@ -1022,3 +1022,149 @@ html,body,#root{min-height:100%;overflow-x:hidden}.app-shell{min-height:100dvh}.
 .stats-overview-more-body{padding:0 16px 16px;display:grid;gap:16px}
 .stats-overview-more-body .chart-card{box-shadow:none}
 @media(max-width:760px){.stats-overview-more>summary{padding:13px 14px}.stats-overview-more-body{padding:0 10px 10px;gap:10px}}
+
+
+/* v0.8.11 — mobile review decision card regression fix
+   Keep this block at the end so desktop refinements cannot restore the two-column grid on phones. */
+@media(max-width:760px){
+  .review-modal .review-task-decision{
+    display:flex;
+    flex-direction:column;
+    align-items:stretch;
+    gap:12px;
+    width:100%;
+    min-width:0;
+    padding:12px;
+  }
+  .review-modal .review-task-decision-main,
+  .review-modal .review-carry-choice{
+    width:100%;
+    min-width:0;
+  }
+  .review-modal .review-task-title{
+    display:grid;
+    grid-template-columns:auto minmax(0,1fr);
+    align-items:start;
+    gap:7px 9px;
+    width:100%;
+    min-width:0;
+  }
+  .review-modal .review-task-title .subject-pill{
+    flex:none;
+    align-self:start;
+    white-space:nowrap;
+  }
+  .review-modal .review-task-title strong{
+    min-width:0;
+    font-size:16px;
+    line-height:1.45;
+    overflow-wrap:anywhere;
+    word-break:break-word;
+  }
+  .review-modal .review-task-title em{
+    grid-column:2;
+    justify-self:start;
+  }
+  .review-modal .review-task-progress{
+    width:100%;
+    min-width:0;
+  }
+  .review-modal .review-task-progress>div{
+    width:100%;
+    min-width:0;
+    max-width:none;
+  }
+  .review-modal .review-task-progress span{
+    white-space:normal;
+    line-height:1.5;
+  }
+  .review-modal .review-carry-choice>span{
+    font-size:12px;
+  }
+  .review-modal .review-carry-choice select{
+    display:block;
+    width:100%;
+    min-width:0;
+    max-width:100%;
+    min-height:48px;
+    padding:10px 12px;
+    font-size:16px;
+    line-height:1.35;
+  }
+}
+
+/* v0.8.12 — proposal preview hierarchy and non-overlapping modal footer */
+.modal-footer{
+  flex:none;
+  border-top:1px solid var(--line);
+  background:rgba(255,255,255,.98);
+  padding:12px 18px calc(12px + env(safe-area-inset-bottom));
+  box-shadow:0 -12px 30px rgba(24,39,66,.06);
+  z-index:5;
+}
+.proposal-modal .modal-body{padding-bottom:18px!important}
+.proposal-footer-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;max-width:1040px;margin:0 auto}
+.proposal-footer-actions .primary-button{min-width:220px;min-height:46px}
+.proposal-cancel-action{border:0;background:transparent;color:#536078;padding:10px 14px;border-radius:10px;font-weight:700;cursor:pointer}
+.proposal-cancel-action:hover{background:#f1f4f8;color:#26364f}
+
+.proposal-event-heading{display:flex;align-items:baseline;gap:10px;min-width:0}
+.proposal-event-heading .proposal-event-kicker{flex:none;color:#6e7b90;font-weight:800;letter-spacing:.04em}
+.proposal-event-heading>strong{min-width:0;font-size:18px!important;line-height:1.35;overflow-wrap:anywhere}
+.proposal-event-local{display:flex;flex-direction:column;gap:8px}
+.proposal-event-local>p{margin:0!important}
+.proposal-local-principle{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid #e6ebf3;padding-top:10px}
+.proposal-local-principle strong{font-size:12px!important;color:#174f9f;white-space:nowrap}
+.proposal-local-principle span{font-size:11px;color:#5d6a7f;line-height:1.5;text-align:right}
+
+.proposal-local-result{border:1px solid #b9cff7;background:linear-gradient(135deg,#f8fbff,#fff);border-radius:16px;padding:15px 16px;display:flex;flex-direction:column;gap:12px}
+.proposal-local-result>header{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
+.proposal-local-result>header>div{display:flex;flex-direction:column;gap:3px;min-width:0}
+.proposal-local-result>header span{font-size:9px;color:#2767c5;font-weight:850;letter-spacing:.05em}
+.proposal-local-result>header strong{font-size:16px;line-height:1.35;color:#17233a;overflow-wrap:anywhere}
+.proposal-local-result>header em{font-style:normal;flex:none;border-radius:999px;background:#e9f7ee;color:#1d7a3f;padding:6px 9px;font-size:9px;font-weight:800}
+.proposal-local-result-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.proposal-local-result-grid button{min-width:0;border:1px solid #dce5f2;border-radius:12px;background:#fff;padding:10px 9px;display:flex;flex-direction:column;align-items:flex-start;gap:3px;text-align:left;color:#26364f;cursor:pointer}
+.proposal-local-result-grid button:hover:not(:disabled){border-color:#93b5ef;background:#f7faff}
+.proposal-local-result-grid button:disabled{cursor:default;opacity:1;background:#fafbfd;color:#758198}
+.proposal-local-result-grid button strong{font-size:18px;line-height:1.1}
+.proposal-local-result-grid button span{font-size:9px;color:inherit;line-height:1.4}
+.proposal-local-result-grid button.success{border-color:#b9dfc4;background:#f4fbf6;color:#1d7540}
+.proposal-local-result-grid button.danger{border-color:#f0b6b6;background:#fff5f5;color:#b42318}
+.proposal-local-result>p{margin:0;color:#637087;font-size:10px;line-height:1.55}
+.proposal-local-alternatives{border-top:1px solid #e4e9f1;padding:11px 2px 0;display:flex;align-items:center;justify-content:space-between;gap:14px}
+.proposal-local-alternatives>div{display:flex;flex-direction:column;gap:3px;min-width:0}
+.proposal-local-alternatives strong{font-size:11px;color:#344054}
+.proposal-local-alternatives span{font-size:9px;color:var(--muted);line-height:1.5}
+.proposal-local-alternatives .text-button{flex:none}
+.proposal-details-compact-local{gap:8px}
+.proposal-details-compact-local>details{background:#fff}
+.proposal-details-compact-local>details>summary{font-size:10px}
+
+@media(max-width:760px){
+  .modal-card.modal-mobile-fullscreen.modal-with-footer{padding-bottom:0}
+  .modal-mobile-fullscreen.modal-with-footer .modal-body{padding-bottom:16px!important}
+  .modal-mobile-fullscreen.modal-with-footer .modal-footer{padding:9px 12px calc(9px + env(safe-area-inset-bottom));box-shadow:0 -8px 22px rgba(24,39,66,.08)}
+  .proposal-footer-actions{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;width:100%}
+  .proposal-footer-actions .proposal-cancel-action{grid-column:1;grid-row:2;min-height:44px;padding:9px 12px}
+  .proposal-footer-actions .proposal-keep-action{grid-column:1/-1;grid-row:1;width:100%;min-height:42px}
+  .proposal-footer-actions .primary-button{grid-column:2;grid-row:2;min-width:0;width:100%;min-height:46px}
+  .proposal-event-heading{align-items:flex-start;flex-direction:column;gap:4px}
+  .proposal-event-heading>strong{font-size:17px!important}
+  .proposal-local-principle{align-items:flex-start;flex-direction:column;gap:3px}
+  .proposal-local-principle span{text-align:left}
+  .proposal-local-result{padding:13px;border-radius:14px;gap:10px}
+  .proposal-local-result>header{align-items:flex-start}
+  .proposal-local-result>header strong{font-size:15px}
+  .proposal-local-result-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+  .proposal-local-result-grid button{min-height:68px;padding:9px}
+  .proposal-local-result-grid button strong{font-size:17px}
+  .proposal-local-alternatives{align-items:flex-start;flex-direction:column;gap:6px}
+  .proposal-local-alternatives .text-button{padding:5px 0}
+}
+@media(max-width:760px){
+  .modal-card.modal-wide.modal-mobile-fullscreen.modal-with-footer{
+    height:100dvh;
+    max-height:100dvh;
+  }
+}

@@ -222,7 +222,7 @@ add('部分目标与后续完整目标不会互相覆盖', runtimePartialGoalPas
 add('明确局部操作第一方案只执行用户操作',
   /explicitLocalOperation/.test(context) && /operationScope:\s*'requested-change-only'/.test(context)
     && /明确的局部操作永远先展示/.test(app) && /proposals:\s*\[directPreview\]/.test(app)
-    && /用户操作优先/.test(proposal),
+    && /只执行本次调整/.test(proposal),
   '删除、换组和任务组编辑先展示精确变化，不自动启动更大范围调度。')
 
 add('单任务删除不借机移动其他任务',
