@@ -41,7 +41,8 @@ export function findSequenceRenumberGroups(state: AppState, groupIds?: Iterable<
         fromIndex: assignment.index,
         toIndex: nextIndex,
         fromTitle: assignment.title,
-        toTitle: numberedTitle(group.title, nextIndex, assignments.length)
+        // Renumbering changes the sequence index, but a user-customized title is immutable.
+        toTitle: assignment.titleCustomized ? assignment.title : numberedTitle(group.title, nextIndex, assignments.length)
       }]
     })
 
@@ -68,7 +69,7 @@ export function renumberTaskGroupsByDate(state: AppState, groupIds: Iterable<str
       const assignment = assignments[position]
       const nextIndex = position + 1
       assignment.index = nextIndex
-      assignment.title = numberedTitle(group.title, nextIndex, assignments.length)
+      if (!assignment.titleCustomized) assignment.title = numberedTitle(group.title, nextIndex, assignments.length)
     }
   }
 }

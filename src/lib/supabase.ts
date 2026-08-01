@@ -1,5 +1,6 @@
 import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js'
 import type { AppState } from '../types'
+import { portableState } from './state'
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const anon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
@@ -37,12 +38,8 @@ export async function signOut() {
  * several times larger than the active plan and previously made every cloud upsert
  * resend megabytes of nested JSON. The active plan still syncs completely.
  */
-export function preparePortableState(state: AppState): AppState {
-  return {
-    ...state,
-    replanHistory: [],
-    conflictBackups: []
-  }
+export function preparePortableState(state: AppState) {
+  return portableState(state)
 }
 
 async function resolveUserId(userId?: string): Promise<string> {

@@ -1,0 +1,187 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { spawnSync } from 'node:child_process'
+
+const root = process.cwd()
+const read = file => fs.readFileSync(path.join(root, file), 'utf8')
+const context = read('src/AppContext.tsx')
+const planner = read('src/lib/planner.ts')
+const goalsSource = read('src/lib/goals.ts')
+const types = read('src/types.ts')
+const adjustmentDialog = read('src/components/AdjustmentIntentDialog.tsx')
+const adjustmentPolicy = read('src/lib/adjustment.ts')
+const proposal = read('src/components/ProposalDialog.tsx')
+const review = read('src/components/ReviewDialog.tsx')
+const constraints = read('src/components/CalendarConstraintManager.tsx')
+const app = read('src/App.tsx')
+const styles = read('src/styles.css')
+const taskCard = read('src/components/TaskCard.tsx')
+
+const results = []
+const add = (scenario, pass, evidence) => results.push({ scenario, pass: Boolean(pass), evidence })
+
+add('核心目标从 8/8 提前到 8/6',
+  /goal-tightening/.test(context) && /recommended\('推荐目标调整方案'/.test(adjustmentPolicy) && /proposalPlanningStart/.test(planner),
+  '目标收紧进入目标导向推荐预览；候选窗口从当前可调整未来开始。')
+
+add('化学组从核心目标放宽到 8/20',
+  /goal-relaxation/.test(context) && /optional\('保存目标变化并保持当前排期'/.test(adjustmentPolicy) && /useDirectFirst/.test(app),
+  '目标放宽默认预览“保持当前排期”，优化只是用户可选方案。')
+
+add('任务组发现缺少子任务',
+  /task-group-size-increase/.test(context) && /createdIds/.test(context) && /仅新增/.test(context),
+  '只创建缺少的 Assignment，并以 Insert 事件进入预览。')
+
+add('觉得当前计划太累',
+  /type LoadOutcome/.test(adjustmentDialog) && /每天少安排一些/.test(adjustmentDialog) && /避免连续高负载/.test(adjustmentDialog) && /exploratory\('生成减负推荐'/.test(adjustmentPolicy),
+  '先询问用户希望得到的具体减负结果，再生成推荐与备选。')
+
+add('8/10–8/15 出去玩',
+  /startDate/.test(constraints) && /endDate/.test(constraints) && /availability-change/.test(context) && /推荐日期调整方案/.test(adjustmentPolicy),
+  '范围约束先列出影响，再推荐旅行前后平衡方案。')
+
+add('新增任务组',
+  /type:\s*'new-task-insertion'/.test(context) && /prepareTaskGroup/.test(context) && /创建为未安排任务/.test(app),
+  '新组生成草稿后必须预览，也可由用户明确保留为未安排。')
+
+add('老师 8/15 检查若干任务组',
+  /'percentage'/.test(types) && /'count'/.test(types) && /conditionCountedAssignmentIds/.test(goalsSource),
+  '用 Goal 数量/百分比条件表达阶段检查，不新增 Milestone。')
+
+add('预计时长变化引发计划调整',
+  /prepareDurationChange/.test(context) && /预览更新影响/.test(review) && /更新预计时长并保持日期/.test(adjustmentPolicy) && /只应用新预计，日期保持不变/.test(app),
+  '先预览预计变化；日期仍合法时保持不动，新增冲突才最小修复。')
+
+add('复盘逐项顺延不再二次重排',
+  /requestedCarryDates/.test(context) && /按你在复盘中的选择执行/.test(adjustmentPolicy) && /policy\.mode === 'validate-and-commit'/.test(app) && !/比较完整调整方案/.test(review),
+  '用户已选日期只做精确校验；原复盘中的重复“完整调整方案”入口已移除。')
+
+add('复盘冲突只处理冲突项',
+  /directValidationConflictIds/.test(app) && /fixedAssignmentIds/.test(app) && /fixedAssignmentIds\(request\)/.test(planner),
+  '合法项被固定，调度器只能处理精确预览中识别出的冲突任务。')
+
+add('批量移动按用户指定结果校验',
+  /if \(event\.type === 'bulk-move'\)/.test(adjustmentPolicy) && /按你指定的批量移动执行/.test(adjustmentPolicy),
+  '批量移动不再无条件重算全部日期；仅冲突项需要替代方案。')
+
+add('系统改动全部先预览',
+  /previewPreparedChange/.test(app) && /计划调整预览/.test(proposal) && /任何方案都只会在你确认后执行/.test(proposal) && /应用预览中的改动/.test(proposal),
+  '直接提交、推荐调整和探索优化均经过统一预览确认。')
+
+add('多方案由用户决定但默认界面简洁',
+  /\[policy\.primaryPreference, firstAlternative\]/.test(app) && /initialVisibleCount/.test(proposal) && /比较另外 .* 个已生成方案/.test(proposal),
+  '预先计算推荐与备选，默认只展开推荐，用户可主动比较。')
+
+add('摘要计数可逐层展开到具体问题',
+  /检测到的问题/.test(proposal) && /openSection/.test(proposal) && /问题明细/.test(proposal) && /涉及任务/.test(proposal),
+  '第一层显示数量，点击进入具体问题，再展开涉及任务和完整原因。')
+
+add('日期负载增减使用红绿方向提示',
+  /load-delta-up/.test(proposal) && /load-delta-down/.test(proposal) && /↑ 负载增加/.test(proposal) && /↓ 负载减少/.test(proposal) && /\.load-delta-up/.test(styles) && /\.load-delta-down/.test(styles),
+  '负载增加为红色向上，减少为绿色向下，无变化为中性。')
+
+add('选中态在手机和桌面都清晰',
+  /choice-indicator/.test(adjustmentDialog) && /\.adjustment-outcome-grid button\.selected/.test(styles) && /\.proposal-choice\.selected/.test(styles),
+  '选择状态同时使用明显边框、背景、阴影和“已选择”标记。')
+
+add('移动端计划调整不产生大块空白',
+  /modal-mobile-fullscreen/.test(styles) && /height:100dvh/.test(styles) && /\.modal-body\{[^}]*overflow-y:auto/.test(styles),
+  '复杂弹窗在手机上使用 100dvh 弹性全屏结构，正文独立滚动。')
+
+add('移动端月历完整保留七列',
+  /\.weekday-row,.calendar-grid\{min-width:0!important;width:100%\}/.test(styles) && /\.calendar-card\{overflow:hidden\}/.test(styles),
+  '移动端取消强制宽度和横向空白，七列在视口内完整呈现。')
+
+add('日期容量增加不被当作必须修复',
+  /pureRelaxation/.test(context) && /保存新的可用时间并保持当前排期/.test(adjustmentPolicy),
+  '新增容量默认保持排期，用户可主动选择减负或提前。')
+
+add('Today 任务卡不再绕过统一移动校验',
+  !/ChevronLeft|ChevronRight|shiftDate\(assignment\.scheduledDate/.test(taskCard),
+  '任务移动通过精确预览或调度方案，不由快捷按钮静默执行。')
+
+add('缓冲日长任务与高强度任务被明确识别',
+  /缓冲日，但仍安排了.*长任务/.test(planner) && /缓冲日，但仍安排了.*高强度任务/.test(planner),
+  '分析器把缓冲日中的长任务和高强度任务列为明确问题。')
+
+add('目标没有有效完成条件时不会自动完成',
+  /requiredTotal > 0 && completedTotal >= requiredTotal/.test(goalsSource) && /requiredTotal === 0 \? 0/.test(goalsSource),
+  '空目标保持进行中且进度为 0。')
+
+add('目标完成历史记录实际达成日期与按期结果',
+  /actualCompletionDate/.test(goalsSource) && /desiredMet/.test(goalsSource) && /latestMet/.test(goalsSource),
+  '完成时间来自实际执行记录，并保存期望/最晚日期结果。')
+
+add('复盘同时纳入原计划与当日真实执行',
+  /reviewDaySnapshot/.test(planner) && /plannedAssignmentIds/.test(planner) && /executedAssignmentIds/.test(planner) && /executedOutsidePlan/.test(review),
+  '跨日补做、提前执行和计划外执行不会从复盘消失。')
+
+add('方案内逐项微调重新完整验算',
+  /reviseSchedulingProposal/.test(planner) && /逐项微调/.test(proposal) && /validatePlacement/.test(planner),
+  '用户在预览中修改日期或锁定结果后，重新计算容量、上限、目标和保护日期。')
+
+// Runtime policy test: verifies that the orchestration layer routes events by user intent completeness.
+let runtimePolicyPass = false
+let runtimePolicyEvidence = ''
+const policyTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'study-planner-policy-test-'))
+try {
+  const compile = spawnSync('tsc', ['src/lib/adjustment.ts', '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'bundler', '--outDir', policyTemp, '--skipLibCheck', '--strict', '--noEmitOnError'], { cwd: root, encoding: 'utf8' })
+  if (compile.status !== 0) throw new Error((compile.stdout + compile.stderr).trim())
+  fs.writeFileSync(path.join(policyTemp, 'package.json'), '{"type":"module"}')
+  const mod = await import(`${pathToFileURL(path.join(policyTemp, 'lib/adjustment.js')).href}?v=${Date.now()}`)
+  const base = { id: 'e', action: 'repair', title: '', description: '', affectedGoalIds: [], affectedGroupIds: [], affectedAssignmentIds: [], affectedDates: [], createdAt: '' }
+  const modes = {
+    review: mod.adjustmentPolicyForEvent({ ...base, type: 'execution-difference', metadata: { requestedCarryDates: { a: '2026-08-02' } } }).mode,
+    move: mod.adjustmentPolicyForEvent({ ...base, type: 'bulk-move' }).mode,
+    relax: mod.adjustmentPolicyForEvent({ ...base, type: 'goal-relaxation' }).mode,
+    insert: mod.adjustmentPolicyForEvent({ ...base, type: 'new-task-insertion' }).mode,
+    tired: mod.adjustmentPolicyForEvent({ ...base, type: 'load-preference-change', metadata: { preferredPreference: 'rest' } }).mode,
+  }
+  runtimePolicyPass = modes.review === 'validate-and-commit' && modes.move === 'validate-and-commit' && modes.relax === 'optional-optimization' && modes.insert === 'recommended-preview' && modes.tired === 'exploratory-optimization'
+  runtimePolicyEvidence = Object.entries(modes).map(([key, value]) => `${key}=${value}`).join('；')
+} catch (error) {
+  runtimePolicyEvidence = `运行测试失败：${error instanceof Error ? error.message : String(error)}`
+} finally {
+  fs.rmSync(policyTemp, { recursive: true, force: true })
+}
+add('事件协调器按意图完整度运行分流', runtimePolicyPass, runtimePolicyEvidence)
+
+// Runtime goal test: 50% teacher check + 100% later goal.
+let runtimePartialGoalPass = false
+let runtimeGoalEvidence = ''
+const goalTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'study-planner-goal-test-'))
+try {
+  const compile = spawnSync('tsc', ['src/lib/goals.ts', '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'bundler', '--outDir', goalTemp, '--skipLibCheck', '--strict', '--noEmitOnError'], { cwd: root, encoding: 'utf8' })
+  if (compile.status !== 0) throw new Error((compile.stdout + compile.stderr).trim())
+  fs.writeFileSync(path.join(goalTemp, 'package.json'), '{"type":"module"}')
+  const goals = await import(`${pathToFileURL(path.join(goalTemp, 'lib/goals.js')).href}?v=${Date.now()}`)
+  const assignments = Array.from({ length: 10 }, (_, index) => ({ id: `a${index + 1}`, groupId: 'chem', index: index + 1, title: `化学${index + 1}`, status: 'todo', estimatedMinutes: 60, actualMinutes: 0, progress: 0, locked: false, intentStrength: 'normal', scheduleSource: 'system', timeEntries: [] }))
+  const state = {
+    assignments,
+    taskGroups: [{ id: 'chem', title: '化学预习', quantity: 10 }],
+    goals: [
+      { id: 'check', title: '老师检查', priority: 5, desiredDate: '2026-08-15', latestDate: '2026-08-15', status: 'active', completionConditions: [{ id: 'c1', groupId: 'chem', mode: 'percentage', value: 50 }], linkedTaskGroupIds: ['chem'], linkedAssignmentIds: [] },
+      { id: 'finish', title: '全部完成', priority: 3, desiredDate: '2026-08-20', latestDate: '2026-08-20', status: 'active', completionConditions: [{ id: 'c2', groupId: 'chem', mode: 'all' }], linkedTaskGroupIds: ['chem'], linkedAssignmentIds: [] },
+    ],
+  }
+  const firstDate = goals.nearestRelevantGoalDate(state, assignments[0])
+  const sixthDate = goals.nearestRelevantGoalDate(state, assignments[5])
+  runtimePartialGoalPass = firstDate === '2026-08-15' && sixthDate === '2026-08-20'
+  runtimeGoalEvidence = `前 50% 最近期限=${firstDate}；后 50% 最近期限=${sixthDate}`
+} catch (error) {
+  runtimeGoalEvidence = `运行测试失败：${error instanceof Error ? error.message : String(error)}`
+} finally {
+  fs.rmSync(goalTemp, { recursive: true, force: true })
+}
+add('部分目标与后续完整目标不会互相覆盖', runtimePartialGoalPass, runtimeGoalEvidence)
+
+const passed = results.filter(item => item.pass).length
+const output = { generatedAt: new Date().toISOString(), passed, total: results.length, results }
+fs.mkdirSync(path.join(root, 'validation'), { recursive: true })
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.5场景架构验证.json'), JSON.stringify(output, null, 2))
+const md = ['# Study Planner v0.8.5 场景架构验证', '', `- 通过：${passed} / ${results.length}`, `- 生成时间：${output.generatedAt}`, '', ...results.map(item => `- ${item.pass ? '✅' : '❌'} **${item.scenario}**：${item.evidence}`)]
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.5场景架构验证.md'), md.join('\n') + '\n')
+console.log(md.join('\n'))
+if (passed !== results.length) process.exit(1)
