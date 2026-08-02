@@ -109,15 +109,16 @@ npm run build
 ## 文档索引
 
 - [更新日志](docs/CHANGELOG.md)
-- [迁移指南](MIGRATION_GUIDE.md)
-- [需求追踪表](REQUIREMENTS_TRACEABILITY.md)
-- [完成性与验证报告](VALIDATION_REPORT.md)
-- [v0.8.4 三大系统架构复核](V0.8.4_THREE_SYSTEM_ARCHITECTURE_AUDIT.md)
-- [v0.8.10 用户效率实现说明](V0.8.10_USER_EFFICIENCY_IMPLEMENTATION.md)
-- [v0.8.9 用户操作优先实现说明](V0.8.9_LOCAL_OPERATION_SCOPE_IMPLEMENTATION.md)
-- [v0.8.8 桌面与手机界面审计](V0.8.8_UI_DESKTOP_MOBILE_AUDIT.md)
-- [v0.8.7 复盘与历史冲突实现说明](V0.8.7_REVIEW_AND_HISTORY_CONFLICT_IMPLEMENTATION.md)
-- [v0.8.6 冲突决策与移动端修复实施报告](Study_Planner_v0.8.6_冲突决策与移动端修复实施报告.md)
+- [迁移指南](docs/MIGRATION_GUIDE.md)
+- [需求追踪表](docs/REQUIREMENTS_TRACEABILITY.md)
+- [完成性与验证报告](docs/VALIDATION_REPORT.md)
+- [部署说明](docs/DEPLOYMENT.md)
+- [v0.8.4 三大系统架构复核](docs/reports/V0.8.4_THREE_SYSTEM_ARCHITECTURE_AUDIT.md)
+- [v0.8.10 用户效率实现说明](docs/reports/V0.8.10_USER_EFFICIENCY_IMPLEMENTATION.md)
+- [v0.8.9 用户操作优先实现说明](docs/reports/V0.8.9_LOCAL_OPERATION_SCOPE_IMPLEMENTATION.md)
+- [v0.8.8 桌面与手机界面审计](docs/reports/V0.8.8_UI_DESKTOP_MOBILE_AUDIT.md)
+- [v0.8.7 复盘与历史冲突实现说明](docs/reports/V0.8.7_REVIEW_AND_HISTORY_CONFLICT_IMPLEMENTATION.md)
+- [v0.8.6 冲突决策与移动端修复实施报告](docs/reports/Study_Planner_v0.8.6_冲突决策与移动端修复实施报告.md)
 
 ## 当前限制
 

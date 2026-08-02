@@ -10,3 +10,5 @@ dist/
 .DS_Store
 *.zip
 study-plan-*.json
+# local cleanup archive
+archive/
