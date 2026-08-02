@@ -1641,7 +1641,8 @@ function TasksPage({ onAddSingle, onCreateGroup, onPrepared }: { onAddSingle: ()
     </Modal>
     <TaskGroupDialog open={Boolean(editing)} state={state} initial={editing} onClose={() => setEditing(undefined)} onCreate={() => undefined} onEdit={(group, numberingChoice) => {
       const original = state.taskGroups.find(item => item.id === group.id)
-      const affectsPlan = Boolean(original && (original.quantity !== group.quantity || original.unitMinutes !== group.unitMinutes || original.subject !== group.subject
+      // 科目/分类名称属于纯展示元数据（如“数学”“化学”），重命名不触发调度分析。
+      const affectsPlan = Boolean(original && (original.quantity !== group.quantity || original.unitMinutes !== group.unitMinutes
         || original.priority !== group.priority || original.dailyMax !== group.dailyMax || original.activityType !== group.activityType
         || original.highIntensity !== group.highIntensity || original.countInStats !== group.countInStats))
       if (affectsPlan) {

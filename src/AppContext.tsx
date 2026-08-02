@@ -51,7 +51,9 @@ interface AppContextValue {
   prepareTaskGroupEdit: (group: TaskGroup, numberingChoice?: 'preserve' | 'number-all') => PrepareStateResult
   prepareGoalChange: (draft: GoalDraft, goalId?: string) => PrepareStateResult
   prepareGoalDelete: (goalId: string) => PrepareStateResult
+  updateGoalMetadata: (goalId: string, patch: { title?: string; description?: string }) => void
   prepareCalendarConstraintChange: (constraint?: CalendarConstraint, removeId?: string) => PrepareStateResult
+  updateCalendarConstraintMetadata: (id: string, reason: string) => void
   prepareDurationChange: (suggestion: DurationSuggestion, estimate?: number, reviewDate?: string) => PrepareStateResult
   prepareReviewCompletion: (date: string, carryDates: Record<string, string>) => PrepareStateResult
   generateProposals: (preparedState: AppState, event: PlanChangeEvent, baseline?: AppState, signal?: AbortSignal, expansionLevel?: number, resolutionOptions?: { acceptedExceptions?: ConstraintException[]; disableAutomaticExceptions?: boolean }) => SchedulingProposal[]
@@ -776,6 +778,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return { state: updateGoalAndGroupLifecycle(next), event }
   }, [])
 
+  /** 仅修改目标名称/描述等纯展示字段：直接保存，不生成事件、方案或计划版本。 */
+  const updateGoalMetadata = useCallback((goalId: string, patch: { title?: string; description?: string }) => commit(draft => {
+    const goal = draft.goals.find(item => item.id === goalId)
+    if (!goal) return
+    if (patch.title !== undefined) goal.title = patch.title.trim() || goal.title
+    if (patch.description !== undefined) goal.description = patch.description.trim() || undefined
+    goal.updatedAt = nowISO()
+  }), [commit])
+
   const prepareCalendarConstraintChange = useCallback((constraint?: CalendarConstraint, removeId?: string): PrepareStateResult => {
     const before = stateRef.current
     const next = cloneActiveState(before)
@@ -841,6 +852,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     next.updatedAt = now
     return { state: next, event }
   }, [])
+
+  /** 仅修改日期约束的备注名称：直接保存，不生成事件、方案或计划版本。 */
+  const updateCalendarConstraintMetadata = useCallback((id: string, reason: string) => commit(draft => {
+    const item = draft.calendarConstraints.find(candidate => candidate.id === id)
+    if (!item) return
+    item.reason = reason.trim() || item.reason
+    item.updatedAt = nowISO()
+  }), [commit])
 
   const prepareDurationChange = useCallback((suggestion: DurationSuggestion, estimate = suggestion.suggestedEstimate, reviewDate?: string): PrepareStateResult => {
     const before = stateRef.current
@@ -1064,7 +1083,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     commit, replaceState, loadDataSpace, setDataSpace, clearDataSpace, undo,
     updateSettings, updateDayConfig, updateAssignment, moveAssignments, finishAssignment, reopenAssignment, addTime,
     addTaskGroup, editTaskGroup, deleteTaskGroup, removeAssignment, prepareTaskGroupDelete, prepareAssignmentDelete, prepareAssignmentGroupChange,
-    prepareSingleAssignment, prepareTaskGroup, prepareTaskGroupEdit, prepareGoalChange, prepareGoalDelete, prepareCalendarConstraintChange, prepareDurationChange, prepareReviewCompletion,
+    prepareSingleAssignment, prepareTaskGroup, prepareTaskGroupEdit, prepareGoalChange, prepareGoalDelete, updateGoalMetadata, prepareCalendarConstraintChange, updateCalendarConstraintMetadata, prepareDurationChange, prepareReviewCompletion,
     generateProposals, applySchedulingProposal, applyPreparedWithoutScheduling,
     restoreReplanHistory, recordReview, completeReview, previewPlanVersion, restorePlanVersion,
     startTimer, pauseTimer, stopTimer, resetAll, sequenceRenumberSuggestion,
@@ -1073,7 +1092,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     state, namespace, ready, loadedFromStorage, commit, replaceState, loadDataSpace, setDataSpace, clearDataSpace, undo,
     updateSettings, updateDayConfig, updateAssignment, moveAssignments, finishAssignment, reopenAssignment, addTime,
     addTaskGroup, editTaskGroup, deleteTaskGroup, removeAssignment, prepareTaskGroupDelete, prepareAssignmentDelete, prepareAssignmentGroupChange, prepareSingleAssignment, prepareTaskGroup, prepareTaskGroupEdit, prepareGoalChange,
-    prepareGoalDelete, prepareCalendarConstraintChange, prepareDurationChange, prepareReviewCompletion, generateProposals, applySchedulingProposal,
+    prepareGoalDelete, updateGoalMetadata, prepareCalendarConstraintChange, updateCalendarConstraintMetadata, prepareDurationChange, prepareReviewCompletion, generateProposals, applySchedulingProposal,
     applyPreparedWithoutScheduling, restoreReplanHistory, recordReview, completeReview,
     previewPlanVersion, restorePlanVersion, startTimer, pauseTimer, stopTimer, resetAll,
     sequenceRenumberSuggestion, dismissSequenceRenumberSuggestion, applySequenceRenumber,

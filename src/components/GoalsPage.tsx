@@ -9,13 +9,30 @@ import { Modal } from './Modal'
 import { NumericInput } from './NumericInput'
 
 export function GoalsPage({ onPrepared }: { onPrepared: (prepared: AppState, event: PlanChangeEvent) => void }) {
-  const { state, commit, prepareGoalChange, prepareGoalDelete } = useApp()
+  const { state, commit, prepareGoalChange, prepareGoalDelete, updateGoalMetadata } = useApp()
   const [editing, setEditing] = useState<Goal | null | undefined>()
   const goals = useMemo(() => [...state.goals].sort((a,b) => (a.status === 'archived' ? 1 : 0) - (b.status === 'archived' ? 1 : 0) || a.latestDate.localeCompare(b.latestDate)), [state.goals])
   const assignmentMap = useMemo(() => new Map(state.assignments.map(item => [item.id, item])), [state.assignments])
   const groupMap = useMemo(() => new Map(state.taskGroups.map(item => [item.id, item])), [state.taskGroups])
 
   const save = (draft: GoalDraft, goalId?: string) => {
+    const existing = goalId ? state.goals.find(goal => goal.id === goalId) : undefined
+    const sameScheduling = Boolean(existing
+      && draft.priority === existing.priority
+      && (draft.desiredDate ?? undefined) === (existing.desiredDate ?? undefined)
+      && draft.latestDate === existing.latestDate
+      && JSON.stringify(draft.completionConditions.map(condition => [condition.groupId, condition.mode, condition.value ?? null]))
+        === JSON.stringify(existing.completionConditions.map(condition => [condition.groupId, condition.mode, condition.value ?? null]))
+      && Array.from(draft.linkedTaskGroupIds).sort().join('|') === Array.from(existing.linkedTaskGroupIds).sort().join('|')
+      && Array.from(draft.linkedAssignmentIds).sort().join('|') === Array.from(existing.linkedAssignmentIds).sort().join('|'))
+    if (existing && sameScheduling) {
+      // 名称/描述等纯展示字段属于元数据：直接保存，不触发调度/冲突/方案/版本；无变化则只关闭。
+      if (draft.title !== existing.title || (draft.description ?? '') !== (existing.description ?? '')) {
+        updateGoalMetadata(existing.id, { title: draft.title, description: draft.description })
+      }
+      setEditing(undefined)
+      return
+    }
     const prepared = prepareGoalChange(draft, goalId)
     setEditing(undefined)
     onPrepared(prepared.state, prepared.event)
