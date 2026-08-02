@@ -4,12 +4,13 @@
 >
 > An explainable and recoverable study planning system built around real execution.
 
+
 ## Project Status
 
 - 当前版本：`v0.8.13`
 - 状态：`Active development`（持续迭代）
 - 数据：本地优先（IndexedDB），可选 Supabase 账号同步；游客空间独立
-
+- 体验：https://study-planner.yhwlwl.xyz
 ## 这是什么
 
 学习计划经常面临"排期与执行脱节"：计划排好后，实际用时、临时缺勤、目标变化都会让原计划失效，而手动调整又容易产生新的冲突。
@@ -115,5 +116,5 @@ npm run build
 ## 当前限制
 
 - 完整计划版本历史仅保存在当前设备，不随账号同步；
-- 未包含 AI 自然语言交互、学习质量/正确率评价、正式取消任务生命周期（这些是明确延期的范围，不是遗漏）；
-- 本项目当前以本地/自部署方式运行，未提供公共演示站点。
+
+
