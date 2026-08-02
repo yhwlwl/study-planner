@@ -7,7 +7,7 @@
 
 ## Project Status
 
-- 当前版本：`v0.8.13`
+- 当前版本：`v0.8.14`
 - 状态：`Active development`（持续迭代）
 - 数据：本地优先（IndexedDB），可选 Supabase 账号同步；游客空间独立
 - 体验：https://study-planner.yhwlwl.xyz

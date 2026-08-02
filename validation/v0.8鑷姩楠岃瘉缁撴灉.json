@@ -1,14 +1,14 @@
 {
-  "generatedAt": "2026-08-01T14:16:12.063Z",
+  "generatedAt": "2026-08-02T16:51:27.717Z",
   "passed": 76,
   "total": 76,
   "failed": [],
   "checks": [
     {
       "group": "版本与迁移",
-      "name": "发布版本为 0.8.13",
+      "name": "发布版本为 0.8.14",
       "pass": true,
-      "evidence": "package.json: 0.8.13"
+      "evidence": "package.json: 0.8.14"
     },
     {
       "group": "版本与迁移",
@@ -446,19 +446,19 @@
       "group": "自动验证",
       "name": "核心场景与三大系统架构验证",
       "pass": true,
-      "evidence": "全部通过，详见 validation/v0.8.13场景架构验证.md"
+      "evidence": "全部通过，详见 validation/v0.8.14场景架构验证.md"
     },
     {
       "group": "自动验证",
       "name": "桌面与手机界面布局审计",
       "pass": true,
-      "evidence": "全部通过，详见 validation/v0.8.13界面布局审计.md"
+      "evidence": "全部通过，详见 validation/v0.8.14界面布局审计.md"
     },
     {
       "group": "自动验证",
       "name": "全流程用户效率与统计口径验证",
       "pass": true,
-      "evidence": "全部通过，详见 validation/v0.8.13用户效率验证.md"
+      "evidence": "全部通过，详见 validation/v0.8.14用户效率验证.md"
     }
   ]
 }

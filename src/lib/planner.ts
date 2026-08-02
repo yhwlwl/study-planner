@@ -2034,12 +2034,23 @@ export function previewPreparedChange(
   }
   for (const { oldItem, newItem } of changed) {
     const assignmentIds = [newItem.id]
+    const oldDateIsPast = Boolean(oldItem.scheduledDate && before(oldItem.scheduledDate, today))
+    const newDateIsPast = Boolean(newItem.scheduledDate && before(newItem.scheduledDate, today))
+    const explicitlyMovesPastUnfinishedOut = Boolean(
+      oldDateIsPast
+      && oldItem.status !== 'done'
+      && !oldItem.locked
+      && baseline.timer.assignmentId !== oldItem.id
+      && (!newItem.scheduledDate || !newDateIsPast)
+      && event.affectedAssignmentIds.includes(newItem.id)
+      && (event.type === 'execution-difference' || event.type === 'bulk-move')
+    )
     const availabilitySourceChange = event.type === 'availability-change' && oldItem.scheduledDate && event.affectedDates.includes(oldItem.scheduledDate)
     const acceptedSourceProtection = Boolean(oldItem.scheduledDate && mergedAcceptedExceptions.some(item =>
       item.rawKey === 'source-date-protection' && item.date === oldItem.scheduledDate
       && (!item.affectedAssignmentIds?.length || item.affectedAssignmentIds.includes(newItem.id))))
     if (oldItem.scheduledDate && oldItem.scheduledDate !== newItem.scheduledDate && isDateProtected(baseline, oldItem.scheduledDate)
-      && !availabilitySourceChange && !acceptedSourceProtection) addIssue(`source-protected:${oldItem.scheduledDate}:${newItem.id}`, {
+      && !availabilitySourceChange && !explicitlyMovesPastUnfinishedOut && !acceptedSourceProtection) addIssue(`source-protected:${oldItem.scheduledDate}:${newItem.id}`, {
       id: uid('issue'), type: 'date-protection', title: '原日期受到保护',
       detail: `“${oldItem.title}”当前位于受保护日期 ${oldItem.scheduledDate}，移出也需要你的明确授权。`,
       date: oldItem.scheduledDate, assignmentIds, consequence: '会改变用户明确保护的日期内容。',
@@ -2061,9 +2072,17 @@ export function previewPreparedChange(
       assignmentIds, consequence: '会破坏当前执行上下文。', resolution: '结束或暂停计时后再调整。',
       rawConstraintKey: 'active-timer', conflictCategory: 'absolute-blocker', allowedResolutions: ['keep-original', 'cancel-change'],
     })
-    if ((oldItem.scheduledDate && before(oldItem.scheduledDate, today)) || (newItem.scheduledDate && before(newItem.scheduledDate, today))) addIssue(`past:${newItem.id}`, {
-      id: uid('issue'), type: 'past-freeze', title: '过去日期已冻结', detail: `“${oldItem.title}”的变化涉及过去日期。`,
-      assignmentIds, consequence: '会改写历史计划。', resolution: '保留过去日期，只调整今天之后的任务。',
+    // 过去日期冻结的是已经发生的执行事实，而不是把未完成任务永远困在过去。
+    // 用户在复盘或待处理任务中明确选择顺延时，允许把过去未完成任务移到今天/未来，
+    // 或暂时取消日期；但仍禁止把任务移入过去、改写已完成记录、锁定任务或计时任务。
+    if (newDateIsPast || (oldDateIsPast && !explicitlyMovesPastUnfinishedOut)) addIssue(`past:${newItem.id}`, {
+      id: uid('issue'), type: 'past-freeze', title: newDateIsPast ? '不能把任务安排到过去' : '过去日期已冻结',
+      detail: newDateIsPast
+        ? `“${oldItem.title}”不能移动到过去日期 ${newItem.scheduledDate}。`
+        : `“${oldItem.title}”的变化会改写已经冻结的过去记录。`,
+      assignmentIds,
+      consequence: newDateIsPast ? '过去日期不能接收新的计划任务。' : '会改写历史计划。',
+      resolution: newDateIsPast ? '请选择今天或未来日期。' : '保留过去记录，只调整仍未完成且可移动的任务。',
       rawConstraintKey: 'past', conflictCategory: 'absolute-blocker', allowedResolutions: ['keep-original', 'cancel-change'],
     })
     if (!newItem.scheduledDate) continue
