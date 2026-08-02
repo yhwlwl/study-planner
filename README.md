@@ -3,6 +3,7 @@
 > 目标驱动、可解释、可恢复的动态学习计划系统。
 >
 > An explainable and recoverable study planning system built around real execution.
+> https://study-planner.yhwlwl.xyz
 
 ## Project Status
 
@@ -115,5 +116,5 @@ npm run build
 ## 当前限制
 
 - 完整计划版本历史仅保存在当前设备，不随账号同步；
-- 未包含 AI 自然语言交互、学习质量/正确率评价、正式取消任务生命周期（这些是明确延期的范围，不是遗漏）；
-- 本项目当前以本地/自部署方式运行，未提供公共演示站点。
+
+
