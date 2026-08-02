@@ -1,0 +1,118 @@
+{
+  "version": "0.8.10",
+  "generatedAt": "2026-08-01T09:57:04.820Z",
+  "passed": 22,
+  "total": 22,
+  "checks": [
+    {
+      "name": "计时任务完成入口回到计时结算",
+      "pass": true,
+      "evidence": "TaskCard 不直接清空活动计时器"
+    },
+    {
+      "name": "陈旧计时状态仍有实际分钟兜底",
+      "pass": true,
+      "evidence": "Today 完成弹窗保留极端状态兜底"
+    },
+    {
+      "name": "Today 区分原计划、实际、剩余和执行负载",
+      "pass": true,
+      "evidence": "首页与复盘口径可解释"
+    },
+    {
+      "name": "Today 负载使用实际加剩余口径",
+      "pass": true,
+      "evidence": "容量风险统一基于真实执行快照"
+    },
+    {
+      "name": "任务页覆盖所有任务状态",
+      "pass": true,
+      "evidence": "具体任务与任务组分离"
+    },
+    {
+      "name": "复盘暂不顺延仍可找回",
+      "pass": true,
+      "evidence": "任务收件箱和首页提醒均可进入"
+    },
+    {
+      "name": "批量顺延只有一个最终确认点",
+      "pass": true,
+      "evidence": "设置页只生成统一预览"
+    },
+    {
+      "name": "删除入口直接进入统一预览",
+      "pass": true,
+      "evidence": "不再前置重复确认"
+    },
+    {
+      "name": "任务时长变化按最小作用域预览",
+      "pass": true,
+      "evidence": "只处理本次新增或恶化问题"
+    },
+    {
+      "name": "文本编辑使用草稿后一次保存",
+      "pass": true,
+      "evidence": "避免每个字符占用撤销历史"
+    },
+    {
+      "name": "批量移动使用日期选择器",
+      "pass": true,
+      "evidence": "桌面和手机均使用同一日期表单"
+    },
+    {
+      "name": "导入和恢复先预览差异",
+      "pass": true,
+      "evidence": "JSON、云端和冲突备份统一预览"
+    },
+    {
+      "name": "算法和维护设置默认折叠",
+      "pass": true,
+      "evidence": "普通用户不先面对内部参数"
+    },
+    {
+      "name": "模态草稿不会因误点背景消失",
+      "pass": true,
+      "evidence": "长表单只通过明确关闭或取消退出"
+    },
+    {
+      "name": "统计页使用独立纯函数",
+      "pass": true,
+      "evidence": "统计口径可独立运行验证"
+    },
+    {
+      "name": "今日容量只在相关场景询问",
+      "pass": true,
+      "evidence": "减负和复盘差异不重复询问无关条件"
+    },
+    {
+      "name": "计划调整入口显示当前问题数量",
+      "pass": true,
+      "evidence": "无问题时保持普通入口，有问题时直接显示数量"
+    },
+    {
+      "name": "编号整理不再自动打断主流程",
+      "pass": true,
+      "evidence": "先以非阻断结果条提示，用户主动展开后再决定"
+    },
+    {
+      "name": "手机关键图标具有可见文字",
+      "pass": true,
+      "evidence": "目标编辑归档删除和任务锁定在窄屏可读"
+    },
+    {
+      "name": "统计概览默认只保留主结论和主图",
+      "pass": true,
+      "evidence": "连续记录与热力图按需展开"
+    },
+    {
+      "name": "方案卡首屏收敛计算指标",
+      "pass": true,
+      "evidence": "稳定性计算仍保留在详情，不占据首选方案摘要"
+    },
+    {
+      "name": "实际时间与旧数据残差各只计算一次",
+      "pass": true,
+      "evidence": "actual=90; timer=40; legacy=50"
+    }
+  ]
+}

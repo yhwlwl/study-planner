@@ -1,0 +1,12 @@
+node_modules/
+node_modules.bak/
+dist/
+.env
+.env.*
+!.env.example
+*.local
+*.log
+*.tsbuildinfo
+.DS_Store
+*.zip
+study-plan-*.json

@@ -260,3 +260,13 @@
 - [x] 统计概览默认只展示主结论和主图，次要趋势按需展开。
 - [x] 方案卡首屏只展示决策所需指标，稳定性等计算依据保留在详情。
 - [x] 通过 76/76 综合验证、44/44 场景、25/25 UI、22/22 效率与 500 项规模测试。
+
+## v0.8.12 计划调整预览修复
+
+| 用户要求 | 实现位置 | 验证 |
+|---|---|---|
+| 单一局部操作不再显示唯一方案伪选择 | `ProposalDialog.tsx` 的 `singleLocalProposal` / `LocalOperationResult` | UI 审计、移动端方案预览检查 |
+| 顶部信息去重并明确本次操作 | `proposal-event-heading` / `proposal-local-principle` | 390px 浏览器渲染 |
+| 底部按钮不遮挡正文 | `Modal.footer` 与 `.modal-footer` | 浏览器几何验证：正文与 footer 无重叠 |
+| 主按钮表达具体动作 | `localActionLabel()` | 移动端方案预览检查 |
+| 手机与桌面分别布局 | `styles.css` v0.8.12 响应式规则 | 390×844、1440×900 截图 |

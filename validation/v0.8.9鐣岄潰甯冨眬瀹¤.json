@@ -1,0 +1,93 @@
+{
+  "version": "0.8.9",
+  "generatedAt": "2026-08-01T07:11:38.202Z",
+  "passed": 17,
+  "total": 17,
+  "checks": [
+    {
+      "name": "复杂弹窗支持独立视觉变体",
+      "pass": true,
+      "evidence": "Modal className 可按页面配置"
+    },
+    {
+      "name": "复盘使用独立桌面布局",
+      "pass": true,
+      "evidence": "review-modal"
+    },
+    {
+      "name": "计划调整使用独立桌面布局",
+      "pass": true,
+      "evidence": "adjustment-modal"
+    },
+    {
+      "name": "方案预览使用独立桌面布局",
+      "pass": true,
+      "evidence": "proposal-modal"
+    },
+    {
+      "name": "桌面复杂弹窗正文独立滚动",
+      "pass": true,
+      "evidence": "桌面 modal body 独立滚动"
+    },
+    {
+      "name": "复盘摘要桌面三列",
+      "pass": true,
+      "evidence": "桌面 3 列，避免六张窄卡"
+    },
+    {
+      "name": "计划调整桌面主次双栏",
+      "pass": true,
+      "evidence": "主场景 + 今日容量侧栏"
+    },
+    {
+      "name": "计划调整手机回落单栏",
+      "pass": true,
+      "evidence": "手机单列"
+    },
+    {
+      "name": "方案摘要桌面四列手机两列",
+      "pass": true,
+      "evidence": "桌面 4 列 / 手机 2 列"
+    },
+    {
+      "name": "复盘手机保留紧凑双列摘要",
+      "pass": true,
+      "evidence": "手机 2 列"
+    },
+    {
+      "name": "手机复杂弹窗保持 100dvh 全屏",
+      "pass": true,
+      "evidence": "iPhone 全屏与安全区"
+    },
+    {
+      "name": "桌面与手机底部操作区分别适配",
+      "pass": true,
+      "evidence": "桌面粘性 footer + 手机安全区"
+    },
+    {
+      "name": "其余主要页面统一卡片层级",
+      "pass": true,
+      "evidence": "目标、统计、设置、任务卡统一阴影"
+    },
+    {
+      "name": "约束列表桌面与手机分别布局",
+      "pass": true,
+      "evidence": "桌面双区 / 手机单列"
+    },
+    {
+      "name": "表单输入保持统一高度和视觉",
+      "pass": true,
+      "evidence": "表单控件统一"
+    },
+    {
+      "name": "局部操作在桌面端显示作用范围摘要",
+      "pass": true,
+      "evidence": "原操作与既有问题分层"
+    },
+    {
+      "name": "局部操作摘要在手机端回落单列",
+      "pass": true,
+      "evidence": "手机单列与 2×2 数据摘要"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "generatedAt": "2026-07-31T13:33:35.134Z",
+  "pass": true,
+  "previewIssues": 2,
+  "issueTitles": [
+    "超过当天硬容量",
+    "化学预习课节数"
+  ],
+  "proposals": 1,
+  "legalDate": "2026-08-03",
+  "partialDecisionProposals": 1,
+  "acceptedExceptionKeys": [
+    "capacity"
+  ],
+  "recalculatedDate": "2026-08-01",
+  "selectedCandidatePartialDecision": true,
+  "minimumScopedAssignments": [
+    "cap-task"
+  ],
+  "recalculatedSelectedDate": "2026-08-01"
+}

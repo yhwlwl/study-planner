@@ -42,14 +42,14 @@ add('手机关键图标显示文字标签', css.includes('.mobile-action-label')
 add('统计次要概览默认折叠', css.includes('.stats-overview-more') && css.includes('.stats-overview-more-body'), '连续记录与热力图不再挤占首屏')
 
 add('单一局部操作不再显示伪方案选择', proposal.includes('singleLocalProposal') && proposal.includes('!singleLocalProposal && <section className="proposal-options-heading"') && proposal.includes('LocalOperationResult'), '只有一个精确方案时直接展示本次结果')
-add('方案底部按钮不遮挡正文', modal.includes('{footer && <footer className="modal-footer">') && proposal.includes('proposal-footer-actions') && !proposal.includes('proposal-sticky-actions'), 'footer 与 modal-body 为同级独立区域')
+add('方案底部按钮不遮挡正文', modal.includes('{effectiveFooter && <footer className="modal-footer">') && proposal.includes('proposal-footer-actions') && !proposal.includes('proposal-sticky-actions'), 'footer 与 modal-body 为同级独立区域')
 add('手机方案弹窗最终覆盖为完整 100dvh', css.includes('.modal-card.modal-wide.modal-mobile-fullscreen.modal-with-footer') && css.includes('max-height:100dvh'), '避免 modal-wide 的 90vh 规则留下底部空白')
 
 const passed = checks.filter(item => item.pass).length
-const output = { version: '0.8.12', generatedAt: new Date().toISOString(), passed, total: checks.length, checks }
+const output = { version: '0.8.13', generatedAt: new Date().toISOString(), passed, total: checks.length, checks }
 fs.mkdirSync(path.join(root, 'validation'), { recursive: true })
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.12界面布局审计.json'), JSON.stringify(output, null, 2))
-const md = ['# Study Planner v0.8.12 界面布局审计', '', `- 通过：${passed} / ${checks.length}`, `- 生成时间：${output.generatedAt}`, '', ...checks.map(item => `- ${item.pass ? '✅' : '❌'} **${item.name}**：${item.evidence}`)]
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.12界面布局审计.md'), md.join('\n') + '\n')
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.13界面布局审计.json'), JSON.stringify(output, null, 2))
+const md = ['# Study Planner v0.8.13 界面布局审计', '', `- 通过：${passed} / ${checks.length}`, `- 生成时间：${output.generatedAt}`, '', ...checks.map(item => `- ${item.pass ? '✅' : '❌'} **${item.name}**：${item.evidence}`)]
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.13界面布局审计.md'), md.join('\n') + '\n')
 console.log(md.join('\n'))
 process.exit(passed === checks.length ? 0 : 1)

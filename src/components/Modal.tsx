@@ -1,14 +1,58 @@
+import { Children, cloneElement, isValidElement, useEffect, useRef, type ReactElement, type ReactNode } from 'react'
 import { X } from 'lucide-react'
-import type { ReactNode } from 'react'
+
+type ChildElement = ReactElement<{ children?: ReactNode; className?: string }>
+
+function isModalActions(node: ReactNode): node is ChildElement {
+  if (!isValidElement(node)) return false
+  const className = typeof node.props.className === 'string' ? node.props.className : ''
+  return className.split(/\s+/).includes('modal-actions')
+}
+
+function splitTrailingModalActions(node: ReactNode): { content: ReactNode; actions?: ReactNode } {
+  const items = Children.toArray(node)
+  if (!items.length) return { content: node }
+
+  const last = items[items.length - 1]
+  if (isModalActions(last)) {
+    return { content: items.slice(0, -1), actions: last }
+  }
+
+  if (isValidElement(last)) {
+    const element = last as ChildElement
+    const nested = splitTrailingModalActions(element.props.children)
+    if (nested.actions) {
+      return {
+        content: [...items.slice(0, -1), cloneElement(element, undefined, nested.content)],
+        actions: nested.actions,
+      }
+    }
+  }
+
+  return { content: node }
+}
 
 export function Modal({ open, title, children, footer, onClose, wide = false, mobileSheet = false, mobileFullscreen = false, className = '' }: { open: boolean; title: string; children: ReactNode; footer?: ReactNode; onClose: () => void; wide?: boolean; mobileSheet?: boolean; mobileFullscreen?: boolean; className?: string }) {
+  const titleIdRef = useRef<string>()
+  if (!titleIdRef.current) titleIdRef.current = `modal-title-${Math.random().toString(36).slice(2, 10)}`
+  const titleId = titleIdRef.current
+  useEffect(() => {
+    if (!open) return
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = previous }
+  }, [open])
   if (!open) return null
+
+  const extracted = footer ? { content: children, actions: undefined } : splitTrailingModalActions(children)
+  const effectiveFooter = footer ?? extracted.actions
+
   return (
     <div className="modal-backdrop">
-      <section className={`modal-card ${wide ? 'modal-wide' : ''} ${mobileSheet ? 'modal-mobile-sheet' : ''} ${mobileFullscreen ? 'modal-mobile-fullscreen' : ''} ${footer ? 'modal-with-footer' : ''} ${className}`.trim()} onMouseDown={e => e.stopPropagation()}>
-        <header className="modal-header"><h2>{title}</h2><button className="icon-button" onClick={onClose} aria-label="关闭"><X size={20} /></button></header>
-        <div className="modal-body">{children}</div>
-        {footer && <footer className="modal-footer">{footer}</footer>}
+      <section role="dialog" aria-modal="true" aria-labelledby={titleId} className={`modal-card ${wide ? 'modal-wide' : ''} ${mobileSheet ? 'modal-mobile-sheet' : ''} ${mobileFullscreen ? 'modal-mobile-fullscreen' : ''} ${effectiveFooter ? 'modal-with-footer' : ''} ${className}`.trim()} onMouseDown={e => e.stopPropagation()}>
+        <header className="modal-header"><h2 id={titleId}>{title}</h2><button className="icon-button" onClick={onClose} aria-label="关闭"><X size={20} /></button></header>
+        <div className="modal-body">{extracted.content}</div>
+        {effectiveFooter && <footer className="modal-footer">{effectiveFooter}</footer>}
       </section>
     </div>
   )

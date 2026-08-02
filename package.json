@@ -1,7 +1,7 @@
 {
   "name": "study-planner",
   "private": true,
-  "version": "0.8.12",
+  "version": "0.8.13",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,7 +15,8 @@
     "test:ui": "node scripts/ui-audit-v0810.mjs",
     "test:efficiency": "node scripts/user-efficiency-v0810.mjs",
     "test:mobile-review": "node scripts/mobile-review-layout-v0811.mjs",
-    "test:mobile-proposal": "node scripts/mobile-proposal-layout-v0812.mjs"
+    "test:mobile-proposal": "node scripts/mobile-proposal-layout-v0812.mjs",
+    "test:mobile-modal": "node scripts/mobile-modal-footer-v0813.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.52.1",

@@ -1,0 +1,24 @@
+{
+  "generatedAt": "2026-08-01T07:01:02.553Z",
+  "pass": true,
+  "previewIssues": 2,
+  "issueTitles": [
+    "超过当天硬容量",
+    "化学预习课节数"
+  ],
+  "proposals": 1,
+  "legalDate": "2026-08-04",
+  "partialDecisionProposals": 1,
+  "acceptedExceptionKeys": [
+    "capacity"
+  ],
+  "recalculatedDate": "2026-08-02",
+  "selectedCandidatePartialDecision": true,
+  "minimumScopedAssignments": [
+    "cap-task"
+  ],
+  "recalculatedSelectedDate": "2026-08-02",
+  "completedHistoryExcluded": true,
+  "nonWorseningOverloadAllowed": true,
+  "incomingTaskStillValidated": true
+}

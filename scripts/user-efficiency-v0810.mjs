@@ -66,10 +66,10 @@ try {
 add('实际时间与旧数据残差各只计算一次', runtimeStatsPass, runtimeStatsEvidence)
 
 const passed = checks.filter(item => item.pass).length
-const result = { version: '0.8.12', generatedAt: new Date().toISOString(), passed, total: checks.length, checks }
+const result = { version: '0.8.13', generatedAt: new Date().toISOString(), passed, total: checks.length, checks }
 fs.mkdirSync(path.join(root, 'validation'), { recursive: true })
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.12用户效率验证.json'), JSON.stringify(result, null, 2))
-const lines = ['# Study Planner v0.8.12 用户效率验证', '', `- 通过：${passed} / ${checks.length}`, `- 生成时间：${result.generatedAt}`, '', ...checks.map(item => `- ${item.pass ? '✅' : '❌'} **${item.name}**：${item.evidence}`)]
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.12用户效率验证.md'), lines.join('\n') + '\n')
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.13用户效率验证.json'), JSON.stringify(result, null, 2))
+const lines = ['# Study Planner v0.8.13 用户效率验证', '', `- 通过：${passed} / ${checks.length}`, `- 生成时间：${result.generatedAt}`, '', ...checks.map(item => `- ${item.pass ? '✅' : '❌'} **${item.name}**：${item.evidence}`)]
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.13用户效率验证.md'), lines.join('\n') + '\n')
 console.log(lines.join('\n'))
 if (passed !== checks.length) process.exit(1)

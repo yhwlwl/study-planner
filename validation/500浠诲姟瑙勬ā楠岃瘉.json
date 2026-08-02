@@ -1,0 +1,23 @@
+{
+  "generatedAt": "2026-08-01T14:16:15.312Z",
+  "fixture": {
+    "goals": 20,
+    "taskGroups": 50,
+    "assignments": 500,
+    "constraints": 30,
+    "localVersions": 10
+  },
+  "checks": {
+    "fixtureMatchesRequirement": true,
+    "portableExcludesHeavyVersions": true,
+    "noRecursiveVersionPayload": true,
+    "serializationCompletes": true
+  },
+  "measurements": {
+    "clone50TimesMs": 48.06,
+    "serialize100TimesMs": 55.62,
+    "portableBytes": 189711,
+    "fullWithLocalVersionsBytes": 4529380,
+    "heavyToPortableRatio": 23.88
+  }
+}

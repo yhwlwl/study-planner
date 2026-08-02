@@ -1168,3 +1168,554 @@ html,body,#root{min-height:100%;overflow-x:hidden}.app-shell{min-height:100dvh}.
     max-height:100dvh;
   }
 }
+
+/* v0.8.13 — unified modal viewport/footer architecture */
+.modal-card{
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+}
+.modal-header{
+  position:relative;
+  top:auto;
+  flex:none;
+}
+.modal-body{
+  flex:1 1 auto;
+  min-height:0;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;
+}
+.modal-footer{
+  position:relative;
+  flex:none;
+  width:100%;
+  box-sizing:border-box;
+  border-top:1px solid var(--line);
+  background:#fff;
+  padding:12px 18px;
+  box-shadow:0 -8px 24px rgba(24,39,66,.07);
+  z-index:6;
+}
+.modal-footer .modal-actions,
+.modal-footer .adjustment-actions,
+.modal-footer .proposal-sticky-actions,
+.modal-footer .review-sticky-actions{
+  position:static!important;
+  inset:auto!important;
+  width:100%;
+  margin:0!important;
+  padding:0!important;
+  border:0!important;
+  background:transparent!important;
+  box-shadow:none!important;
+  backdrop-filter:none!important;
+}
+.modal-footer .modal-actions{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:9px;
+}
+
+@media(max-width:760px){
+  .modal-card.modal-mobile-fullscreen{
+    height:100dvh!important;
+    min-height:100dvh;
+    max-height:100dvh!important;
+  }
+  .modal-mobile-fullscreen .modal-header{
+    flex:none;
+  }
+  .modal-mobile-fullscreen .modal-body{
+    flex:1 1 auto;
+    min-height:0;
+    padding-bottom:18px!important;
+  }
+  .modal-mobile-fullscreen .modal-footer{
+    flex:none;
+    width:100%;
+    min-height:68px;
+    padding:10px 12px max(10px,calc(env(safe-area-inset-bottom) + 6px));
+    background:#fff;
+    box-shadow:0 -7px 20px rgba(24,39,66,.08);
+  }
+  .modal-mobile-fullscreen .modal-footer .modal-actions{
+    display:grid;
+    grid-template-columns:minmax(96px,.38fr) minmax(0,1fr);
+    align-items:stretch;
+    gap:8px;
+  }
+  .modal-mobile-fullscreen .modal-footer .modal-actions>*,
+  .modal-mobile-fullscreen .modal-footer .proposal-footer-actions>*{
+    min-width:0;
+    width:100%;
+    min-height:46px;
+    margin:0;
+  }
+  .modal-mobile-fullscreen .modal-footer .modal-actions>:only-child{
+    grid-column:1/-1;
+  }
+  .modal-mobile-fullscreen .modal-footer .modal-actions:has(>:nth-child(3)){
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+  .modal-mobile-fullscreen .modal-footer .modal-actions>:last-child:nth-child(3){
+    grid-column:1/-1;
+  }
+  .modal-mobile-fullscreen .modal-footer .proposal-footer-actions{
+    width:100%;
+    margin:0;
+  }
+  .modal-mobile-fullscreen .modal-footer .proposal-footer-actions .proposal-keep-action{
+    grid-column:1/-1;
+  }
+  .modal-mobile-fullscreen .modal-footer .proposal-footer-actions .proposal-cancel-action,
+  .modal-mobile-fullscreen .modal-footer .proposal-footer-actions .primary-button{
+    min-height:46px;
+  }
+}
+
+@media(max-width:760px){
+  /* All mobile modal footers own the bottom safe area, including bottom sheets. */
+  .modal-card.modal-with-footer .modal-footer{
+    padding:10px 12px max(10px,calc(env(safe-area-inset-bottom) + 6px));
+    background:#fff;
+  }
+  .modal-card.modal-with-footer .modal-body{
+    padding-bottom:18px!important;
+  }
+}
+
+/* =====================================================================
+   v0.9 UI polish — 仅显示与交互，追加覆盖层
+   不修改历史规则、不增减任何内容、不触碰任何算法。
+   ===================================================================== */
+
+/* 1) 设计变量：更轻的阴影与统一的圆角基线 */
+:root{
+  --shadow:0 10px 28px rgba(33,51,84,.055);
+  --card-radius:16px;
+  --focus-ring:rgba(37,99,235,.45);
+}
+
+/* 2) 全局交互基线 */
+html{
+  -webkit-text-size-adjust:100%;
+  text-size-adjust:100%;
+}
+body{
+  font-size:16px;
+}
+*{
+  -webkit-tap-highlight-color:transparent;
+}
+button,label,select,input,textarea,a{
+  touch-action:manipulation;
+}
+button:focus-visible,summary:focus-visible,a:focus-visible{
+  outline:2px solid var(--focus-ring);
+  outline-offset:2px;
+}
+button:not(:disabled):active{
+  transform:translateY(1px);
+}
+
+/* 3) 桌面布局基线：更聚拢的内容区与更大的导航触控面 */
+.app-shell{
+  grid-template-columns:248px 1fr;
+}
+.sidebar{
+  padding:18px 14px;
+}
+.sidebar nav button,.collapse-button{
+  min-height:44px;
+}
+.topbar{
+  height:72px;
+  padding:0 26px;
+}
+.page-content{
+  max-width:1360px;
+  padding:26px;
+}
+.today-hero,.calendar-toolbar,.tasks-toolbar{
+  padding:20px 22px;
+}
+.today-hero-actions{
+  flex-wrap:wrap;
+  gap:9px;
+}
+.today-hero,.calendar-toolbar,.tasks-toolbar,.goal-card,.group-card,.chart-card,.settings-section,.stats-panel,.stats-insights,.stats-kpi,.stats-overview-more{
+  border-radius:var(--card-radius);
+}
+.goal-card,.stats-panel,.stats-kpi,.settings-section,.group-card,.chart-card,.stats-overview-more{
+  box-shadow:0 6px 18px rgba(33,51,84,.04);
+}
+.review-hero{
+  box-shadow:0 10px 26px rgba(37,99,235,.06);
+}
+
+/* 4) 桌面字号分级：8–10px 的过小文字统一提升 */
+.proposal-choice-metrics span,.proposal-choice-metrics em,
+.proposal-event-tags span,
+.proposal-scope-stats small,
+.proposal-issue-heading>span,
+.conflict-category-chips span,
+.conflict-decision-card-head span,
+.conflict-decision-card-head em,
+.conflict-values small,
+.conflict-resolution-sections header span,
+.choice-indicator,
+.proposal-choice-title>span,
+.proposal-choice-title small,
+.review-summary-grid button small,
+.review-finish-plan-summary>span,
+.proposal-event-kicker,
+.proposal-local-result>header span,
+.proposal-local-result>header em,
+.proposal-local-result-grid button span,
+.proposal-existing-issue-summary span,
+.proposal-decision-summary strong,
+.proposal-summary-grid>button small,
+.adjustment-eyebrow,
+.adjustment-intro-badges span,
+.review-progress-ring span,
+.review-eyebrow,
+.proposal-human-summary>span,
+.proposal-scope-summary>div:first-child>span,
+.proposal-movement-editor small,
+.proposal-movement-actions label,
+.proposal-exception-confirm small,
+.status-pill,.goal-priority-pill,
+.task-intent-badge,.task-lock-badge,
+.history-diff-date>header small,
+.history-audit-summary span{
+  font-size:11px!important;
+}
+
+.proposal-event>p,.proposal-policy-note span,.proposal-choice>p,
+.proposal-direct-conflict span,.proposal-decision-summary span,.proposal-warning small,
+.proposal-local-result>p,.proposal-local-alternatives span,.proposal-local-principle span,
+.proposal-scope-summary>div:first-child>p,
+.proposal-summary-grid>button span,
+.proposal-details>details>summary,
+.proposal-name-list li,.proposal-date-task-lists li,
+.conflict-decision-heading p,.conflict-decision-card>p,
+.conflict-decision-card>details summary,.conflict-decision-card>details li,
+.conflict-impact span,.conflict-impact small,
+.conflict-resolution-sections header strong,
+.review-hero-copy>p,.review-section header p,.review-section-toggle p,
+.review-task-title em,.review-task-progress span,
+.review-carry-choice>span,.review-carry-choice small,
+.review-completed-grid span,.review-completed-times span,
+.review-completed-times em,.review-time-compare>em,.duration-suggestion-list em,
+.review-rule-note,.review-finish-option span,.review-adjustment-callout span,
+.review-finish-plan-summary>p,.review-time-compare>span,
+.duration-suggestion-list article span,.duration-suggestion-list article small,
+.duration-suggestion-list summary,
+.simple-chart-row>span,.simple-chart-row small,.simple-chart>p,.simple-chart>header span,
+.adjustment-intro p,.adjustment-step-header p,.adjustment-section>header span,
+.adjustment-reason-grid span:not(.choice-indicator),.adjustment-outcome-grid small,
+.adjustment-today-control button span,
+.adjustment-guarantees span,
+.review-empty-success span,.review-empty-neutral span,
+.goal-completion-outcome span,.goal-completion-outcome strong,
+.exceptional-links>small,.exceptional-links label small,
+.constraint-list span,.constraint-list small,
+.task-meta,.group-stats,.group-note,.field>span,.muted-text,
+.proposal-generation-state p{
+  font-size:12px;
+}
+.review-sample-grid strong,.review-sample-grid span,
+.adjustment-today-section>header span{
+  font-size:12px!important;
+}
+.load-delta,.recharts-legend-item-text,.recharts-cartesian-axis-tick-value{
+  font-size:11px!important;
+}
+.stats-insights article small,.stats-panel header p,.stats-day-task-numbers,
+.stats-fullscreen header span,.subject-analytics-head>div:last-child,
+.focus-stat-grid span,.stats-data-note p,.stats-tooltip strong,.stats-tooltip span{
+  font-size:12px;
+}
+.stats-heat-weekdays,.stats-heat-legend,.stats-heatmap button,.stats-heatmap button small{
+  font-size:10px;
+}
+.review-finish-option strong,.adjustment-reason-grid strong,.adjustment-outcome-grid strong{
+  font-size:13px;
+}
+.conflict-resolution-grid strong{
+  font-size:13px;
+}
+.conflict-resolution-grid small{
+  font-size:11px;
+}
+.conflict-resolution-grid button.selected:after{
+  font-size:10px;
+}
+.calendar-more-button{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  align-self:flex-start;
+  border:0;
+  background:var(--primary-soft);
+  color:var(--primary);
+  border-radius:7px;
+  font-weight:800;
+  font-size:10px;
+  min-height:24px;
+  padding:3px 7px;
+}
+
+/* 5) 弹窗与内层卡片：减少“卡片套卡片”的噪音 */
+.review-section,.review-finish-plan,.proposal-details>details,
+.proposal-choice,.conflict-decision-card,.duration-suggestion-list article,
+.review-task-decision,.proposal-local-result{
+  box-shadow:none;
+}
+.review-task-decision,.duration-suggestion-list article,.conflict-decision-card{
+  background:#f8fafc;
+}
+.review-finish-plan{
+  border-color:#dbe5f2;
+  background:linear-gradient(145deg,#f7faff,#fff);
+}
+.proposal-event,.proposal-choice,.conflict-decision-panel{
+  border-color:#e3e9f2;
+}
+.modal-footer{
+  padding:12px 18px calc(12px + env(safe-area-inset-bottom));
+}
+.modal-footer .modal-actions{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:flex-end;
+  gap:9px;
+}
+.modal-footer .modal-actions button{
+  min-height:46px;
+  padding:10px 15px;
+}
+.modal-footer .modal-actions .primary-button{
+  min-width:160px;
+}
+.proposal-footer-actions .primary-button{
+  min-height:46px;
+}
+
+/* 6) 桌面信息横幅与提示 */
+.action-result-toast{
+  min-width:360px;
+}
+.review-reminder-banner strong{
+  font-size:13px;
+}
+.review-reminder-banner span{
+  font-size:12px;
+}
+
+/* 7) 移动端：更大触控目标、更清晰的最小字号、安全区统一 */
+@media(max-width:760px){
+  body{
+    font-size:16px;
+  }
+  .topbar{
+    height:calc(62px + env(safe-area-inset-top));
+  }
+  .page-content{
+    padding-bottom:calc(24px + env(safe-area-inset-bottom));
+  }
+
+  /* 触控目标 */
+  .primary-button,.secondary-button,.danger-button{
+    min-height:44px;
+    padding-top:11px;
+    padding-bottom:11px;
+  }
+  .text-button{
+    min-height:40px;
+  }
+  .icon-button{
+    width:40px;
+    height:40px;
+  }
+  .icon-button.subtle{
+    width:34px;
+    height:34px;
+  }
+  .check-button{
+    width:38px;
+    height:38px;
+  }
+  .task-filter-tabs button,.segmented-control button{
+    min-height:40px;
+  }
+  .task-mode-toggle button{
+    min-height:44px;
+  }
+  .goal-card .row-actions .icon-button{
+    min-height:42px;
+  }
+  .task-lock-action{
+    min-height:38px;
+  }
+  .calendar-more-button{
+    min-height:28px;
+  }
+
+  /* 表单 16px，避免 iOS 聚焦缩放 */
+  .field input,.field select,.field textarea,
+  .tasks-toolbar select,.auth-form input,.search-box input,
+  .review-carry-choice select,.proposal-movement-actions input[type=date],
+  .condition-row select,.condition-row input,.assignment-link-search{
+    font-size:16px;
+    min-height:44px;
+  }
+
+  /* 弹窗 footer */
+  .modal-footer{
+    padding:10px 14px max(10px,calc(env(safe-area-inset-bottom) + 8px));
+  }
+  .modal-footer .modal-actions{
+    gap:9px;
+  }
+  .modal-footer .modal-actions button{
+    min-height:48px;
+    padding:11px 14px;
+    flex:1 1 auto;
+  }
+  .modal-footer .modal-actions .primary-button{
+    flex:1 1 100%;
+    min-width:0;
+  }
+  .modal-footer .modal-actions .primary-button:last-child:nth-child(2){
+    flex:1 1 auto;
+  }
+  .modal-footer .modal-actions button:only-child{
+    flex:1;
+  }
+  .proposal-footer-actions .proposal-keep-action,
+  .proposal-footer-actions .primary-button,
+  .proposal-footer-actions .proposal-cancel-action{
+    min-height:48px;
+  }
+  .modal-mobile-fullscreen .modal-body{
+    padding-bottom:calc(18px + env(safe-area-inset-bottom));
+  }
+
+  /* 手机字号分级：徽章 12px、辅助说明 13px */
+  .proposal-choice-metrics span,.proposal-choice-metrics em,
+  .proposal-event-tags span,.proposal-scope-stats small,
+  .proposal-issue-heading>span,.conflict-category-chips span,
+  .conflict-decision-card-head span,.conflict-decision-card-head em,
+  .conflict-values small,.choice-indicator,
+  .proposal-choice-title>span,.proposal-choice-title small,
+  .review-summary-grid button small,.review-finish-plan-summary>span,
+  .proposal-event-kicker,.proposal-local-result>header span,
+  .proposal-local-result>header em,.proposal-local-result-grid button span,
+  .proposal-existing-issue-summary span,.proposal-decision-summary strong,
+  .proposal-summary-grid>button small,.adjustment-eyebrow,
+  .adjustment-intro-badges span,.review-section-index,
+  .review-progress-ring span,.review-eyebrow,.proposal-human-summary>span,
+  .proposal-scope-summary>div:first-child>span,.proposal-movement-editor small,
+  .proposal-movement-actions label,.proposal-exception-confirm small,
+  .status-pill,.goal-priority-pill,.task-intent-badge,.task-lock-badge,
+  .history-diff-date>header small,.history-audit-summary span,
+  .goal-date-grid em{
+    font-size:12px!important;
+  }
+
+  .proposal-event>p,.proposal-policy-note span,.proposal-choice>p,
+  .proposal-direct-conflict span,.proposal-decision-summary span,
+  .proposal-warning small,.proposal-local-result>p,
+  .proposal-local-alternatives span,.proposal-local-principle span,
+  .proposal-scope-summary>div:first-child>p,.proposal-summary-grid>button span,
+  .proposal-details>details>summary,.proposal-name-list li,
+  .proposal-date-task-lists li,.conflict-decision-heading p,
+  .conflict-decision-card>p,.conflict-decision-card>details summary,
+  .conflict-decision-card>details li,.conflict-impact span,.conflict-impact small,
+  .conflict-resolution-sections header strong,.conflict-resolution-grid strong,
+  .conflict-resolution-grid small,
+  .review-hero-copy>p,.review-section header p,.review-section-toggle p,
+  .review-task-title em,.review-task-progress span,
+  .review-carry-choice>span,.review-carry-choice small,
+  .review-completed-grid span,.review-completed-times span,
+  .review-completed-times em,.review-time-compare>em,.duration-suggestion-list em,
+  .review-rule-note,.review-finish-option span,.review-adjustment-callout span,
+  .review-finish-plan-summary>p,.review-time-compare>span,
+  .review-finish-option strong,
+  .duration-suggestion-list article span,.duration-suggestion-list article small,
+  .duration-suggestion-list summary,.simple-chart-row>span,
+  .simple-chart-row small,.simple-chart>p,.simple-chart>header span,
+  .adjustment-intro p,.adjustment-step-header p,.adjustment-section>header span,
+  .adjustment-reason-grid span:not(.choice-indicator),
+  .adjustment-outcome-grid small,
+  .adjustment-today-control button strong,.adjustment-today-control button span,
+  .adjustment-guarantees span,.review-empty-success span,
+  .review-empty-neutral span,.goal-completion-outcome span,
+  .goal-completion-outcome strong,.exceptional-links>small,
+  .exceptional-links label small,.constraint-list span,.constraint-list small,
+  .task-meta,.group-stats,.group-note,.field>span,.muted-text,
+  .proposal-generation-state p,.calendar-toolbar p{
+    font-size:13px;
+  }
+  .review-sample-grid strong,.review-sample-grid span,
+  .adjustment-today-section>header span{
+    font-size:13px!important;
+  }
+  .load-delta,.recharts-legend-item-text,.recharts-cartesian-axis-tick-value{
+    font-size:12px!important;
+  }
+  .stats-insights article small,.stats-panel header p,.stats-day-task-numbers,
+  .stats-fullscreen header span,.subject-analytics-head>div:last-child,
+  .focus-stat-grid span,.stats-data-note p,.stats-tooltip strong,.stats-tooltip span{
+    font-size:13px;
+  }
+  .stats-heat-weekdays,.stats-heat-legend,.stats-heatmap button,.stats-heatmap button small{
+    font-size:10px;
+  }
+
+  /* 密度极限：月历任务块最小 10px */
+  .calendar-tasks>div{
+    font-size:10px;
+    line-height:1.35;
+    padding:4px 5px;
+  }
+  .calendar-tasks>small{
+    font-size:10px;
+    line-height:1.35;
+  }
+  .calendar-cell footer{
+    font-size:10px;
+    line-height:1.3;
+  }
+  .calendar-more-button{
+    font-size:10px;
+  }
+
+  /* 提示条 */
+  .action-result-toast{
+    min-width:0;
+    padding:13px 14px;
+    gap:12px;
+  }
+  .sequence-renumber-toast strong{
+    font-size:15px;
+  }
+  .sequence-renumber-toast span{
+    font-size:12px;
+  }
+}
+
+/* 8) 尊重系统“减弱动态效果”偏好 */
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms!important;
+    animation-iteration-count:1!important;
+    transition-duration:.01ms!important;
+    scroll-behavior:auto!important;
+  }
+}

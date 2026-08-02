@@ -1,7 +1,11 @@
 declare namespace JSX { interface IntrinsicAttributes { key?: any } interface IntrinsicElements { [elemName: string]: any } }
-declare namespace React { type ReactNode = any; interface DragEvent<T = any> { preventDefault(): void; stopPropagation(): void; dataTransfer: any; target: T; currentTarget: T } interface MouseEvent<T = any> { preventDefault(): void; stopPropagation(): void; target: T; currentTarget: T } interface TouchEvent<T = any> { touches: any[]; changedTouches: any[]; target: T; currentTarget: T } }
+declare namespace React { type ReactNode = any; interface DragEvent<T = any> { preventDefault(): void; stopPropagation(): void; dataTransfer: any; target: T; currentTarget: T } interface MouseEvent<T = any> { preventDefault(): void; stopPropagation(): void; target: T; currentTarget: T } interface TouchEvent<T = any> { touches: any; changedTouches: any; target: T; currentTarget: T } }
 declare module 'react' {
   export type ReactNode = any
+  export type ReactElement<P = any> = { props: P; key?: any; type?: any }
+  export const Children: { toArray(children: any): any[] }
+  export function cloneElement(element: any, props?: any, ...children: any[]): any
+  export function isValidElement(node: any): boolean
   export type CSSProperties = Record<string, string | number | undefined>
   export const StrictMode: any
   export type DragEvent<T = any> = React.DragEvent<T>; export type MouseEvent<T = any> = React.MouseEvent<T>; export type TouchEvent<T = any> = React.TouchEvent<T>

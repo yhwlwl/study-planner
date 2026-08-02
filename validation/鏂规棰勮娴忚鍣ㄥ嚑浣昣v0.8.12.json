@@ -1,0 +1,48 @@
+{
+  "mobileViewport": {
+    "width": 390,
+    "height": 844
+  },
+  "mobileBoxes": {
+    "modal": {
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 844
+    },
+    "header": {
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 63
+    },
+    "body": {
+      "x": 0,
+      "y": 63,
+      "width": 390,
+      "height": 708
+    },
+    "footer": {
+      "x": 0,
+      "y": 771,
+      "width": 390,
+      "height": 73
+    }
+  },
+  "modalFillsViewport": true,
+  "bodyEndsAtFooter": true,
+  "footerEndsAtViewport": true,
+  "noBodyFooterOverlap": true,
+  "singleLocalSelectorHidden": true,
+  "localResultVisible": true,
+  "desktopViewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "desktopModal": {
+    "x": 160,
+    "y": 117.328125,
+    "width": 1120,
+    "height": 665.328125
+  }
+}
