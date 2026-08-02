@@ -3,14 +3,14 @@
 > 目标驱动、可解释、可恢复的动态学习计划系统。
 >
 > An explainable and recoverable study planning system built around real execution.
-> https://study-planner.yhwlwl.xyz
+
 
 ## Project Status
 
 - 当前版本：`v0.8.13`
 - 状态：`Active development`（持续迭代）
 - 数据：本地优先（IndexedDB），可选 Supabase 账号同步；游客空间独立
-
+- 体验：https://study-planner.yhwlwl.xyz
 ## 这是什么
 
 学习计划经常面临"排期与执行脱节"：计划排好后，实际用时、临时缺勤、目标变化都会让原计划失效，而手动调整又容易产生新的冲突。
