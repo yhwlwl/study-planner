@@ -15,7 +15,7 @@ const source = {
   single: read('src/components/SingleTaskDialog.tsx'), group: read('src/components/TaskGroupDialog.tsx'), versions: read('src/lib/versions.ts'), conflicts: read('src/lib/conflicts.ts'),
 }
 const pkg = JSON.parse(read('package.json'))
-add('版本与迁移', '发布版本为 0.8.14', pkg.version === '0.8.14', `package.json: ${pkg.version}`)
+add('版本与迁移', '发布版本为 0.8.15', pkg.version === '0.8.15', `package.json: ${pkg.version}`)
 add('版本与迁移', '状态架构版本已提升（当前为 9）', /SCHEMA_VERSION\s*=\s*(?:8|9|[1-9]\d+)/.test(source.types), 'src/types.ts')
 add('版本与迁移', '存在确定性 v0.7→v0.8 迁移', /migrat|迁移/.test(source.seed) && /coreTargetDate/.test(source.seed) && /calendarConstraints/.test(source.seed), 'src/lib/seed.ts')
 add('版本与迁移', '旧全局目标日期不再出现在当前界面与当前调度计算', !/settings\.coreTargetDate|settings\.chemistryTargetDate/.test(source.app + source.stats + source.planner), '仅 seed/types 保留迁移兼容字段')
@@ -95,11 +95,11 @@ add('自动验证', '20目标/50组/500任务/30约束/10版本规模验证', sc
 const adjustmentRuntime = spawnSync(process.execPath, ['scripts/runtime-adjustment-v0810.mjs'], { cwd: root, encoding: 'utf8' })
 add('自动验证', '复盘、历史冲突与局部操作作用域运行验证', adjustmentRuntime.status === 0, adjustmentRuntime.status === 0 ? '通过；既有冲突不阻止局部删除，且其他任务移动为 0' : (adjustmentRuntime.stdout + adjustmentRuntime.stderr).trim())
 const scenarios = spawnSync(process.execPath, ['scripts/scenario-v0810.mjs'], { cwd: root, encoding: 'utf8' })
-add('自动验证', '核心场景与三大系统架构验证', scenarios.status === 0, scenarios.status === 0 ? '全部通过，详见 validation/v0.8.14场景架构验证.md' : (scenarios.stdout + scenarios.stderr).trim())
+add('自动验证', '核心场景与三大系统架构验证', scenarios.status === 0, scenarios.status === 0 ? '全部通过，详见 validation/v0.8.15场景架构验证.md' : (scenarios.stdout + scenarios.stderr).trim())
 const uiAudit = spawnSync(process.execPath, ['scripts/ui-audit-v0810.mjs'], { cwd: root, encoding: 'utf8' })
-add('自动验证', '桌面与手机界面布局审计', uiAudit.status === 0, uiAudit.status === 0 ? '全部通过，详见 validation/v0.8.14界面布局审计.md' : (uiAudit.stdout + uiAudit.stderr).trim())
+add('自动验证', '桌面与手机界面布局审计', uiAudit.status === 0, uiAudit.status === 0 ? '全部通过，详见 validation/v0.8.15界面布局审计.md' : (uiAudit.stdout + uiAudit.stderr).trim())
 const efficiency = spawnSync(process.execPath, ['scripts/user-efficiency-v0810.mjs'], { cwd: root, encoding: 'utf8' })
-add('自动验证', '全流程用户效率与统计口径验证', efficiency.status === 0, efficiency.status === 0 ? '全部通过，详见 validation/v0.8.14用户效率验证.md' : (efficiency.stdout + efficiency.stderr).trim())
+add('自动验证', '全流程用户效率与统计口径验证', efficiency.status === 0, efficiency.status === 0 ? '全部通过，详见 validation/v0.8.15用户效率验证.md' : (efficiency.stdout + efficiency.stderr).trim())
 
 const passed = checks.filter(item => item.pass).length
 const result = { generatedAt: new Date().toISOString(), passed, total: checks.length, failed: checks.filter(item => !item.pass), checks }

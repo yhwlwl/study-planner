@@ -7,10 +7,11 @@
 
 ## Project Status
 
-- 当前版本：`v0.8.14`
+- 当前版本：`v0.8.15`
 - 状态：`Active development`（持续迭代）
 - 数据：本地优先（IndexedDB），可选 Supabase 账号同步；游客空间独立
 - 体验：https://study-planner.yhwlwl.xyz
+- 累计访问：![网站累计访问](https://study-planner.yhwlwl.xyz/api/visit-log?format=svg)
 ## 这是什么
 
 学习计划经常面临"排期与执行脱节"：计划排好后，实际用时、临时缺勤、目标变化都会让原计划失效，而手动调整又容易产生新的冲突。
@@ -73,7 +74,7 @@ VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=sb_publishable_xxx
 ```
 
-浏览器端不得使用 `service_role` 或 `sb_secret_...`；访问日志所需的高权限密钥只能放在服务端环境变量中，且不能使用 `VITE_` 前缀。
+浏览器端不得使用 `service_role` 或 `sb_secret_...`；访问日志所需的高权限密钥只能放在服务端环境变量中，且不能使用 `VITE_` 前缀。 访问计数接口为 `/api/visit-log`，健康状态与累计页浏览量均可直接查看；README 徽章使用同一数据源。
 
 ## 验证
 

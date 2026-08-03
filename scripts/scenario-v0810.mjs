@@ -270,8 +270,8 @@ add('复盘过去未完成任务可以顺延出去',
 const passed = results.filter(item => item.pass).length
 const output = { generatedAt: new Date().toISOString(), passed, total: results.length, results }
 fs.mkdirSync(path.join(root, 'validation'), { recursive: true })
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.14场景架构验证.json'), JSON.stringify(output, null, 2))
-const md = ['# Study Planner v0.8.14 场景架构验证', '', `- 通过：${passed} / ${results.length}`, `- 生成时间：${output.generatedAt}`, '', ...results.map(item => `- ${item.pass ? '✅' : '❌'} **${item.scenario}**：${item.evidence}`)]
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.14场景架构验证.md'), md.join('\n') + '\n')
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.15场景架构验证.json'), JSON.stringify(output, null, 2))
+const md = ['# Study Planner v0.8.15 场景架构验证', '', `- 通过：${passed} / ${results.length}`, `- 生成时间：${output.generatedAt}`, '', ...results.map(item => `- ${item.pass ? '✅' : '❌'} **${item.scenario}**：${item.evidence}`)]
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.15场景架构验证.md'), md.join('\n') + '\n')
 console.log(md.join('\n'))
 if (passed !== results.length) process.exit(1)
