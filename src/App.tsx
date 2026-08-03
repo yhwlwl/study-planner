@@ -33,6 +33,7 @@ import { NumericInput } from './components/NumericInput'
 import { adjustmentPolicyForEvent, eventWithPreferences } from './lib/adjustment'
 import { applyConflictDecisions, mergeConstraintExceptions } from './lib/conflicts'
 import { downloadSnapshot, getSession, preparePortableState, signIn, signOut, signUp, supabase, supabaseConfigured, uploadSnapshot } from './lib/supabase'
+import { Analytics } from '@vercel/analytics/react'
 import './styles.css'
 
 type Page = 'today' | 'calendar' | 'tasks' | 'goals' | 'stats' | 'settings' | 'timer'
@@ -659,6 +660,7 @@ export default function App() {
           <button onClick={() => void initializeAccount('blank')}><strong>从空白开始</strong><span>创建新的账号计划；游客数据仍独立保留在本机。</span></button>
         </div>
       </Modal>
+      <Analytics />
     </div>
   )
 }
