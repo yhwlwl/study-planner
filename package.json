@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.52.1",
+    "@vercel/analytics": "^2.0.1",
     "date-fns": "^4.1.0",
     "idb": "^8.0.3",
     "lucide-react": "^0.468.0",
