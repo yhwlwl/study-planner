@@ -4,14 +4,20 @@
 >
 > An explainable and recoverable study planning system built around real execution.
 
+## 文档索引
 
-## Project Status
+- [更新日志](docs/CHANGELOG.md)
+- [迁移指南](docs/MIGRATION_GUIDE.md)
+- [部署说明](docs/DEPLOYMENT.md)
+
+## 项目状态
 
 - 当前版本：`v0.8.15`
 - 状态：`Active development`（持续迭代）
 - 数据：本地优先（IndexedDB），可选 Supabase 账号同步；游客空间独立
 - 体验：https://study-planner.yhwlwl.xyz
 - 累计访问：![网站累计访问](https://study-planner.yhwlwl.xyz/api/visit-log?format=svg)
+  
 ## 这是什么
 
 学习计划经常面临"排期与执行脱节"：计划排好后，实际用时、临时缺勤、目标变化都会让原计划失效，而手动调整又容易产生新的冲突。
@@ -108,14 +114,5 @@ npm run build
 - 云端同步只上传当前可移植状态，不上传重型本地计划版本、旧重排快照或冲突备份；
 - 完整计划版本历史仅保存在当前设备，设置页会明确提示。
 
-## 文档索引
-
-- [更新日志](docs/CHANGELOG.md)
-- [迁移指南](docs/MIGRATION_GUIDE.md)
-- [部署说明](docs/DEPLOYMENT.md)
-
-## 当前限制
-
-- 完整计划版本历史仅保存在当前设备，不随账号同步；
 
 
