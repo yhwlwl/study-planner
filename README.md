@@ -1,5 +1,19 @@
 # Study Planner
+> Study Planner is an adaptive, execution-aware study scheduling web app.
 
+Unlike traditional todo lists and static planners, it dynamically
+reschedules future study tasks when actual execution differs from the
+original plan.
+
+Key features:
+- Dynamic rescheduling based on actual progress
+- Deadline and capacity-aware scheduling
+- Manual intent / locked-task protection
+- Multiple rescheduling proposals
+- Preview before apply
+- Explainable scheduling conflicts
+- Recoverable plan versions
+- Web / PWA demo
 > 目标驱动、可解释、可恢复的动态学习计划系统。
 >
 > An explainable and recoverable study planning system built around real execution.
