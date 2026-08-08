@@ -2,6 +2,14 @@ import { addDays, eachDayOfInterval, format, isAfter, isBefore, parseISO } from 
 import type { AppState, DayConfig, DayType } from '../types'
 
 export const todayISO = () => format(new Date(), 'yyyy-MM-dd')
+
+/**
+ * Create a stable timestamp for a calendar date.
+ *
+ * Actual-time aggregation reads the date portion of timestamps. Using UTC
+ * noon keeps that date stable across local time zones and around midnight.
+ */
+export const timestampForDate = (date: string) => `${date}T12:00:00.000Z`
 export const fmtDate = (date: string, pattern = 'M月d日') => format(parseISO(date), pattern)
 export const fmtWeekday = (date: string) => ['周日','周一','周二','周三','周四','周五','周六'][parseISO(date).getDay()]
 export const dateRange = (start: string, end: string) => eachDayOfInterval({ start: parseISO(start), end: parseISO(end) }).map(d => format(d, 'yyyy-MM-dd'))

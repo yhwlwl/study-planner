@@ -8,7 +8,7 @@ import {
 import { addMonths, endOfMonth, format, getDay, isWithinInterval, parseISO, startOfMonth } from 'date-fns'
 import { useApp } from './AppContext'
 import type { AppState, Assignment, BufferPreference, DayType, PlanAdjustmentPolicy, PlanChangeEvent, Priority, SchedulingProposal, SequenceRenumberSuggestion, ConstraintException, Subject, TaskGroup } from './types'
-import { clampDate, constraintsForDate, dateRange, dayTypeLabel, fmtDate, fmtWeekday, getCapacity, getDayConfig, isDateProtected, minutesText, shiftDate, todayISO } from './lib/date'
+import { clampDate, constraintsForDate, dateRange, dayTypeLabel, fmtDate, fmtWeekday, getCapacity, getDayConfig, isDateProtected, minutesText, shiftDate, timestampForDate, todayISO } from './lib/date'
 import { actualLearningSnapshot, allDurationSuggestions, analyzePlan, checkAssignmentPlacement, effectiveMinutes, planningDayLoad, predictCompletion, previewPreparedChange } from './lib/planner'
 import { allGoalProgress, nearestRelevantGoalDate } from './lib/goals'
 import { uid } from './lib/id'
@@ -756,6 +756,7 @@ function TodayPage({ onNavigate, onPrepared, onAddTask, onReview }: { onNavigate
   const defaultDate = clampDate(rawToday, state.settings.startDate, state.settings.endDate)
   const [date, setDate] = useState(defaultDate)
   const [completeTarget, setCompleteTarget] = useState<Assignment>()
+  const [completeDate, setCompleteDate] = useState<string>()
   const [actual, setActual] = useState('')
   const [progress, setProgress] = useState(100)
   const [shiftOpen, setShiftOpen] = useState(false)
@@ -864,11 +865,21 @@ function TodayPage({ onNavigate, onPrepared, onAddTask, onReview }: { onNavigate
 
   const openComplete = (a: Assignment) => {
     if (state.timer.assignmentId === a.id) { onNavigate('timer'); return }
-    setCompleteTarget(a); setActual(''); setProgress(100)
+    setCompleteTarget(a); setCompleteDate(date); setActual(''); setProgress(100)
   }
+
+  const closeCompletion = () => {
+    setCompleteTarget(undefined)
+    setCompleteDate(undefined)
+  }
+
   const saveCompletion = (finish: boolean) => {
     if (!completeTarget) return
     const minutes = Math.max(0, Number(actual) || 0)
+    const viewedDate = completeDate ?? date
+    const currentDate = todayISO()
+    const actualDate = viewedDate < currentDate ? viewedDate : currentDate
+    const actualTimestamp = timestampForDate(actualDate)
     commit(draft => {
       const item = draft.assignments.find(a => a.id === completeTarget.id)
       if (!item) return
@@ -876,15 +887,15 @@ function TodayPage({ onNavigate, onPrepared, onAddTask, onReview }: { onNavigate
       const minutesToRecord = minutes || activeTimerMinutes
       if (minutesToRecord) {
         item.actualMinutes += minutesToRecord
-        item.timeEntries.push({ id: uid('time'), minutes: minutesToRecord, createdAt: new Date().toISOString(), source: activeTimerMinutes && !minutes ? 'timer' : 'manual' })
+        item.timeEntries.push({ id: uid('time'), minutes: minutesToRecord, createdAt: actualTimestamp, source: activeTimerMinutes && !minutes ? 'timer' : 'manual' })
       }
       item.progress = finish ? 100 : Math.min(99, Math.max(1, progress))
       item.remainingMinutes = finish ? 0 : effectiveMinutes(item)
       item.status = finish ? 'done' : 'partial'
-      item.completedAt = finish ? new Date().toISOString() : undefined
+      item.completedAt = finish ? actualTimestamp : undefined
       if (draft.timer.assignmentId === item.id) draft.timer = { accumulatedSeconds: 0, running: false }
     })
-    setCompleteTarget(undefined)
+    closeCompletion()
   }
 
   return <>
@@ -911,8 +922,9 @@ function TodayPage({ onNavigate, onPrepared, onAddTask, onReview }: { onNavigate
       <div className="section-title"><div><h2>{isToday ? '今日任务' : isPast ? `${fmtDate(date)} 的执行记录` : `${fmtDate(date)} 的计划任务`}</h2><p>{isPast ? '已完成记录保持不变；未完成任务可在待处理视图继续安排。' : '完成后勾选，可录入精确到 1 分钟的实际用时。'}</p></div></div>
       <div className="task-list">{tasks.length ? tasks.map(a => <TaskCard key={a.id} assignment={a} group={groups.get(a.groupId)!} onComplete={openComplete} onOpenTimer={() => onNavigate('timer')}/>) : <EmptyState title={isToday ? '今天没有任务' : '该日没有任务'} text="可以到月历调整计划，或设置这一天的可用时间。"/>}</div>
     </section>
-    <Modal open={Boolean(completeTarget)} title={completeTarget ? `记录：${completeTarget.title}` : '记录任务'} onClose={() => setCompleteTarget(undefined)}>
+    <Modal open={Boolean(completeTarget)} title={completeTarget ? `记录：${completeTarget.title}` : '记录任务'} onClose={closeCompletion}>
       <div className="form-stack">
+        <p className="muted-text">{completeDate && completeDate < todayISO() ? `历史补录：实际用时将计入 ${fmtDate(completeDate)}` : '实际用时将计入今天'}</p>
         <label className="field"><span>本次实际用时（分钟，可留空）</span><NumericInput min={0} max={1440} step={1} value={actual === '' ? undefined : Number(actual)} onValueChange={value => setActual(String(value))} onEmpty={() => setActual('')} autoFocus/></label>
         <label className="field"><span>若未完成，填写当前进度</span><NumericInput min={1} max={99} value={progress} onValueChange={setProgress}/></label>
       </div>

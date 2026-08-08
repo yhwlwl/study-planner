@@ -1,7 +1,7 @@
 import { Check, Clock3, Pause, Play, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useApp } from '../AppContext'
-import { minutesText } from '../lib/date'
+import { minutesText, timestampForDate, todayISO } from '../lib/date'
 import { uid } from '../lib/id'
 import { Modal } from './Modal'
 import { NumericInput } from './NumericInput'
@@ -98,7 +98,7 @@ export function FocusTimerPage({ onExit }: { onExit: () => void }) {
         const item = draft.assignments.find(candidate => candidate.id === assignment.id)
         if (!item) return
         item.actualMinutes += minutes
-        item.timeEntries.push({ id: uid('time'), minutes, createdAt: new Date().toISOString(), source: 'timer' })
+        item.timeEntries.push({ id: uid('time'), minutes, createdAt: timestampForDate(todayISO()), source: 'timer' })
         item.progress = Math.max(1, Math.min(99, progress))
         item.remainingMinutes = Math.max(1, Math.round(item.estimatedMinutes * (1 - item.progress / 100)))
         item.status = 'partial'

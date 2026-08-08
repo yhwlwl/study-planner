@@ -1,7 +1,7 @@
 {
   "version": "0.8.15",
-  "generatedAt": "2026-08-07T14:22:27.834Z",
-  "passed": 10,
+  "generatedAt": "2026-08-08T15:48:48.620Z",
+  "passed": 9,
   "total": 10,
   "checks": [
     {
@@ -31,7 +31,7 @@
     },
     {
       "name": "README SVG 徽章",
-      "pass": true,
+      "pass": false,
       "evidence": "GitHub README 可直接显示同一数据源的总访问数"
     },
     {

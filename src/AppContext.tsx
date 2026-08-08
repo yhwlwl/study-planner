@@ -14,7 +14,7 @@ import { findSequenceRenumberGroups, renumberTaskGroupsByDate } from './lib/sequ
 import { goalProgress, updateGoalAndGroupLifecycle } from './lib/goals'
 import { cloneActiveState, hydratePortableState } from './lib/state'
 import { createPlanVersion, createVersionFromProposal, previewVersionDiff, restoreSnapshotState, restoreVersionState, type VersionDiffSummary } from './lib/versions'
-import { dateRange, getCapacity } from './lib/date'
+import { dateRange, getCapacity, timestampForDate, todayISO } from './lib/date'
 
 type Recipe = (draft: AppState) => void
 
@@ -307,7 +307,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const item = draft.assignments.find(candidate => candidate.id === id)
     if (!item || minutes <= 0) return
     item.actualMinutes += minutes
-    item.timeEntries.push({ id: uid('time'), minutes, createdAt: nowISO(), source })
+    item.timeEntries.push({ id: uid('time'), minutes, createdAt: timestampForDate(todayISO()), source })
     item.updatedAt = nowISO()
   }), [commit])
 
@@ -316,12 +316,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!item) return
     if (actualMinutes && actualMinutes > 0) {
       item.actualMinutes += actualMinutes
-      item.timeEntries.push({ id: uid('time'), minutes: actualMinutes, createdAt: nowISO(), source })
+      item.timeEntries.push({ id: uid('time'), minutes: actualMinutes, createdAt: timestampForDate(todayISO()), source })
     }
     item.progress = 100
     item.remainingMinutes = 0
     item.status = 'done'
-    item.completedAt = nowISO()
+    item.completedAt = timestampForDate(todayISO())
     item.updatedAt = nowISO()
     if (draft.timer.assignmentId === id) draft.timer = { accumulatedSeconds: 0, running: false }
   }), [commit])

@@ -6,6 +6,8 @@
 
 **Live Demo / 在线体验：** [https://study-planner.yhwlwl.xyz](https://study-planner.yhwlwl.xyz)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 ![Study Planner rescheduling preview](docs/images/01-rescheduling-preview.png)
 
 *系统不会直接覆盖计划：先生成候选方案，解释冲突与影响，用户确认后才应用。*
@@ -21,8 +23,6 @@ Changes are **explained and previewed before they are applied**. Scheduling conf
 **计划 → 执行 → 复盘 → 偏差 → 重排 → 继续执行**
 
 的完整闭环。
-
----
 
 ## Key Features
 
@@ -194,3 +194,6 @@ Study Planner 的调度系统并不是为了在数学意义上“不惜一切代
 - [迁移指南](docs/MIGRATION_GUIDE.md)
 - [部署说明](docs/DEPLOYMENT.md)
 
+## License
+
+Study Planner is released under the [MIT License](LICENSE).
