@@ -6,7 +6,7 @@
 
 **Live Demo / 在线体验：** [https://study-planner.yhwlwl.xyz](https://study-planner.yhwlwl.xyz)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: AGPLv3](https://img.shields.io/badge/License-AGPLv3-blue.svg)](LICENSE)
 
 ![Study Planner rescheduling preview](docs/images/01-rescheduling-preview.png)
 
@@ -318,4 +318,4 @@ npm run build
 
 ## License
 
-Study Planner is released under the [MIT License](LICENSE).
+Study Planner is released under the [GNU Affero General Public License v3.0 or later](LICENSE).
