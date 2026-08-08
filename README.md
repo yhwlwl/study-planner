@@ -18,13 +18,11 @@ Key features:
 >
 > An explainable and recoverable study planning system built around real execution.
 
-
 ## 文档索引
 
 - [更新日志](docs/CHANGELOG.md)
 - [迁移指南](docs/MIGRATION_GUIDE.md)
 - [部署说明](docs/DEPLOYMENT.md)
-
 ## 项目状态
 
 - 当前版本：`v0.8.15`
@@ -128,5 +126,6 @@ npm run build
 - 首次登录可选择导入游客计划、使用账号演示计划或从空白开始；
 - 云端同步只上传当前可移植状态，不上传重型本地计划版本、旧重排快照或冲突备份；
 - 完整计划版本历史仅保存在当前设备，设置页会明确提示。
+
 
 
