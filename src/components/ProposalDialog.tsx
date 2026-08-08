@@ -9,12 +9,13 @@ import type {
   Goal,
   PlanAdjustmentPolicy,
   PlanChangeEvent,
+  ProposalIssue,
   SchedulingProposal,
 } from '../types'
 import { Modal } from './Modal'
 import { fmtDate, minutesText } from '../lib/date'
 import { reviseSchedulingProposal, type ProposalMovementRevision } from '../lib/planner'
-import { categoryLabel, conflictProfile, resolutionLabel } from '../lib/conflicts'
+import { categoryLabel, conflictProfile, isTodayIncomingIssue, resolutionLabel } from '../lib/conflicts'
 
 const preferenceLabels: Record<string, string> = {
   preserve: '尽量保持当前计划', balanced: '均衡执行', goal: '优先保障目标', rest: '增加休息空间'
@@ -288,12 +289,13 @@ function ConflictDecisionPanel({ proposal, assignmentMap, issueDecisions, except
       const profile = conflictProfile(issue)
       const selected = issueDecisions[issue.id]
       return <article className={`conflict-decision-card conflict-${profile.category}`} key={issue.id}>
-        <div className="conflict-decision-card-head"><div><span>{profile.label}</span><strong>{issue.title}</strong></div>{selected && <em>已选择：{resolutionLabel(selected)}</em>}</div>
+        <div className="conflict-decision-card-head"><div><span>{profile.label}</span><strong>{issue.title}</strong></div>{selected && <em>已选择：{resolutionLabel(selected, issue)}</em>}</div>
         <p>{issue.detail}</p>
         {(issue.currentValue != null || issue.allowedValue != null) && <div className="conflict-values"><span><small>调整后</small>{issue.currentValue ?? '—'}</span><span><small>当前允许</small>{issue.allowedValue ?? '—'}</span></div>}
         {issue.assignmentIds.length > 0 && <details><summary>涉及任务（{issue.assignmentIds.length}）</summary><ul>{issue.assignmentIds.map(id => <li key={id}>{assignmentMap.get(id)?.title ?? id}</li>)}</ul></details>}
         <div className="conflict-impact"><span>{profile.description}</span><small>后果：{issue.consequence}</small></div>
         <ConflictResolutionChoices
+          issue={issue}
           actions={profile.allowedResolutions}
           selected={selected}
           onSelect={action => onIssueDecision(issue.id, action)}
@@ -313,7 +315,8 @@ function ConflictDecisionPanel({ proposal, assignmentMap, issueDecisions, except
   </section>
 }
 
-function ConflictResolutionChoices({ actions, selected, onSelect }: {
+function ConflictResolutionChoices({ issue, actions, selected, onSelect }: {
+  issue?: ProposalIssue
   actions: ConflictResolutionAction[]
   selected?: ConflictResolutionAction
   onSelect: (action: ConflictResolutionAction) => void
@@ -326,16 +329,25 @@ function ConflictResolutionChoices({ actions, selected, onSelect }: {
     className={selected === action ? 'selected' : ''}
     key={action}
     onClick={() => onSelect(action)}
-  ><strong>{resolutionLabel(action)}</strong><small>{resolutionDescription(action)}</small></button>)}</div>
+  ><strong>{resolutionLabel(action, issue)}</strong><small>{resolutionDescription(action, issue)}</small></button>)}</div>
 
   return <div className="conflict-resolution-sections">
-    {direct.length > 0 && <section><header><strong>处理当前任务</strong><span>选择这些未完成任务接下来怎么办</span></header>{render(direct)}</section>}
-    {condition.length > 0 && <section><header><strong>修改产生冲突的条件</strong><span>离开预览修改后，系统会重新检查</span></header>{render(condition)}</section>}
+    {direct.length > 0 && <section><header><strong>{isTodayIncomingIssue(issue) ? '怎么处理这些任务' : '处理当前任务'}</strong><span>{isTodayIncomingIssue(issue) ? '四选一；其他任务和永久设置不受影响' : '选择这些未完成任务接下来怎么办'}</span></header>{render(direct)}</section>}
+    {condition.length > 0 && <section><header><strong>修改产生冲突的条件</strong><span>{isTodayIncomingIssue(issue) ? '增加今天可用时间后，返回这里重新生成预览' : '离开预览修改后，系统会重新检查'}</span></header>{render(condition)}</section>}
     {withdraw.length > 0 && <section className="conflict-resolution-withdraw"><header><strong>不继续这部分调整</strong><span>只撤销与本问题相关的变化</span></header>{render(withdraw)}</section>}
   </div>
 }
 
-function resolutionDescription(action: ConflictResolutionAction) {
+function resolutionDescription(action: ConflictResolutionAction, issue?: ProposalIssue) {
+  if (isTodayIncomingIssue(issue)) {
+    const todayDescriptions: Partial<Record<ConflictResolutionAction, string>> = {
+      'accept-once': '只放行当前列出的任务进入今天；不修改“今天默认不接收未来任务”的永久规则。',
+      'system-find-another-date': '不使用今天，系统从今天之后寻找其他合法日期。',
+      'keep-original': '取消这次移动，任务回到发起调整前的日期。',
+      'change-capacity': '先去设置中增加今天可用时间，回来后重新生成预览。',
+    }
+    return todayDescriptions[action] ?? action
+  }
   const descriptions: Record<ConflictResolutionAction, string> = {
     'accept-once': '只对本次、对应日期、规则和涉及任务授权，不修改永久设置。',
     'system-find-another-date': '坚持原规则，只释放这里列出的未完成任务重新找日期。',
@@ -392,7 +404,11 @@ function ProposalDetails({ proposal, event, baseline, assignmentMap, goalMap, co
       const delta = change.afterMinutes - change.beforeMinutes
       const capacityDelta = (change.afterCapacity ?? 0) - (change.beforeCapacity ?? 0)
       const capacityChanged = change.beforeCapacity != null && change.afterCapacity != null && capacityDelta !== 0
-      return <article className="proposal-card proposal-date-card" key={change.date}><strong>{fmtDate(change.date)}</strong><div className="before-after"><span><small>之前</small>负载 {minutesText(change.beforeMinutes)} · {change.beforeTaskIds.length}项{change.beforeCapacity != null && <em>容量 {minutesText(change.beforeCapacity)}</em>}</span><span><small>之后</small>负载 {minutesText(change.afterMinutes)} · {change.afterTaskIds.length}项{change.afterCapacity != null && <em>容量 {minutesText(change.afterCapacity)}</em>}</span></div><p className={`load-delta ${delta > 0 ? 'load-delta-up' : delta < 0 ? 'load-delta-down' : 'load-delta-flat'}`}>{delta > 0 ? '↑ 负载增加' : delta < 0 ? '↓ 负载减少' : '— 负载不变'} {minutesText(Math.abs(delta))}</p>{capacityChanged && <p className={`capacity-delta ${capacityDelta > 0 ? 'capacity-delta-up' : 'capacity-delta-down'}`}>{capacityDelta > 0 ? '↑ 可用容量增加' : '↓ 可用容量减少'} {minutesText(Math.abs(capacityDelta))}</p>}<div className="proposal-date-task-lists"><div><small>之前的任务</small><ul>{change.beforeTaskIds.map(id => <li key={id}>{assignmentMap.get(id)?.title ?? id}</li>)}</ul></div><div><small>之后的任务</small><ul>{change.afterTaskIds.map(id => <li key={id}>{assignmentMap.get(id)?.title ?? id}</li>)}</ul></div></div></article>
+      const beforeTaskIds = new Set(change.beforeTaskIds)
+      const afterTaskIds = new Set(change.afterTaskIds)
+      const removedCount = change.beforeTaskIds.filter(id => !afterTaskIds.has(id)).length
+      const addedCount = change.afterTaskIds.filter(id => !beforeTaskIds.has(id)).length
+      return <article className="proposal-card proposal-date-card" key={change.date}><strong>{fmtDate(change.date)}</strong><div className="before-after"><span><small>之前</small>负载 {minutesText(change.beforeMinutes)} · {change.beforeTaskIds.length}项{change.beforeCapacity != null && <em>容量 {minutesText(change.beforeCapacity)}</em>}</span><span><small>之后</small>负载 {minutesText(change.afterMinutes)} · {change.afterTaskIds.length}项{change.afterCapacity != null && <em>容量 {minutesText(change.afterCapacity)}</em>}</span></div><p className={`load-delta ${delta > 0 ? 'load-delta-up' : delta < 0 ? 'load-delta-down' : 'load-delta-flat'}`}>{delta > 0 ? '↑ 负载增加' : delta < 0 ? '↓ 负载减少' : '— 负载不变'} {minutesText(Math.abs(delta))}</p>{capacityChanged && <p className={`capacity-delta ${capacityDelta > 0 ? 'capacity-delta-up' : 'capacity-delta-down'}`}>{capacityDelta > 0 ? '↑ 可用容量增加' : '↓ 可用容量减少'} {minutesText(Math.abs(capacityDelta))}</p>}{(removedCount > 0 || addedCount > 0) && <div className="proposal-change-legend"><span className="proposal-change-removed">红色划线：移出当天 {removedCount} 项</span><span className="proposal-change-added">绿色：移入当天 {addedCount} 项</span></div>}<div className="proposal-date-task-lists"><div><small>之前的任务</small><ul>{change.beforeTaskIds.map(id => <li className={!afterTaskIds.has(id) ? 'proposal-task-removed' : ''} key={id}>{assignmentMap.get(id)?.title ?? id}</li>)}</ul></div><div><small>之后的任务</small><ul>{change.afterTaskIds.map(id => <li className={!beforeTaskIds.has(id) ? 'proposal-task-added' : ''} key={id}>{assignmentMap.get(id)?.title ?? id}</li>)}</ul></div></div></article>
     })}{proposal.dateChanges.length === 0 && <p className="muted-text">日期负载和可用容量没有变化。</p>}</div></details>}
 
     {(!compactLocal || proposal.goalImpacts.length > 0) && <details><summary>目标影响（{proposal.goalImpacts.length}）</summary><div className="proposal-cards">{proposal.goalImpacts.map(impact => <article className="proposal-card" key={impact.goalId}><strong>{goalMap.get(impact.goalId)?.title ?? impact.goalId}</strong><div className="before-after"><span><small>之前</small>{Math.round(impact.beforeProgress * 100)}% · {impact.beforeExpectedCompletion ?? '无法预计'}</span><span><small>之后</small>{Math.round(impact.afterProgress * 100)}% · {impact.afterExpectedCompletion ?? '无法预计'}</span></div><p>{impact.summary}</p><small>期望日期风险：{impact.desiredRiskAfter ? '有' : '无'} · 最晚日期风险：{impact.latestRiskAfter ? '有' : '无'}</small></article>)}{proposal.goalImpacts.length === 0 && <p className="muted-text">目标进度和风险没有变化。</p>}</div></details>}

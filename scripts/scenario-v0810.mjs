@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
 const root = process.cwd()
+const tscBin = path.join(root, 'node_modules', 'typescript', 'bin', 'tsc')
 const read = file => fs.readFileSync(path.join(root, file), 'utf8')
 const context = read('src/AppContext.tsx')
 const planner = read('src/lib/planner.ts')
@@ -168,7 +169,7 @@ let runtimePolicyPass = false
 let runtimePolicyEvidence = ''
 const policyTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'study-planner-policy-test-'))
 try {
-  const compile = spawnSync('tsc', ['src/lib/adjustment.ts', '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'bundler', '--outDir', policyTemp, '--skipLibCheck', '--strict', '--noEmitOnError'], { cwd: root, encoding: 'utf8' })
+  const compile = spawnSync(process.execPath, [tscBin, 'src/lib/adjustment.ts', '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'bundler', '--outDir', policyTemp, '--skipLibCheck', '--strict', '--noEmitOnError'], { cwd: root, encoding: 'utf8' })
   if (compile.status !== 0) throw new Error((compile.stdout + compile.stderr).trim())
   fs.writeFileSync(path.join(policyTemp, 'package.json'), '{"type":"module"}')
   const mod = await import(`${pathToFileURL(path.join(policyTemp, 'lib/adjustment.js')).href}?v=${Date.now()}`)
@@ -194,7 +195,7 @@ let runtimePartialGoalPass = false
 let runtimeGoalEvidence = ''
 const goalTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'study-planner-goal-test-'))
 try {
-  const compile = spawnSync('tsc', ['src/lib/goals.ts', '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'bundler', '--outDir', goalTemp, '--skipLibCheck', '--strict', '--noEmitOnError'], { cwd: root, encoding: 'utf8' })
+  const compile = spawnSync(process.execPath, [tscBin, 'src/lib/goals.ts', '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'bundler', '--outDir', goalTemp, '--skipLibCheck', '--strict', '--noEmitOnError'], { cwd: root, encoding: 'utf8' })
   if (compile.status !== 0) throw new Error((compile.stdout + compile.stderr).trim())
   fs.writeFileSync(path.join(goalTemp, 'package.json'), '{"type":"module"}')
   const goals = await import(`${pathToFileURL(path.join(goalTemp, 'lib/goals.js')).href}?v=${Date.now()}`)
@@ -261,11 +262,17 @@ add('复盘暂不顺延任务仍可集中找回',
   /任务 → 待处理/.test(review) && /pendingPastTasks/.test(app),
   '仅保存复盘后，过去未完成任务在任务收件箱和首页提醒中保持可见。')
 
+add('复盘过去未完成任务可以顺延出去',
+  /explicitlyMovesPastUnfinishedOut/.test(planner)
+    && /event\.type === 'execution-difference' \|\| event\.type === 'bulk-move'/.test(planner)
+    && /不能把任务安排到过去/.test(planner),
+  '过去日期只冻结已发生事实；复盘和待处理视图可把未完成任务移到今天、未来或待安排，但不能把任务移入过去。')
+
 const passed = results.filter(item => item.pass).length
 const output = { generatedAt: new Date().toISOString(), passed, total: results.length, results }
 fs.mkdirSync(path.join(root, 'validation'), { recursive: true })
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.13场景架构验证.json'), JSON.stringify(output, null, 2))
-const md = ['# Study Planner v0.8.13 场景架构验证', '', `- 通过：${passed} / ${results.length}`, `- 生成时间：${output.generatedAt}`, '', ...results.map(item => `- ${item.pass ? '✅' : '❌'} **${item.scenario}**：${item.evidence}`)]
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.13场景架构验证.md'), md.join('\n') + '\n')
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.15场景架构验证.json'), JSON.stringify(output, null, 2))
+const md = ['# Study Planner v0.8.15 场景架构验证', '', `- 通过：${passed} / ${results.length}`, `- 生成时间：${output.generatedAt}`, '', ...results.map(item => `- ${item.pass ? '✅' : '❌'} **${item.scenario}**：${item.evidence}`)]
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.15场景架构验证.md'), md.join('\n') + '\n')
 console.log(md.join('\n'))
 if (passed !== results.length) process.exit(1)

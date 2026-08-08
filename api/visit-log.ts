@@ -22,9 +22,10 @@ type VisitPayload = {
 type ServerConfig = {
   supabaseUrl: string
   serviceKey: string
+  countOffset: number
 }
 
-const API_VERSION = '0.7.0'
+const API_VERSION = '0.8.0'
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const LEGACY_JWT_RE = /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/
 const ALLOWED_EVENT_TYPES = new Set(['page_view'])
@@ -39,6 +40,11 @@ function text(value: unknown, maxLength: number): string | null {
 function integer(value: unknown, min: number, max: number): number | null {
   if (typeof value !== 'number' || !Number.isInteger(value)) return null
   return Math.min(max, Math.max(min, value))
+}
+
+function nonNegativeInteger(value: string | undefined, fallback = 0): number {
+  if (!value || !/^\d+$/.test(value.trim())) return fallback
+  return Math.min(1_000_000_000, Number.parseInt(value, 10))
 }
 
 function decodeHeader(value: string | null): string | null {
@@ -61,35 +67,45 @@ function requestIp(headers: Headers): string | null {
   return /^[0-9a-f:.]+$/i.test(value) ? value : null
 }
 
-function sameOrigin(request: Request): boolean {
+function headerHosts(request: Request): Set<string> {
+  const hosts = new Set<string>()
+  try { hosts.add(new URL(request.url).host.toLowerCase()) } catch { /* ignored */ }
+  for (const name of ['x-forwarded-host', 'host']) {
+    const raw = request.headers.get(name)
+    if (!raw) continue
+    const host = raw.split(',')[0]?.trim().toLowerCase()
+    if (host) hosts.add(host)
+  }
+  return hosts
+}
+
+export function sameOrigin(request: Request): boolean {
   const origin = request.headers.get('origin')
   if (!origin) return true
-  const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host')
-  if (!host) return false
   try {
     const originUrl = new URL(origin)
-    if (originUrl.host === host) return true
-    return originUrl.hostname === 'localhost' || originUrl.hostname === '127.0.0.1'
+    if (originUrl.hostname === 'localhost' || originUrl.hostname === '127.0.0.1') return true
+    return headerHosts(request).has(originUrl.host.toLowerCase())
   } catch {
     return false
   }
 }
 
-function corsHeaders(request: Request): Record<string, string> {
+function corsHeaders(request: Request, cacheControl = 'no-store'): Record<string, string> {
   const origin = request.headers.get('origin')
   return {
     'Access-Control-Allow-Origin': origin && sameOrigin(request) ? origin : 'null',
     'Access-Control-Allow-Headers': 'authorization, content-type',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Cache-Control': 'no-store',
+    'Cache-Control': cacheControl,
     'Vary': 'Origin'
   }
 }
 
-function json(request: Request, data: unknown, status = 200): Response {
+function json(request: Request, data: unknown, status = 200, cacheControl = 'no-store'): Response {
   return Response.json(data, {
     status,
-    headers: { ...corsHeaders(request), 'Content-Type': 'application/json; charset=utf-8' }
+    headers: { ...corsHeaders(request, cacheControl), 'Content-Type': 'application/json; charset=utf-8' }
   })
 }
 
@@ -110,7 +126,8 @@ function serverConfig(): { config?: ServerConfig; missing: string[]; invalidUrl?
       missing,
       config: {
         supabaseUrl: parsed.toString().replace(/\/$/, ''),
-        serviceKey: serviceKey.trim()
+        serviceKey: serviceKey.trim(),
+        countOffset: nonNegativeInteger(process.env.VISIT_COUNT_OFFSET)
       }
     }
   } catch {
@@ -153,6 +170,31 @@ function supabaseErrorCode(status: number, detail: string): string {
   return 'supabase_request_failed'
 }
 
+export function parseContentRangeTotal(value: string | null): number | null {
+  if (!value) return null
+  const match = value.match(/\/(\d+)$/)
+  if (!match) return null
+  const parsed = Number.parseInt(match[1], 10)
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null
+}
+
+async function queryStoredPageViews(config: ServerConfig): Promise<{ count?: number; error?: { status: number; code: string } }> {
+  const response = await fetchWithTimeout(`${config.supabaseUrl}/rest/v1/visit_logs?select=id&event_type=eq.page_view&limit=1`, {
+    method: 'GET',
+    headers: {
+      ...serviceHeaders(config.serviceKey),
+      Prefer: 'count=exact',
+      Range: '0-0'
+    }
+  })
+  if (!response.ok) {
+    const detail = await safeResponseText(response)
+    return { error: { status: response.status, code: supabaseErrorCode(response.status, detail) } }
+  }
+  const count = parseContentRangeTotal(response.headers.get('content-range'))
+  return count == null ? { error: { status: 502, code: 'visit_count_unavailable' } } : { count }
+}
+
 async function verifiedUserId(request: Request, config: ServerConfig): Promise<string | null> {
   const authorization = request.headers.get('authorization')
   if (!authorization?.toLowerCase().startsWith('bearer ')) return null
@@ -171,43 +213,80 @@ async function verifiedUserId(request: Request, config: ServerConfig): Promise<s
   }
 }
 
-async function healthCheck(request: Request, config: ServerConfig): Promise<Response> {
+function escapeXml(value: string): string {
+  return value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[character] ?? character))
+}
+
+function badgeSvg(label: string, value: string, color: string): string {
+  const safeLabel = escapeXml(label.slice(0, 24))
+  const safeValue = escapeXml(value.slice(0, 24))
+  const leftWidth = Math.max(72, safeLabel.length * 13 + 24)
+  const rightWidth = Math.max(58, safeValue.length * 12 + 24)
+  const totalWidth = leftWidth + rightWidth
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${totalWidth}" height="28" role="img" aria-label="${safeLabel}: ${safeValue}"><title>${safeLabel}: ${safeValue}</title><linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#fff" stop-opacity=".12"/><stop offset="1" stop-opacity=".12"/></linearGradient><clipPath id="r"><rect width="${totalWidth}" height="28" rx="7"/></clipPath><g clip-path="url(#r)"><rect width="${leftWidth}" height="28" fill="#475569"/><rect x="${leftWidth}" width="${rightWidth}" height="28" fill="${color}"/><rect width="${totalWidth}" height="28" fill="url(#s)"/></g><g fill="#fff" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-size="13"><text x="${leftWidth / 2}" y="19">${safeLabel}</text><text x="${leftWidth + rightWidth / 2}" y="19" font-weight="700">${safeValue}</text></g></svg>`
+}
+
+function svgResponse(request: Request, label: string, value: string, color: string, status = 200): Response {
+  return new Response(badgeSvg(label, value, color), {
+    status,
+    headers: {
+      ...corsHeaders(request, 'public, max-age=300, s-maxage=300, stale-while-revalidate=600'),
+      'Content-Type': 'image/svg+xml; charset=utf-8'
+    }
+  })
+}
+
+async function getStatusOrCount(request: Request, config: ServerConfig): Promise<Response> {
   try {
-    const response = await fetchWithTimeout(`${config.supabaseUrl}/rest/v1/visit_logs?select=id&limit=1`, {
-      method: 'GET',
-      headers: serviceHeaders(config.serviceKey)
-    })
-    if (!response.ok) {
-      const detail = await safeResponseText(response)
+    const result = await queryStoredPageViews(config)
+    const url = new URL(request.url)
+    const wantsSvg = url.searchParams.get('format') === 'svg' || url.searchParams.get('format') === 'badge'
+    if (result.error) {
+      if (wantsSvg) return svgResponse(request, '网站累计访问', '不可用', '#b91c1c', 200)
       return json(request, {
         ok: false,
         version: API_VERSION,
         configured: true,
-        tableReady: false,
-        code: supabaseErrorCode(response.status, detail),
-        supabaseStatus: response.status,
-        detail
-      }, response.status === 401 || response.status === 403 ? 503 : 502)
+        tableReady: result.error.code !== 'visit_logs_table_missing',
+        code: result.error.code,
+        supabaseStatus: result.error.status
+      }, result.error.status === 401 || result.error.status === 403 ? 503 : 502)
+    }
+
+    const storedPageViews = result.count ?? 0
+    const totalPageViews = storedPageViews + config.countOffset
+    if (wantsSvg) {
+      const label = text(url.searchParams.get('label'), 24) ?? '网站累计访问'
+      return svgResponse(request, label, totalPageViews.toLocaleString('en-US'), '#2563eb')
     }
     return json(request, {
       ok: true,
       version: API_VERSION,
       configured: true,
-      tableReady: true
-    })
+      tableReady: true,
+      storedPageViews,
+      countOffset: config.countOffset,
+      totalPageViews
+    }, 200, 'public, max-age=60, s-maxage=60')
   } catch (error) {
-    return json(request, {
-      ok: false,
-      version: API_VERSION,
-      configured: true,
-      tableReady: false,
-      code: error instanceof DOMException && error.name === 'AbortError' ? 'supabase_timeout' : 'supabase_unreachable'
-    }, 504)
+    const code = error instanceof DOMException && error.name === 'AbortError' ? 'supabase_timeout' : 'supabase_unreachable'
+    const url = new URL(request.url)
+    if (url.searchParams.get('format') === 'svg' || url.searchParams.get('format') === 'badge') {
+      return svgResponse(request, '网站累计访问', '不可用', '#b91c1c', 200)
+    }
+    return json(request, { ok: false, version: API_VERSION, configured: true, tableReady: false, code }, 504)
   }
 }
 
 async function insertVisit(request: Request, config: ServerConfig): Promise<Response> {
-  if (!sameOrigin(request)) return json(request, { ok: false, code: 'origin_not_allowed' }, 403)
+  if (!sameOrigin(request)) {
+    console.warn('visit log origin rejected', {
+      origin: request.headers.get('origin'),
+      requestHost: (() => { try { return new URL(request.url).host } catch { return null } })(),
+      forwardedHost: request.headers.get('x-forwarded-host')
+    })
+    return json(request, { ok: false, code: 'origin_not_allowed' }, 403)
+  }
 
   let payload: VisitPayload
   try {
@@ -270,12 +349,7 @@ async function insertVisit(request: Request, config: ServerConfig): Promise<Resp
       const detail = await safeResponseText(response)
       const code = supabaseErrorCode(response.status, detail)
       console.error('visit log insert failed', response.status, code, detail)
-      return json(request, {
-        ok: false,
-        code,
-        supabaseStatus: response.status,
-        detail
-      }, response.status === 401 || response.status === 403 ? 503 : 502)
+      return json(request, { ok: false, code, supabaseStatus: response.status }, response.status === 401 || response.status === 403 ? 503 : 502)
     }
 
     return json(request, { ok: true, stored: true, eventId }, 201)
@@ -286,22 +360,28 @@ async function insertVisit(request: Request, config: ServerConfig): Promise<Resp
   }
 }
 
+function configurationError(request: Request, result: { missing: string[]; invalidUrl?: boolean }): Response {
+  const url = new URL(request.url)
+  if (url.searchParams.get('format') === 'svg' || url.searchParams.get('format') === 'badge') {
+    return svgResponse(request, '网站累计访问', '未配置', '#b91c1c', 200)
+  }
+  return json(request, {
+    ok: false,
+    version: API_VERSION,
+    configured: false,
+    code: result.invalidUrl ? 'invalid_supabase_url' : 'missing_environment',
+    missing: result.missing
+  }, 503)
+}
+
 export default {
   async fetch(request: Request): Promise<Response> {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(request) })
 
     const result = serverConfig()
-    if (!result.config) {
-      return json(request, {
-        ok: false,
-        version: API_VERSION,
-        configured: false,
-        code: result.invalidUrl ? 'invalid_supabase_url' : 'missing_environment',
-        missing: result.missing
-      }, 503)
-    }
+    if (!result.config) return configurationError(request, result)
 
-    if (request.method === 'GET') return healthCheck(request, result.config)
+    if (request.method === 'GET') return getStatusOrCount(request, result.config)
     if (request.method === 'POST') return insertVisit(request, result.config)
     return json(request, { ok: false, code: 'method_not_allowed' }, 405)
   }

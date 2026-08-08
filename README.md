@@ -1,16 +1,38 @@
 # Study Planner
+> Study Planner is an adaptive, execution-aware study scheduling web app.
 
+Unlike traditional todo lists and static planners, it dynamically
+reschedules future study tasks when actual execution differs from the
+original plan.
+
+Key features:
+- Dynamic rescheduling based on actual progress
+- Deadline and capacity-aware scheduling
+- Manual intent / locked-task protection
+- Multiple rescheduling proposals
+- Preview before apply
+- Explainable scheduling conflicts
+- Recoverable plan versions
+- Web / PWA demo
 > 目标驱动、可解释、可恢复的动态学习计划系统。
 >
 > An explainable and recoverable study planning system built around real execution.
 
 
-## Project Status
+## 文档索引
 
-- 当前版本：`v0.8.13`
+- [更新日志](docs/CHANGELOG.md)
+- [迁移指南](docs/MIGRATION_GUIDE.md)
+- [部署说明](docs/DEPLOYMENT.md)
+
+## 项目状态
+
+- 当前版本：`v0.8.15`
 - 状态：`Active development`（持续迭代）
 - 数据：本地优先（IndexedDB），可选 Supabase 账号同步；游客空间独立
 - 体验：https://study-planner.yhwlwl.xyz
+- 累计访问：![网站累计访问](https://study-planner.yhwlwl.xyz/api/visit-log?format=svg)
+
 ## 这是什么
 
 学习计划经常面临"排期与执行脱节"：计划排好后，实际用时、临时缺勤、目标变化都会让原计划失效，而手动调整又容易产生新的冲突。
@@ -73,7 +95,7 @@ VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=sb_publishable_xxx
 ```
 
-浏览器端不得使用 `service_role` 或 `sb_secret_...`；访问日志所需的高权限密钥只能放在服务端环境变量中，且不能使用 `VITE_` 前缀。
+浏览器端不得使用 `service_role` 或 `sb_secret_...`；访问日志所需的高权限密钥只能放在服务端环境变量中，且不能使用 `VITE_` 前缀。 访问计数接口为 `/api/visit-log`，健康状态与累计页浏览量均可直接查看；README 徽章使用同一数据源。
 
 ## 验证
 
@@ -106,15 +128,5 @@ npm run build
 - 首次登录可选择导入游客计划、使用账号演示计划或从空白开始；
 - 云端同步只上传当前可移植状态，不上传重型本地计划版本、旧重排快照或冲突备份；
 - 完整计划版本历史仅保存在当前设备，设置页会明确提示。
-
-## 文档索引
-
-- [更新日志](docs/CHANGELOG.md)
-- [迁移指南](docs/MIGRATION_GUIDE.md)
-- [部署说明](docs/DEPLOYMENT.md)
-
-## 当前限制
-
-- 完整计划版本历史仅保存在当前设备，不随账号同步；
 
 

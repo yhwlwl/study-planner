@@ -694,6 +694,8 @@ export interface ReplanRequest {
   strategy?: ReplanStrategy
   freezeDays?: number
   todayExtraMinutes?: number
+  /** 用户逐项允许的未来任务进入今天的任务 ID；仅对本轮计算生效。 */
+  allowTodayIncomingAssignments?: string[]
   allowBufferUseDates?: string[]
   /** 受保护日期的一次性授权可精确到任务，避免整日放开。 */
   allowProtectedDateAssignments?: Array<{ date: ISODate; assignmentIds: string[] }>

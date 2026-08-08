@@ -29,12 +29,23 @@ const waivableTypes = new Set<ProposalIssue['type']>([
 
 const absoluteTypes = new Set<ProposalIssue['type']>(['active-timer', 'past-freeze'])
 
+export function isTodayIncomingIssue(issue?: Pick<ProposalIssue, 'rawConstraintKey'>) {
+  return issue?.rawConstraintKey === 'today-closed' || issue?.rawConstraintKey === 'today-extra'
+}
+
+function normalizedTodayIncomingKey(rawKey: string) {
+  return rawKey === 'today-closed' || rawKey === 'today-extra' ? 'today-extra' : rawKey
+}
+
 export function conflictProfile(issue: ProposalIssue): ConflictProfile {
   if (issue.conflictCategory && issue.allowedResolutions?.length) {
+    const todayIncoming = isTodayIncomingIssue(issue)
     return {
       category: issue.conflictCategory,
-      label: categoryLabel(issue.conflictCategory),
-      description: categoryDescription(issue.conflictCategory),
+      label: todayIncoming ? '今天接收规则' : categoryLabel(issue.conflictCategory),
+      description: todayIncoming
+        ? '只对当前列出的任务放宽“未来任务不自动进入今天”的规则，不修改永久设置。'
+        : categoryDescription(issue.conflictCategory),
       allowedResolutions: issue.allowedResolutions,
     }
   }
@@ -72,6 +83,14 @@ export function conflictProfile(issue: ProposalIssue): ConflictProfile {
       allowedResolutions: ['system-find-another-date', 'leave-unscheduled', 'change-goal', 'cancel-change'],
     }
   }
+  if (raw === 'today-closed' || raw === 'today-extra') {
+    return {
+      category: 'waivable-rule',
+      label: '今天接收规则',
+      description: '只对当前列出的任务放宽“未来任务不自动进入今天”的规则，不修改永久设置。',
+      allowedResolutions: ['accept-once', 'system-find-another-date', 'keep-original', 'change-capacity'],
+    }
+  }
   if (issue.type === 'unscheduled') {
     return {
       category: 'structural-conflict',
@@ -80,7 +99,7 @@ export function conflictProfile(issue: ProposalIssue): ConflictProfile {
       allowedResolutions: ['system-find-another-date', 'leave-unscheduled', 'cancel-change'],
     }
   }
-  if (raw === 'travel-day' || raw === 'today-closed' || raw === 'today-extra' || raw === 'buffer-high-intensity' || raw === 'buffer-long-task' || raw === 'plan-range') {
+  if (raw === 'travel-day' || raw === 'buffer-high-intensity' || raw === 'buffer-long-task' || raw === 'plan-range') {
     return {
       category: 'structural-conflict',
       label: '需要改变日期或可用性',
@@ -120,7 +139,16 @@ function categoryDescription(category: ConflictCategory) {
           : '可以继续，但应理解影响。'
 }
 
-export function resolutionLabel(action: ConflictResolutionAction) {
+export function resolutionLabel(action: ConflictResolutionAction, issue?: ProposalIssue) {
+  if (isTodayIncomingIssue(issue)) {
+    const todayLabels: Partial<Record<ConflictResolutionAction, string>> = {
+      'accept-once': '允许这些任务今天加入',
+      'system-find-another-date': '让系统为这些任务找其他日期',
+      'keep-original': '保留这些任务原来的日期',
+      'change-capacity': '调整今天的可用时间',
+    }
+    return todayLabels[action] ?? action
+  }
   const labels: Record<ConflictResolutionAction, string> = {
     'accept-once': '接受本次例外',
     'system-find-another-date': '让系统仅为这些任务换日',
@@ -136,7 +164,8 @@ export function resolutionLabel(action: ConflictResolutionAction) {
 
 export function exceptionFromIssue(issue: ProposalIssue): ConstraintException | undefined {
   const profile = conflictProfile(issue)
-  const rawKey = issue.rawConstraintKey ?? rawKeyFromIssue(issue)
+  const rawKey = normalizedTodayIncomingKey(issue.rawConstraintKey ?? rawKeyFromIssue(issue))
+  const todayIncoming = rawKey === 'today-extra'
   const protectedDate = issue.type === 'date-protection' || rawKey === 'date-protection' || rawKey === 'protected-buffer' || rawKey === 'source-date-protection'
   if (profile.category !== 'waivable-rule' && !protectedDate) return undefined
   if (!issue.date) return undefined
@@ -152,17 +181,20 @@ export function exceptionFromIssue(issue: ProposalIssue): ConstraintException | 
             : issue.type === 'date-protection' ? 'date-protection'
               : 'capacity',
     rawKey,
-    label: protectedDate
+    label: todayIncoming
+      ? `${issue.title}：仅本次允许列出的任务进入今天，不修改今天的默认设置`
+      : protectedDate
       ? `${issue.title}：仅本次允许涉及任务使用该日期`
       : `${issue.title}：本次由 ${Math.round(allowed ?? 0)} 放宽到 ${Math.round(issue.suggestedLimit ?? current ?? 0)}`,
     permanent: false,
     currentLimit: protectedDate ? undefined : allowed,
-    overrideLimit: protectedDate ? undefined : issue.suggestedLimit ?? current,
+    overrideLimit: protectedDate || todayIncoming ? undefined : issue.suggestedLimit ?? current,
     affectedAssignmentIds: [...issue.assignmentIds],
   }
 }
 
 function rawKeyFromIssue(issue: ProposalIssue) {
+  if (issue.rawConstraintKey === 'today-closed' || issue.rawConstraintKey === 'today-extra') return 'today-extra'
   if (issue.type === 'group-daily-max' && issue.groupId) return `group:${issue.groupId}`
   if (issue.type === 'long-task-max') return 'long'
   if (issue.type === 'high-intensity-max') return 'high-intensity'

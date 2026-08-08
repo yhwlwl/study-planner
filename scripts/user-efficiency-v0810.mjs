@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
 const root = process.cwd()
+const tscBin = path.join(root, 'node_modules', 'typescript', 'bin', 'tsc')
 const read = file => fs.readFileSync(path.join(root, file), 'utf8')
 const app = read('src/App.tsx')
 const taskCard = read('src/components/TaskCard.tsx')
@@ -44,7 +45,7 @@ let runtimeStatsPass = false
 let runtimeStatsEvidence = ''
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'study-planner-stats-test-'))
 try {
-  const compile = spawnSync('tsc', ['src/lib/stats.ts', 'src/types.ts', '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'bundler', '--outDir', temp, '--skipLibCheck', '--strict', '--noEmitOnError'], { cwd: root, encoding: 'utf8' })
+  const compile = spawnSync(process.execPath, [tscBin, 'src/lib/stats.ts', 'src/types.ts', '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'bundler', '--outDir', temp, '--skipLibCheck', '--strict', '--noEmitOnError'], { cwd: root, encoding: 'utf8' })
   if (compile.status !== 0) throw new Error((compile.stdout + compile.stderr).trim())
   fs.writeFileSync(path.join(temp, 'package.json'), '{"type":"module"}')
   const mod = await import(`${pathToFileURL(path.join(temp, 'lib/stats.js')).href}?v=${Date.now()}`)
@@ -66,10 +67,10 @@ try {
 add('实际时间与旧数据残差各只计算一次', runtimeStatsPass, runtimeStatsEvidence)
 
 const passed = checks.filter(item => item.pass).length
-const result = { version: '0.8.13', generatedAt: new Date().toISOString(), passed, total: checks.length, checks }
+const result = { version: '0.8.15', generatedAt: new Date().toISOString(), passed, total: checks.length, checks }
 fs.mkdirSync(path.join(root, 'validation'), { recursive: true })
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.13用户效率验证.json'), JSON.stringify(result, null, 2))
-const lines = ['# Study Planner v0.8.13 用户效率验证', '', `- 通过：${passed} / ${checks.length}`, `- 生成时间：${result.generatedAt}`, '', ...checks.map(item => `- ${item.pass ? '✅' : '❌'} **${item.name}**：${item.evidence}`)]
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.13用户效率验证.md'), lines.join('\n') + '\n')
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.15用户效率验证.json'), JSON.stringify(result, null, 2))
+const lines = ['# Study Planner v0.8.15 用户效率验证', '', `- 通过：${passed} / ${checks.length}`, `- 生成时间：${result.generatedAt}`, '', ...checks.map(item => `- ${item.pass ? '✅' : '❌'} **${item.name}**：${item.evidence}`)]
+fs.writeFileSync(path.join(root, 'validation', 'v0.8.15用户效率验证.md'), lines.join('\n') + '\n')
 console.log(lines.join('\n'))
 if (passed !== checks.length) process.exit(1)

@@ -3,9 +3,10 @@ import { createRoot } from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'
 import App from './App'
 import { AppProvider } from './AppContext'
-import { recordPageVisit } from './lib/analytics'
+import { installVisitLogRetry, recordPageVisit } from './lib/analytics'
 
 registerSW({ immediate: true })
+installVisitLogRetry()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

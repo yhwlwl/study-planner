@@ -4,6 +4,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const root = process.cwd()
+const tscBin = path.join(root, 'node_modules', 'typescript', 'bin', 'tsc')
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'study-planner-adjustment-runtime-'))
 const out = path.join(temp, 'out')
 let result
@@ -18,7 +19,7 @@ try {
     export function eachDayOfInterval(value: {start: Date; end: Date}): Date[]
     export function format(date: Date, pattern: string): string
   }\n`)
-  const compile = spawnSync('tsc', ['src/lib/planner.ts', 'src/lib/conflicts.ts', declarations, '--target', 'ES2022', '--module', 'commonjs', '--moduleResolution', 'node', '--outDir', out, '--skipLibCheck', '--strict', '--noEmitOnError'], { cwd: root, encoding: 'utf8' })
+  const compile = spawnSync(process.execPath, [tscBin, 'src/lib/planner.ts', 'src/lib/conflicts.ts', declarations, '--target', 'ES2022', '--module', 'commonjs', '--moduleResolution', 'node', '--outDir', out, '--skipLibCheck', '--strict', '--noEmitOnError'], { cwd: root, encoding: 'utf8' })
   if (compile.status !== 0) throw new Error((compile.stdout + compile.stderr).trim())
 
   const dateFns = path.join(out, 'node_modules/date-fns')
@@ -137,6 +138,25 @@ try {
     if(incomingPreview.issues.some(i=>i.assignmentIds.some(id=>id.startsWith('done-')))) throw new Error('已完成任务被错误列入可处理冲突')
     if(!incomingPreview.issues.some(i=>i.assignmentIds.includes('incoming'))) throw new Error('冲突没有精确指向新增的未完成任务')
 
+    // 未来任务明确移到今天时，“今天默认不接收未来任务”属于可逐项放宽的今天接收规则，
+    // 不能把用户锁死在结构冲突页面；接受后只授权这项任务，不改变永久设置。
+    const todayIncomingBase={...structuredClone(base),settings:{...settings,regularMinutes:180},assignments:[task2('today-incoming','g',add(today,2),1,60)]}
+    const todayIncomingPrepared=structuredClone(todayIncomingBase)
+    todayIncomingPrepared.assignments[0].previousDate=add(today,2)
+    todayIncomingPrepared.assignments[0].scheduledDate=today
+    todayIncomingPrepared.assignments[0].scheduleSource='manual'
+    todayIncomingPrepared.assignments[0].intentStrength='manual'
+    const todayIncomingEvent={...event,id:'today-incoming',type:'bulk-move',title:'移动未来任务到今天',affectedGroupIds:['g'],affectedAssignmentIds:['today-incoming'],affectedDates:[today,add(today,2)],metadata:{requestedDate:today,manualMove:true,preferredPreferences:['preserve']}}
+    const todayIncomingPreview=previewPreparedChange(todayIncomingBase,todayIncomingPrepared,todayIncomingEvent,'按用户选择移动到今天')
+    const todayIncomingIssue=todayIncomingPreview.issues.find(i=>i.rawConstraintKey==='today-closed')
+    if(!todayIncomingIssue) throw new Error('未来任务移到今天没有生成今天接收规则冲突')
+    if(todayIncomingIssue.conflictCategory!=='waivable-rule'||!todayIncomingIssue.allowedResolutions?.includes('accept-once')) throw new Error('今天接收规则没有提供一次性豁免')
+    const todayIncomingApplied=applyConflictDecisions(todayIncomingBase,todayIncomingPrepared,todayIncomingPreview,todayIncomingEvent,[{issueId:todayIncomingIssue.id,action:'accept-once'}])
+    if(todayIncomingApplied.acceptedExceptions.length!==1||todayIncomingApplied.acceptedExceptions[0].rawKey!=='today-extra') throw new Error('今天接收规则例外没有记录为最小范围授权')
+    if(todayIncomingApplied.acceptedExceptions[0].affectedAssignmentIds?.join(',')!=='today-incoming') throw new Error('今天接收规则例外错误扩大到其他任务')
+    const todayIncomingRecalculated=generateSchedulingProposals(todayIncomingApplied.preparedState,todayIncomingApplied.event,{baseline:todayIncomingBase,acceptedExceptions:todayIncomingApplied.acceptedExceptions,disableAutomaticExceptions:true,preferences:['preserve']})
+    if(!todayIncomingRecalculated.some(p=>!p.infeasible&&p.stateAfter.assignments.find(a=>a.id==='today-incoming')?.scheduledDate===today)) throw new Error('接受今天接收例外后仍无法应用未来任务')
+
     // 明确局部操作：即使基线已有硬冲突，删除一个任务的第一方案也只能删除该任务，不能移动其他 17 项任务。
     const localBase={...structuredClone(legacyOverload),assignments:[...legacyOverload.assignments,task2('delete-me','math',add(today,4),8,45)]}
     const localPrepared=structuredClone(localBase)
@@ -148,7 +168,67 @@ try {
     if(localPreview.movements.length!==0) throw new Error('局部删除第一方案移动了其他任务')
     if(!localPreview.structuralChanges.some(c=>c.entityType==='assignment'&&c.entityId==='delete-me'&&c.changeType==='removed')) throw new Error('删除任务未出现在结构变化预览')
     if(!localPreview.issueDelta||localPreview.issueDelta.preExistingCount<1) throw new Error('没有识别计划原有硬问题')
-    if(localPreview.issueDelta.newOrWorsenedCount!==0) throw new Error('局部删除被误判为新增或恶化问题')
+   if(localPreview.issueDelta.newOrWorsenedCount!==0) throw new Error('局部删除被误判为新增或恶化问题')
+   // 复盘过去日期：冻结的是已发生事实，不是把仍未完成的任务困在过去。
+    const yesterday=add(today,-1)
+    const pastGroup={...group,id:'past-group',subject:'语文',title:'昨日未完成',activityType:'normal',dailyMax:5,unitMinutes:30}
+    const pastTask=(id,date,status='todo')=>({id,groupId:'past-group',index:1,title:id,scheduledDate:date,estimatedMinutes:30,actualMinutes:status==='done'?30:0,progress:status==='done'?100:0,status,locked:false,timeEntries:status==='done'?[{id:id+'-time',minutes:30,createdAt:today+'T12:00:00.000Z',source:'finish'}]:[],scheduleSource:'system',intentStrength:'normal',completedAt:status==='done'?yesterday+'T12:00:00.000Z':undefined,createdAt:'',updatedAt:''})
+    const pastBase={...structuredClone(base),taskGroups:[pastGroup],assignments:[pastTask('yesterday-open',yesterday)]}
+    const pastPrepared=structuredClone(pastBase)
+    pastPrepared.assignments[0].previousDate=yesterday
+    pastPrepared.assignments[0].scheduledDate=add(today,1)
+    pastPrepared.assignments[0].scheduleSource='carryover'
+    pastPrepared.assignments[0].intentStrength='manual'
+    const pastReviewEvent={id:'past-review',type:'execution-difference',action:'repair',title:'复盘昨日',description:'顺延未完成任务',affectedGoalIds:[],affectedGroupIds:['past-group'],affectedAssignmentIds:['yesterday-open'],affectedDates:[yesterday,add(today,1)],createdAt:'',metadata:{reviewDate:yesterday,reviewCarryover:true,requestedCarryDates:{'yesterday-open':add(today,1)}}}
+    const pastReviewPreview=previewPreparedChange(pastBase,pastPrepared,pastReviewEvent,'按昨日复盘选择顺延')
+    if(pastReviewPreview.infeasible) throw new Error('过去未完成任务顺延到未来仍被判定为硬冲突：'+pastReviewPreview.issues.map(i=>i.title+':'+i.detail).join('|'))
+    if(pastReviewPreview.issues.some(i=>i.rawConstraintKey==='past')) throw new Error('过去未完成任务顺延仍生成过去日期冻结问题')
+
+    // 待处理任务中的明确批量移动同样允许从过去移出。
+    const pastBulkEvent={...pastReviewEvent,id:'past-bulk',type:'bulk-move',title:'移动逾期任务',metadata:{explicitLocalOperation:true,operationScope:'requested-change-only'}}
+    const pastBulkPreview=previewPreparedChange(pastBase,pastPrepared,pastBulkEvent,'移动逾期任务')
+    if(pastBulkPreview.infeasible||pastBulkPreview.issues.some(i=>i.rawConstraintKey==='past')) throw new Error('待处理视图无法把过去未完成任务移到未来')
+
+    // 用户也可以把过去未完成任务暂时变为未安排，稍后再处理。
+    const unscheduledPrepared=structuredClone(pastBase)
+    unscheduledPrepared.assignments[0].previousDate=yesterday
+    unscheduledPrepared.assignments[0].scheduledDate=undefined
+    const unscheduledPreview=previewPreparedChange(pastBase,unscheduledPrepared,pastReviewEvent,'暂不安排昨日未完成任务')
+    if(unscheduledPreview.infeasible||unscheduledPreview.issues.some(i=>i.rawConstraintKey==='past')) throw new Error('过去未完成任务无法转为待安排')
+
+    // 反向操作仍禁止：不能把任务移入过去，已完成/锁定/计时中的历史也不能改写。
+    const intoPastBase={...structuredClone(pastBase),assignments:[pastTask('future-open',add(today,2))]}
+    const intoPastPrepared=structuredClone(intoPastBase)
+    intoPastPrepared.assignments[0].previousDate=add(today,2)
+    intoPastPrepared.assignments[0].scheduledDate=yesterday
+    const intoPastEvent={...pastBulkEvent,id:'into-past',affectedAssignmentIds:['future-open'],affectedDates:[add(today,2),yesterday]}
+    const intoPastPreview=previewPreparedChange(intoPastBase,intoPastPrepared,intoPastEvent,'错误移入过去')
+    if(!intoPastPreview.infeasible||!intoPastPreview.issues.some(i=>i.rawConstraintKey==='past')) throw new Error('任务被允许移入过去日期')
+
+    const completedPastBase={...structuredClone(pastBase),assignments:[pastTask('yesterday-done',yesterday,'done')]}
+    const completedPastPrepared=structuredClone(completedPastBase)
+    completedPastPrepared.assignments[0].previousDate=yesterday
+    completedPastPrepared.assignments[0].scheduledDate=add(today,1)
+    const completedPastEvent={...pastReviewEvent,id:'past-done',affectedAssignmentIds:['yesterday-done']}
+    const completedPastPreview=previewPreparedChange(completedPastBase,completedPastPrepared,completedPastEvent,'尝试移动已完成任务')
+    if(!completedPastPreview.infeasible||!completedPastPreview.issues.some(i=>i.rawConstraintKey==='completed-history')) throw new Error('已完成历史任务被错误允许改期')
+
+    const lockedPastBase=structuredClone(pastBase)
+    lockedPastBase.assignments[0].locked=true
+    const lockedPastPrepared=structuredClone(lockedPastBase)
+    lockedPastPrepared.assignments[0].previousDate=yesterday
+    lockedPastPrepared.assignments[0].scheduledDate=add(today,1)
+    const lockedPastPreview=previewPreparedChange(lockedPastBase,lockedPastPrepared,pastReviewEvent,'尝试移动锁定任务')
+    if(!lockedPastPreview.infeasible||!lockedPastPreview.issues.some(i=>i.rawConstraintKey==='task-lock')) throw new Error('锁定的过去任务被错误允许改期')
+
+    const timerPastBase=structuredClone(pastBase)
+    timerPastBase.timer={assignmentId:'yesterday-open',startedAt:new Date().toISOString(),accumulatedSeconds:60,running:true}
+    const timerPastPrepared=structuredClone(timerPastBase)
+    timerPastPrepared.assignments[0].previousDate=yesterday
+    timerPastPrepared.assignments[0].scheduledDate=add(today,1)
+    const timerPastPreview=previewPreparedChange(timerPastBase,timerPastPrepared,pastReviewEvent,'尝试移动计时任务')
+    if(!timerPastPreview.infeasible||!timerPastPreview.issues.some(i=>i.rawConstraintKey==='active-timer')) throw new Error('正在计时的过去任务被错误允许改期')
+
 
     console.log(JSON.stringify({previewIssues:preview.issues.length,issueTitles:preview.issues.map(i=>i.title),proposals:proposals.length,legalDate,partialDecisionProposals:recalculated.length,acceptedExceptionKeys:applied.acceptedExceptions.map(e=>e.rawKey),recalculatedDate:executable.stateAfter.assignments.find(a=>a.id==='conflict')?.scheduledDate,selectedCandidatePartialDecision:true,minimumScopedAssignments:partialSelected.acceptedExceptions[0].affectedAssignmentIds,recalculatedSelectedDate:executableSelected.stateAfter.assignments.find(a=>a.id==='activity-task')?.scheduledDate,completedHistoryExcluded:true,nonWorseningOverloadAllowed:true,incomingTaskStillValidated:true,localDeleteRequestedChangeOnly:true,localDeleteMovedOtherTasks:localPreview.movements.length,localDeletePreExistingIssues:localPreview.issueDelta.preExistingCount,localDeleteNewOrWorsened:localPreview.issueDelta.newOrWorsenedCount}))
   `)

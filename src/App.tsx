@@ -33,6 +33,7 @@ import { NumericInput } from './components/NumericInput'
 import { adjustmentPolicyForEvent, eventWithPreferences } from './lib/adjustment'
 import { applyConflictDecisions, mergeConstraintExceptions } from './lib/conflicts'
 import { downloadSnapshot, getSession, preparePortableState, signIn, signOut, signUp, supabase, supabaseConfigured, uploadSnapshot } from './lib/supabase'
+import { Analytics } from '@vercel/analytics/react'
 import './styles.css'
 
 type Page = 'today' | 'calendar' | 'tasks' | 'goals' | 'stats' | 'settings' | 'timer'
@@ -506,12 +507,12 @@ export default function App() {
         <nav>
           {navItems.map(item => {
             const Icon = item.icon
-            return <button key={item.id} className={page === item.id ? 'nav-active' : ''} onClick={() => { setPage(item.id); setMobileNav(false) }}><Icon size={19}/><span>{item.label}</span></button>
+            return <button key={item.id} title={state.settings.sidebarCollapsed ? item.label : undefined} className={page === item.id ? 'nav-active' : ''} onClick={() => { setPage(item.id); setMobileNav(false) }}><Icon size={19}/><span>{item.label}</span></button>
           })}
         </nav>
         <div className="sidebar-bottom">
           <div className={`sync-status ${sessionUser ? 'online' : ''} ${syncStatus === 'error' ? 'sync-error' : ''}`}>{sessionUser ? <Cloud size={16}/> : <CloudOff size={16}/>}<span>{!sessionUser ? '游客演示 · 仅本地保存' : syncStatus === 'restoring' ? '正在从云端恢复' : syncStatus === 'queued' ? '已保存到本机 · 等待云同步' : syncStatus === 'saving' ? '正在同步到云端' : syncStatus === 'error' ? '云同步失败' : cloudReady ? '已自动保存到云端' : '等待初始化个人计划'}</span></div>
-          <button className="collapse-button" onClick={() => updateSettings({ sidebarCollapsed: !state.settings.sidebarCollapsed })}><ChevronLeft size={18}/><span>收起侧边栏</span></button>
+          <button className="collapse-button" title={state.settings.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'} aria-label={state.settings.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'} onClick={() => updateSettings({ sidebarCollapsed: !state.settings.sidebarCollapsed })}><ChevronLeft size={18}/><span>{state.settings.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}</span></button>
         </div>
       </aside>
       {mobileNav && <button className="mobile-overlay" onClick={() => setMobileNav(false)} aria-label="关闭菜单"/>}
@@ -659,6 +660,7 @@ export default function App() {
           <button onClick={() => void initializeAccount('blank')}><strong>从空白开始</strong><span>创建新的账号计划；游客数据仍独立保留在本机。</span></button>
         </div>
       </Modal>
+      <Analytics />
     </div>
   )
 }
@@ -903,6 +905,7 @@ function TodayPage({ onNavigate, onPrepared, onAddTask, onReview }: { onNavigate
       <div><span>剩余预计</span><strong>{minutesText(remainingPlanned)}</strong></div>
       <div className={executionLoad > capacity ? 'metric-over' : ''}><span>执行负载 / 容量</span><strong>{minutesText(executionLoad)} / {minutesText(capacity)}</strong></div>
     </section>
+    <div className="load-metric-note" role="note"><Sparkles size={15}/><span><strong>怎么区分？</strong>原计划是最初估计；执行负载是实际/推断用时 + 未完成剩余预计，用来和当天容量比较。</span></div>
     {state.settings.showWarnings && risk && <div className="alert warning"><Sparkles size={18}/><div><strong>进度提醒</strong><span>{risk}</span></div></div>}
     <section className="section-block">
       <div className="section-title"><div><h2>{isToday ? '今日任务' : isPast ? `${fmtDate(date)} 的执行记录` : `${fmtDate(date)} 的计划任务`}</h2><p>{isPast ? '已完成记录保持不变；未完成任务可在待处理视图继续安排。' : '完成后勾选，可录入精确到 1 分钟的实际用时。'}</p></div></div>
@@ -1067,7 +1070,7 @@ function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask }: { onPrepared:
     }
 
     const placementChecks = checkAssignmentPlacement(state, assignmentId, targetDate)
-    const overrideable = (key: string) => key === 'capacity' || key.startsWith('group:') || key.startsWith('activity:') || key === 'long' || key === 'high-intensity' || key === 'date-protection' || key === 'protected-buffer'
+    const overrideable = (key: string) => key === 'capacity' || key.startsWith('group:') || key.startsWith('activity:') || key === 'long' || key === 'high-intensity' || key === 'date-protection' || key === 'protected-buffer' || key === 'today-closed' || key === 'today-extra'
     const nonOverrideable = placementChecks.filter(item => item.hard && !overrideable(item.key))
     if (nonOverrideable.length) {
       window.alert(nonOverrideable.map(item => item.label).join('；'))
@@ -1092,7 +1095,7 @@ function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask }: { onPrepared:
       const affectedGoalIds = prepared.goals.filter(goal => goal.linkedAssignmentIds.includes(draftTask.id) || goal.linkedTaskGroupIds.includes(draftTask.groupId) || goal.completionConditions.some(condition => condition.groupId === draftTask.groupId)).map(goal => goal.id)
       const event: PlanChangeEvent = {
         id: uid('event'), type: 'bulk-move', action: 'repair', title: `移动任务：${draftTask.title}`,
-        description: `用户希望把任务从 ${oldDate ?? '未安排'} 移到 ${targetDate}。当前涉及容量、每日上限或日期保护，系统会把每个例外完整列出并要求逐项确认；不会把本次放宽保存为永久规则。`,
+        description: `用户希望把任务从 ${oldDate ?? '未安排'} 移到 ${targetDate}。当前涉及容量、每日上限、今天接收规则或日期保护，系统会把每个例外完整列出并要求逐项确认；不会把本次放宽保存为永久规则。`,
         affectedGoalIds, affectedGroupIds: [draftTask.groupId], affectedAssignmentIds: [draftTask.id],
         affectedDates: Array.from(new Set([oldDate, targetDate].filter((date): date is string => Boolean(date)))).sort(), createdAt: movedAt,
         metadata: { requestedDate: targetDate, manualMove: true, preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'] },

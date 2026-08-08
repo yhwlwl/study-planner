@@ -1,0 +1,58 @@
+{
+  "version": "0.8.15",
+  "generatedAt": "2026-08-03T06:26:50.720Z",
+  "passed": 10,
+  "total": 10,
+  "checks": [
+    {
+      "name": "访问事件先进入持久 outbox",
+      "pass": true,
+      "evidence": "失败事件不会在一次重试后永久丢失"
+    },
+    {
+      "name": "联网后自动补写",
+      "pass": true,
+      "evidence": "PWA 恢复联网或重新可见时会刷新队列"
+    },
+    {
+      "name": "入口安装补写监听",
+      "pass": true,
+      "evidence": "主入口只安装一次恢复监听"
+    },
+    {
+      "name": "自定义域名同源判断使用请求 URL",
+      "pass": true,
+      "evidence": "不再只依赖可能变化的转发 Host"
+    },
+    {
+      "name": "累计访问 JSON",
+      "pass": true,
+      "evidence": "GET 健康检查同时返回累计口径"
+    },
+    {
+      "name": "README SVG 徽章",
+      "pass": true,
+      "evidence": "GitHub README 可直接显示同一数据源的总访问数"
+    },
+    {
+      "name": "历史基数有明确部署说明",
+      "pass": true,
+      "evidence": "不伪造丢失日志，只允许补入可信历史基数"
+    },
+    {
+      "name": "服务端访问 API 独立类型检查",
+      "pass": true,
+      "evidence": "api/visit-log.ts 编译通过"
+    },
+    {
+      "name": "自定义域名请求不会误拒绝",
+      "pass": true,
+      "evidence": "请求 URL Host 或转发 Host 任一匹配即通过，外站仍拒绝"
+    },
+    {
+      "name": "Supabase 精确计数头解析",
+      "pass": true,
+      "evidence": "支持非零、零记录与异常响应"
+    }
+  ]
+}
