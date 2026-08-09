@@ -17,6 +17,18 @@ export function GoalsPage({ onPrepared }: { onPrepared: (prepared: AppState, eve
 
   const save = (draft: GoalDraft, goalId?: string) => {
     const existing = goalId ? state.goals.find(goal => goal.id === goalId) : undefined
+    if (!existing && draft.completionConditions.length === 0 && draft.linkedAssignmentIds.length === 0) {
+      const now = new Date().toISOString()
+      commit(next => {
+        next.goals.push({
+          id: uid('goal'), title: draft.title, description: draft.description, priority: draft.priority,
+          desiredDate: draft.desiredDate, latestDate: draft.latestDate, status: 'active',
+          completionConditions: [], linkedTaskGroupIds: [], linkedAssignmentIds: [], createdAt: now, updatedAt: now,
+        })
+      })
+      setEditing(undefined)
+      return
+    }
     const sameScheduling = Boolean(existing
       && draft.priority === existing.priority
       && (draft.desiredDate ?? undefined) === (existing.desiredDate ?? undefined)
@@ -82,12 +94,12 @@ function GoalDialog({ open, state, initial, onClose, onSave }: { open: boolean; 
     .slice(0, 200)
   const addCondition = () => { const groupId = availableGroups.find(group => !conditions.some(item => item.groupId === group.id))?.id; if (groupId) setConditions(current => [...current, { id: uid('condition'), groupId, mode: 'all' }]) }
   const patchCondition = (id: string, patch: Partial<GoalCondition>) => setConditions(current => current.map(item => item.id === id ? { ...item, ...patch } : item))
-  const submit = () => { if (!title.trim() || !latestDate || (desiredDate && desiredDate > latestDate) || (conditions.length === 0 && assignmentIds.length === 0)) return; onSave({ title: title.trim(), description: description.trim() || undefined, priority, desiredDate: desiredDate || undefined, latestDate, completionConditions: conditions, linkedTaskGroupIds: Array.from(new Set(conditions.map(item => item.groupId))), linkedAssignmentIds: assignmentIds }, initial?.id) }
+  const submit = () => { if (!title.trim() || !latestDate || (desiredDate && desiredDate > latestDate)) return; onSave({ title: title.trim(), description: description.trim() || undefined, priority, desiredDate: desiredDate || undefined, latestDate, completionConditions: conditions, linkedTaskGroupIds: Array.from(new Set(conditions.map(item => item.groupId))), linkedAssignmentIds: assignmentIds }, initial?.id) }
   return <Modal open={open} title={initial ? '编辑目标' : '创建目标'} onClose={onClose} wide mobileFullscreen>
     <div className="form-grid"><label className="field span-2"><span>目标名称</span><input value={title} onChange={event => setTitle(event.target.value)}/></label><label className="field span-2"><span>说明</span><textarea rows={2} value={description} onChange={event => setDescription(event.target.value)}/></label><label className="field"><span>目标优先级</span><select value={priority} onChange={event => setPriority(Number(event.target.value) as Priority)}><option value={5}>核心</option><option value={3}>高</option><option value={2}>中</option><option value={1}>低</option><option value={0}>可选</option></select><small>期限更近始终先判断；期限相同时再参考目标优先级。</small></label><label className="field"><span>期望完成日期（软约束）</span><input type="date" value={desiredDate} onChange={event => setDesiredDate(event.target.value)}/></label><label className="field"><span>最晚完成日期（硬目标）</span><input type="date" value={latestDate} onChange={event => setLatestDate(event.target.value)}/></label>{desiredDate && desiredDate > latestDate && <div className="form-error span-2">期望完成日期不能晚于最晚完成日期。</div>}
       <fieldset className="field span-2 condition-editor"><legend>任务组完成条件</legend>{conditions.map(condition => <div className="condition-row" key={condition.id}><select value={condition.groupId} onChange={event => patchCondition(condition.id, { groupId: event.target.value })}>{availableGroups.map(group => <option key={group.id} value={group.id}>{group.subject} · {group.title}</option>)}</select><select value={condition.mode} onChange={event => patchCondition(condition.id, { mode: event.target.value as GoalConditionMode, value: event.target.value === 'all' ? undefined : condition.value ?? (event.target.value === 'percentage' ? 50 : 1) })}><option value="all">全部任务</option><option value="percentage">完成百分比</option><option value="count">完成数量</option></select>{condition.mode !== 'all' && <NumericInput min={1} max={condition.mode === 'percentage' ? 100 : 999} value={condition.value ?? 1} onValueChange={value => patchCondition(condition.id, { value })}/>}<button className="icon-button danger" onClick={() => setConditions(current => current.filter(item => item.id !== condition.id))}><Trash2 size={16}/></button></div>)}<button className="secondary-button" disabled={!availableGroups.some(group => !conditions.some(item => item.groupId === group.id))} onClick={addCondition}><Plus size={16}/>添加条件</button></fieldset>
       <details className="form-advanced span-2" open={assignmentIds.length > 0}><summary>直接关联特殊单项任务（可选）{assignmentIds.length ? ` · 已选 ${assignmentIds.length} 项` : ''}</summary><div className="form-advanced-body"><fieldset className="field exceptional-links"><legend>特殊单项任务</legend><input className="assignment-link-search" value={assignmentQuery} onChange={event => setAssignmentQuery(event.target.value)} placeholder="搜索任务、任务组或科目"/><small>只有少数不适合用任务组条件表达的任务才需要直接关联；重复关联会自动去重。</small><div>{directAssignmentOptions.map(item => { const group = groupById.get(item.groupId); return <label key={item.id}><input type="checkbox" checked={assignmentIds.includes(item.id)} onChange={event => setAssignmentIds(current => event.target.checked ? [...new Set([...current, item.id])] : current.filter(id => id !== item.id))}/><span>{item.title}<small>{group ? `${group.subject} · ${group.title}` : '任务组已删除'}</small></span></label> })}</div></fieldset></div></details>
-      <div className="form-note span-2">一个任务组可服务多个目标；调度按最近的相关期限判断紧迫性，不会因为关联目标更多而重复加权或重复统计。</div>
-    </div><div className="modal-actions"><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={!title.trim() || !latestDate || Boolean(desiredDate && desiredDate > latestDate) || (conditions.length === 0 && assignmentIds.length === 0)} onClick={submit}>保存并预览影响</button></div>
+      <div className="form-note span-2">一个任务组可服务多个目标；暂时没有任务时也可以先保存目标草稿，之后在录入或编辑目标时关联任务。</div>
+    </div><div className="modal-actions"><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={!title.trim() || !latestDate || Boolean(desiredDate && desiredDate > latestDate)} onClick={submit}>{!initial && conditions.length === 0 && assignmentIds.length === 0 ? '保存目标草稿' : '保存并预览影响'}</button></div>
   </Modal>
 }

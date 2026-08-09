@@ -1,10 +1,10 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
 const root = process.cwd()
+const releaseVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version
 const tscBin = path.join(root, 'node_modules', 'typescript', 'bin', 'tsc')
 const read = file => fs.readFileSync(path.join(root, file), 'utf8')
 const app = read('src/App.tsx')
@@ -35,7 +35,7 @@ add('算法和维护设置默认折叠', /settings-advanced/.test(settings) && /
 add('模态草稿不会因误点背景消失', !/onMouseDown=\{onClose\}/.test(modal + drawer), '长表单只通过明确关闭或取消退出')
 add('统计页使用独立纯函数', /from '..\/lib\/stats'/.test(statsPage) && /export function aggregateDaily/.test(statsLib), '统计口径可独立运行验证')
 add('今日容量只在相关场景询问', /showTodayCapacity/.test(read('src/components/AdjustmentIntentDialog.tsx')), '减负和复盘差异不重复询问无关条件')
-add('计划调整入口显示当前问题数量', /currentIssueCount/.test(app) && /计划问题/.test(app), '无问题时保持普通入口，有问题时直接显示数量')
+add('计划调整入口显示当前问题数量', /currentIssueCount/.test(app) && /个问题需处理/.test(app), '无问题时保持“计划有变化”入口，有问题时直接显示数量')
 add('编号整理不再自动打断主流程', /sequence-renumber-toast/.test(app) && /查看编号建议/.test(app) && /detailsOpen/.test(app), '先以非阻断结果条提示，用户主动展开后再决定')
 add('手机关键图标具有可见文字', /mobile-action-label/.test(read('src/components/GoalsPage.tsx')) && /task-lock-action/.test(taskCard), '目标编辑归档删除和任务锁定在窄屏可读')
 add('统计概览默认只保留主结论和主图', /stats-overview-more/.test(statsPage) && /查看连续记录和学习热力图/.test(statsPage), '连续记录与热力图按需展开')
@@ -43,11 +43,15 @@ add('方案卡首屏收敛计算指标', !read('src/components/ProposalDialog.ts
 
 let runtimeStatsPass = false
 let runtimeStatsEvidence = ''
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'study-planner-stats-test-'))
+// Keep the compiled fixture below the project root so Node can resolve the
+// repository's installed date-fns dependency from the generated date.js.
+const temp = fs.mkdtempSync(path.join(root, '.study-planner-stats-test-'))
 try {
-  const compile = spawnSync(process.execPath, [tscBin, 'src/lib/stats.ts', 'src/types.ts', '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'bundler', '--outDir', temp, '--skipLibCheck', '--strict', '--noEmitOnError'], { cwd: root, encoding: 'utf8' })
+  const compile = spawnSync(process.execPath, [tscBin, 'src/lib/stats.ts', 'src/lib/date.ts', 'src/types.ts', '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'bundler', '--outDir', temp, '--skipLibCheck', '--strict', '--noEmitOnError'], { cwd: root, encoding: 'utf8' })
   if (compile.status !== 0) throw new Error((compile.stdout + compile.stderr).trim())
   fs.writeFileSync(path.join(temp, 'package.json'), '{"type":"module"}')
+  const generatedStats = path.join(temp, 'lib', 'stats.js')
+  fs.writeFileSync(generatedStats, fs.readFileSync(generatedStats, 'utf8').replace("from './date'", "from './date.js'"))
   const mod = await import(`${pathToFileURL(path.join(temp, 'lib/stats.js')).href}?v=${Date.now()}`)
   const date = '2026-08-01'
   const group = { id: 'g', title: '测试组', subject: '数学', priority: 3, quantity: 2, unitMinutes: 60, dailyMax: 3, activityType: 'normal', highIntensity: false, countInStats: true, status: 'active', createdAt: '', updatedAt: '' }
@@ -67,10 +71,10 @@ try {
 add('实际时间与旧数据残差各只计算一次', runtimeStatsPass, runtimeStatsEvidence)
 
 const passed = checks.filter(item => item.pass).length
-const result = { version: '0.8.15', generatedAt: new Date().toISOString(), passed, total: checks.length, checks }
+const result = { version: releaseVersion, generatedAt: new Date().toISOString(), passed, total: checks.length, checks }
 fs.mkdirSync(path.join(root, 'validation'), { recursive: true })
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.15用户效率验证.json'), JSON.stringify(result, null, 2))
-const lines = ['# Study Planner v0.8.15 用户效率验证', '', `- 通过：${passed} / ${checks.length}`, `- 生成时间：${result.generatedAt}`, '', ...checks.map(item => `- ${item.pass ? '✅' : '❌'} **${item.name}**：${item.evidence}`)]
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.15用户效率验证.md'), lines.join('\n') + '\n')
+fs.writeFileSync(path.join(root, 'validation', `v${releaseVersion}用户效率验证.json`), JSON.stringify(result, null, 2))
+const lines = [`# Study Planner v${releaseVersion} 用户效率验证`, '', `- 通过：${passed} / ${checks.length}`, `- 生成时间：${result.generatedAt}`, '', ...checks.map(item => `- ${item.pass ? '✅' : '❌'} **${item.name}**：${item.evidence}`)]
+fs.writeFileSync(path.join(root, 'validation', `v${releaseVersion}用户效率验证.md`), lines.join('\n') + '\n')
 console.log(lines.join('\n'))
 if (passed !== checks.length) process.exit(1)

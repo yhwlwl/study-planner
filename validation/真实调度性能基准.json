@@ -1,0 +1,69 @@
+{
+  "pass": true,
+  "thresholds": {
+    "p95_500_ms": 1500,
+    "p95_1000_ms": 20000
+  },
+  "generatedAt": "2026-08-09T12:29:26.023Z",
+  "environment": {
+    "platform": "win32",
+    "node": "v24.13.0",
+    "cpu": "Intel(R) Core(TM) i7-7500U CPU @ 2.70GHz",
+    "logicalCpus": 4,
+    "totalMemoryGb": 7.9
+  },
+  "cases": [
+    {
+      "count": 100,
+      "days": 30,
+      "samplesMs": [
+        16.52,
+        11.87,
+        6.34,
+        7.74,
+        6.97
+      ],
+      "p50Ms": 7.74,
+      "p95Ms": 16.52,
+      "maxUnscheduled": 0,
+      "stable": true
+    },
+    {
+      "count": 500,
+      "days": 90,
+      "samplesMs": [
+        42.92,
+        35.4,
+        42.65,
+        46.7,
+        30.81
+      ],
+      "p50Ms": 42.65,
+      "p95Ms": 46.7,
+      "maxUnscheduled": 0,
+      "stable": true
+    },
+    {
+      "count": 1000,
+      "days": 180,
+      "samplesMs": [
+        66.19,
+        48.07,
+        254.31,
+        90.79,
+        104.46
+      ],
+      "p50Ms": 90.79,
+      "p95Ms": 254.31,
+      "maxUnscheduled": 0,
+      "stable": true
+    }
+  ],
+  "incremental": {
+    "totalTasks": 500,
+    "existingTasks": 450,
+    "newTasks": 50,
+    "elapsedMs": 528.13,
+    "movedExisting": 0
+  }
+}

@@ -240,7 +240,7 @@ Study Planner 的调度系统并不是为了在数学意义上“不惜一切代
 
 ## 项目状态
 
-- 当前版本：`v0.8.15`
+- 当前版本：`v0.9.0`
 - 状态：`Active development`（持续迭代）
 - 数据：本地优先（IndexedDB），可选 Supabase 账号同步；游客空间独立
 - 在线体验：[https://study-planner.yhwlwl.xyz](https://study-planner.yhwlwl.xyz)

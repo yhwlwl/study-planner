@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const root = process.cwd()
+const releaseVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version
 const css = fs.readFileSync(path.join(root, 'src/styles.css'), 'utf8')
 const modal = fs.readFileSync(path.join(root, 'src/components/Modal.tsx'), 'utf8')
 const review = fs.readFileSync(path.join(root, 'src/components/ReviewDialog.tsx'), 'utf8')
@@ -46,10 +47,10 @@ add('方案底部按钮不遮挡正文', modal.includes('{effectiveFooter && <fo
 add('手机方案弹窗最终覆盖为完整 100dvh', css.includes('.modal-card.modal-wide.modal-mobile-fullscreen.modal-with-footer') && css.includes('max-height:100dvh'), '避免 modal-wide 的 90vh 规则留下底部空白')
 
 const passed = checks.filter(item => item.pass).length
-const output = { version: '0.8.15', generatedAt: new Date().toISOString(), passed, total: checks.length, checks }
+const output = { version: releaseVersion, generatedAt: new Date().toISOString(), passed, total: checks.length, checks }
 fs.mkdirSync(path.join(root, 'validation'), { recursive: true })
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.15界面布局审计.json'), JSON.stringify(output, null, 2))
-const md = ['# Study Planner v0.8.15 界面布局审计', '', `- 通过：${passed} / ${checks.length}`, `- 生成时间：${output.generatedAt}`, '', ...checks.map(item => `- ${item.pass ? '✅' : '❌'} **${item.name}**：${item.evidence}`)]
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.15界面布局审计.md'), md.join('\n') + '\n')
+fs.writeFileSync(path.join(root, 'validation', `v${releaseVersion}界面布局审计.json`), JSON.stringify(output, null, 2))
+const md = [`# Study Planner v${releaseVersion} 界面布局审计`, '', `- 通过：${passed} / ${checks.length}`, `- 生成时间：${output.generatedAt}`, '', ...checks.map(item => `- ${item.pass ? '✅' : '❌'} **${item.name}**：${item.evidence}`)]
+fs.writeFileSync(path.join(root, 'validation', `v${releaseVersion}界面布局审计.md`), md.join('\n') + '\n')
 console.log(md.join('\n'))
 process.exit(passed === checks.length ? 0 : 1)

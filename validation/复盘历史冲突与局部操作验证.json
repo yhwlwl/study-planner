@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-07T17:48:36.902Z",
+  "generatedAt": "2026-08-09T12:28:47.809Z",
   "pass": true,
   "previewIssues": 2,
   "issueTitles": [
@@ -7,22 +7,31 @@
     "化学预习课节数"
   ],
   "proposals": 1,
-  "legalDate": "2026-08-10",
+  "legalDate": "2026-08-12",
   "partialDecisionProposals": 1,
   "acceptedExceptionKeys": [
     "capacity"
   ],
-  "recalculatedDate": "2026-08-08",
+  "recalculatedDate": "2026-08-10",
   "selectedCandidatePartialDecision": true,
   "minimumScopedAssignments": [
     "cap-task"
   ],
-  "recalculatedSelectedDate": "2026-08-08",
+  "recalculatedSelectedDate": "2026-08-10",
   "completedHistoryExcluded": true,
   "nonWorseningOverloadAllowed": true,
   "incomingTaskStillValidated": true,
   "localDeleteRequestedChangeOnly": true,
   "localDeleteMovedOtherTasks": 0,
   "localDeletePreExistingIssues": 3,
-  "localDeleteNewOrWorsened": 0
+  "localDeleteNewOrWorsened": 0,
+  "pastUnfinishedReviewCarryoverAllowed": true,
+  "pastUnfinishedBulkMoveAllowed": true,
+  "pastUnfinishedCanBecomeUnscheduled": true,
+  "movingIntoPastBlocked": true,
+  "completedPastStillFrozen": true,
+  "lockedPastStillFrozen": true,
+  "activeTimerPastStillFrozen": true,
+  "immutableDailyBaseline": true,
+  "historicalTimeLedgerByEntryDate": true
 }

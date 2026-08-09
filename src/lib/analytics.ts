@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 
-const APP_VERSION = '0.8.15'
+const APP_VERSION = '0.9.0'
 const SESSION_KEY = 'study-planner:visit-session-id'
 const STATUS_KEY = 'study-planner:visit-log-status'
 const OUTBOX_KEY = 'study-planner:visit-log-outbox-v1'

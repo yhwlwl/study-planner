@@ -16,8 +16,9 @@ const source = {
   single: read('src/components/SingleTaskDialog.tsx'), group: read('src/components/TaskGroupDialog.tsx'), versions: read('src/lib/versions.ts'), conflicts: read('src/lib/conflicts.ts'),
 }
 const pkg = JSON.parse(read('package.json'))
-add('版本与迁移', '发布版本为 0.8.15', pkg.version === '0.8.15', `package.json: ${pkg.version}`)
-add('版本与迁移', '状态架构版本已提升（当前为 9）', /SCHEMA_VERSION\s*=\s*(?:8|9|[1-9]\d+)/.test(source.types), 'src/types.ts')
+const releaseVersion = `v${pkg.version}`
+add('版本与迁移', '发布版本为 0.9.0', pkg.version === '0.9.0', `package.json: ${pkg.version}`)
+add('版本与迁移', '状态架构版本已提升（当前为 10）', /SCHEMA_VERSION\s*=\s*10/.test(source.types), 'src/types.ts')
 add('版本与迁移', '存在确定性 v0.7→v0.8 迁移', /migrat|迁移/.test(source.seed) && /coreTargetDate/.test(source.seed) && /calendarConstraints/.test(source.seed), 'src/lib/seed.ts')
 add('版本与迁移', '旧全局目标日期不再出现在当前界面与当前调度计算', !/settings\.coreTargetDate|settings\.chemistryTargetDate/.test(source.app + source.stats + source.planner), '仅 seed/types 保留迁移兼容字段')
 add('领域模型', 'Goal 与三种完成条件', /interface Goal\b/.test(source.types) && /'all'\s*\|\s*'percentage'\s*\|\s*'count'/.test(source.types), 'src/types.ts')
@@ -25,7 +26,7 @@ add('领域模型', '多目标关联与直接任务关联', /linkedTaskGroupIds/
 add('领域模型', '没有独立 Milestone 实体', !/interface\s+Milestone|type\s+Milestone|class\s+Milestone/.test(Object.values(source).join('\n')), 'src 全量扫描')
 add('领域模型', '统一 CalendarConstraint 支持范围', /interface CalendarConstraint/.test(source.types) && /startDate/.test(source.constraints) && /endDate/.test(source.constraints), 'types + CalendarConstraintManager')
 add('领域模型', '变化事件、方案、计划版本齐全', /interface PlanChangeEvent/.test(source.types) && /interface SchedulingProposal/.test(source.types) && /interface PlanVersion/.test(source.types), 'src/types.ts')
-add('创建系统', '单项任务与任务组入口分离', /添加单项任务/.test(source.app) && /创建任务组/.test(source.app) && exists('src/components/SingleTaskDialog.tsx'), 'App + dialogs')
+add('创建系统', '单项任务与任务组入口分离', /添加单项任务/.test(source.app) && /创建并安排/.test(source.app) && /批量录入/.test(source.app) && exists('src/components/SingleTaskDialog.tsx'), 'App + dialogs')
 add('创建系统', '单项任务支持归组、独立、系统/偏好/锁定日期', /standalone/.test(source.single) && /system/.test(source.single) && /prefer-date/.test(source.single) && /lock-date/.test(source.single), 'SingleTaskDialog')
 add('创建系统', '任务创建先准备再预览', /prepareSingleAssignment/.test(source.context) && /prepareTaskGroup/.test(source.context) && /openPrepared/.test(source.app), 'AppContext + App')
 add('创建系统', '任务组增减保护已完成/有记录/锁定/计时任务', /prepareTaskGroupEdit/.test(source.context) && /protectedIds/.test(source.context) && /actualMinutes === 0/.test(source.context), 'AppContext')
@@ -43,7 +44,7 @@ add('可解释方案', '所有摘要计数可展开到具体项目', /<details/.
 add('可解释方案', '任务、日期、负载、目标均有前后对比', /before-after/.test(source.proposal) && /日期负载(?:与任务)?前后/.test(source.proposal) && /目标影响/.test(source.proposal), 'ProposalDialog')
 add('可解释方案', '解释为什么不选其他日期', /为什么没有安排到其他日期/.test(source.proposal) && /rejectedAlternatives/.test(source.planner), 'proposal + planner')
 add('可解释方案', '更多替代方案按结果签名去重', /distinctSignature/.test(source.planner) && /signatures\.has/.test(source.planner) && /(?:真正|实质)不同/.test(source.proposal), 'planner + UI')
-add('可解释方案', '推荐与备选预先计算但默认只展示推荐', /\[policy\.primaryPreference, firstAlternative\]/.test(source.app) && /initialVisibleCount/.test(source.proposal) && /比较另外/.test(source.proposal), 'App orchestration + ProposalDialog')
+add('可解释方案', '默认只计算推荐方案，其他方案按需生成', /const initialPreferences = \[policy\.primaryPreference\]/.test(source.app) && /initialVisibleCount/.test(source.proposal) && /生成更多不同方案/.test(source.proposal), 'App orchestration + ProposalDialog')
 add('可解释方案', '系统将执行的全部变化都经过预览', /previewPreparedChange/.test(source.app) && /计划调整预览/.test(source.proposal) && /应用预览中的改动/.test(source.proposal), 'App + ProposalDialog')
 add('可解释方案', '负载增减使用红绿方向提示', /load-delta-up/.test(source.proposal) && /load-delta-down/.test(source.proposal) && /\.load-delta-up/.test(source.styles) && /\.load-delta-down/.test(source.styles), 'ProposalDialog + styles')
 add('事件编排', '复盘已选日期只校验不二次重排', /requestedCarryDates/.test(source.context) && /validate-and-commit/.test(source.adjustmentPolicy) && !/比较完整调整方案/.test(source.review), 'Review + policy')
@@ -95,18 +96,22 @@ const scale = spawnSync(process.execPath, ['scripts/performance-v08.mjs'], { cwd
 add('自动验证', '20目标/50组/500任务/30约束/10版本规模验证', scale.status === 0, scale.status === 0 ? '通过，详见 validation/500任务规模验证.json' : (scale.stdout + scale.stderr).trim())
 const adjustmentRuntime = spawnSync(process.execPath, ['scripts/runtime-adjustment-v0810.mjs'], { cwd: root, encoding: 'utf8' })
 add('自动验证', '复盘、历史冲突与局部操作作用域运行验证', adjustmentRuntime.status === 0, adjustmentRuntime.status === 0 ? '通过；既有冲突不阻止局部删除，且其他任务移动为 0' : (adjustmentRuntime.stdout + adjustmentRuntime.stderr).trim())
+const intakeRuntime = spawnSync(process.execPath, ['scripts/runtime-intake-v09.mjs'], { cwd: root, encoding: 'utf8' })
+add('自动验证', '录入工作区不触发排期且千项写入保持流畅', intakeRuntime.status === 0, intakeRuntime.status === 0 ? '通过；正式计划零改动，详见 validation/录入工作区运行时验证.json' : (intakeRuntime.stdout + intakeRuntime.stderr).trim())
+const plannerPerformance = spawnSync(process.execPath, ['scripts/runtime-planner-performance.mjs'], { cwd: root, encoding: 'utf8', timeout: 300000 })
+add('自动验证', '100/500/1000 项真实调度与增量场景性能基准', plannerPerformance.status === 0, plannerPerformance.status === 0 ? '通过；记录 P50/P95、基准设备与既有任务移动范围，详见 validation/真实调度性能基准.json' : (plannerPerformance.stdout + plannerPerformance.stderr).trim())
 const scenarios = spawnSync(process.execPath, ['scripts/scenario-v0810.mjs'], { cwd: root, encoding: 'utf8' })
-add('自动验证', '核心场景与三大系统架构验证', scenarios.status === 0, scenarios.status === 0 ? '全部通过，详见 validation/v0.8.15场景架构验证.md' : (scenarios.stdout + scenarios.stderr).trim())
+add('自动验证', '核心场景与三大系统架构验证', scenarios.status === 0, scenarios.status === 0 ? `全部通过，详见 validation/${releaseVersion}场景架构验证.md` : (scenarios.stdout + scenarios.stderr).trim())
 const uiAudit = spawnSync(process.execPath, ['scripts/ui-audit-v0810.mjs'], { cwd: root, encoding: 'utf8' })
-add('自动验证', '桌面与手机界面布局审计', uiAudit.status === 0, uiAudit.status === 0 ? '全部通过，详见 validation/v0.8.15界面布局审计.md' : (uiAudit.stdout + uiAudit.stderr).trim())
+add('自动验证', '桌面与手机界面布局审计', uiAudit.status === 0, uiAudit.status === 0 ? `全部通过，详见 validation/${releaseVersion}界面布局审计.md` : (uiAudit.stdout + uiAudit.stderr).trim())
 const efficiency = spawnSync(process.execPath, ['scripts/user-efficiency-v0810.mjs'], { cwd: root, encoding: 'utf8' })
-add('自动验证', '全流程用户效率与统计口径验证', efficiency.status === 0, efficiency.status === 0 ? '全部通过，详见 validation/v0.8.15用户效率验证.md' : (efficiency.stdout + efficiency.stderr).trim())
+add('自动验证', '全流程用户效率与统计口径验证', efficiency.status === 0, efficiency.status === 0 ? `全部通过，详见 validation/${releaseVersion}用户效率验证.md` : (efficiency.stdout + efficiency.stderr).trim())
 
 const passed = checks.filter(item => item.pass).length
-const result = { generatedAt: new Date().toISOString(), passed, total: checks.length, failed: checks.filter(item => !item.pass), checks }
+const result = { version: pkg.version, generatedAt: new Date().toISOString(), passed, total: checks.length, failed: checks.filter(item => !item.pass), checks }
 fs.mkdirSync(path.join(root, 'validation'), { recursive: true })
-fs.writeFileSync(path.join(root, 'validation', 'v0.8自动验证结果.json'), JSON.stringify(result, null, 2))
-const lines = ['# v0.8 自动验证结果', '', `- 通过：${passed} / ${checks.length}`, `- 生成时间：${result.generatedAt}`, '', ...checks.map(item => `- ${item.pass ? '✅' : '❌'} **${item.group}｜${item.name}**：${item.evidence}`)]
-fs.writeFileSync(path.join(root, 'validation', 'v0.8自动验证结果.md'), lines.join('\n') + '\n')
+fs.writeFileSync(path.join(root, 'validation', `${releaseVersion}自动验证结果.json`), JSON.stringify(result, null, 2))
+const lines = [`# ${releaseVersion} 自动验证结果`, '', `- 通过：${passed} / ${checks.length}`, `- 生成时间：${result.generatedAt}`, '', ...checks.map(item => `- ${item.pass ? '✅' : '❌'} **${item.group}｜${item.name}**：${item.evidence}`)]
+fs.writeFileSync(path.join(root, 'validation', `${releaseVersion}自动验证结果.md`), lines.join('\n') + '\n')
 console.log(lines.join('\n'))
 if (passed !== checks.length) process.exit(1)

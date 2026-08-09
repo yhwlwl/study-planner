@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type {
   AppSettings, AppState, Assignment, CalendarConstraint, CreateResult, DayConfig, DurationSuggestion, Goal, GoalDraft,
-  NewTaskDraft, PlanChangeEvent, PlanVersion, ReplanHistoryEntry,
+  IntakeBatch, IntakeBatchSource, IntakeTaskGroupDraft, NewTaskDraft, PlanChangeEvent, PlanVersion, ReplanHistoryEntry,
   ReviewRecord, SchedulingProposal, SequenceRenumberSuggestion, TaskGroup, TaskGroupDraft, ConstraintException,
 } from './types'
 import {
@@ -15,6 +15,9 @@ import { goalProgress, updateGoalAndGroupLifecycle } from './lib/goals'
 import { cloneActiveState, hydratePortableState } from './lib/state'
 import { createPlanVersion, createVersionFromProposal, previewVersionDiff, restoreSnapshotState, restoreVersionState, type VersionDiffSummary } from './lib/versions'
 import { dateRange, getCapacity, timestampForDate, todayISO } from './lib/date'
+import { appendIntakeDraft, createIntakeBatchRecord } from './lib/intake-batches'
+import { splitSessionCount } from './lib/intake'
+import { dependencyCycleLabels } from './lib/dependencies'
 
 type Recipe = (draft: AppState) => void
 
@@ -39,6 +42,9 @@ interface AppContextValue {
   finishAssignment: (id: string, actualMinutes?: number, source?: 'timer' | 'manual' | 'finish') => void
   reopenAssignment: (id: string) => void
   addTime: (id: string, minutes: number, source?: 'timer' | 'manual' | 'finish') => void
+  updateTimeEntry: (assignmentId: string, entryId: string, patch: { minutes?: number; date?: string }) => void
+  deleteTimeEntry: (assignmentId: string, entryId: string) => void
+  captureDailyPlanBaseline: (date: string) => void
   addTaskGroup: (group: TaskGroup) => void
   editTaskGroup: (group: TaskGroup) => void
   deleteTaskGroup: (id: string) => void
@@ -48,6 +54,14 @@ interface AppContextValue {
   prepareAssignmentGroupChange: (id: string, groupId: string, options: { adoptDefaultDuration: boolean; numberingChoice: 'preserve' | 'number-all' }) => PrepareStateResult
   prepareSingleAssignment: (draft: NewTaskDraft) => CreateResult
   prepareTaskGroup: (draft: TaskGroupDraft) => CreateResult
+  createIntakeBatch: (name?: string) => string
+  duplicateIntakeBatch: (batchId: string) => string
+  updateIntakeBatch: (id: string, patch: Partial<Pick<IntakeBatch, 'name' | 'status' | 'lastEditedItemId'>>) => void
+  addIntakeTaskGroup: (batchId: string, draft: TaskGroupDraft, source?: Exclude<IntakeBatchSource, 'mixed'>) => string
+  updateIntakeTaskGroup: (batchId: string, itemId: string, draft: TaskGroupDraft) => void
+  removeIntakeTaskGroup: (batchId: string, itemId: string) => void
+  deleteIntakeBatch: (batchId: string) => void
+  prepareIntakeBatch: (batchId: string, itemIds?: string[]) => CreateResult
   prepareTaskGroupEdit: (group: TaskGroup, numberingChoice?: 'preserve' | 'number-all') => PrepareStateResult
   prepareGoalChange: (draft: GoalDraft, goalId?: string) => PrepareStateResult
   prepareGoalDelete: (goalId: string) => PrepareStateResult
@@ -121,6 +135,24 @@ function putReviewRecord(state: AppState, date: string) {
 
 function automaticTitle(group: TaskGroup, index: number) {
   return group.quantity > 1 ? `${group.title} ${String(index).padStart(2, '0')}` : group.title
+}
+
+function taskGroupFromDraft(draft: TaskGroupDraft, state: AppState, now: string): TaskGroup {
+  const recurring = Boolean(draft.recurring)
+  const recurrenceStart = recurring ? (draft.recurrenceStart ?? state.settings.startDate) : undefined
+  const recurrenceEnd = recurring ? (draft.recurrenceEnd ?? state.settings.endDate) : undefined
+  return {
+    id: uid('group'), subject: draft.subject, title: draft.title.trim() || '未命名任务组', priority: draft.priority,
+    quantity: splitSessionCount(draft), sourceQuantity: Math.max(1, Math.round(draft.quantity)), unitMinutes: Math.max(1, Math.round(draft.unitMinutes)),
+    targetDate: state.settings.endDate, dueDate: state.settings.endDate, dailyMax: draft.dailyMax,
+    recurring, recurrenceStart, recurrenceEnd,
+    recurrenceWeekdays: recurring ? Array.from(new Set(draft.recurrenceWeekdays ?? [])).sort() : undefined,
+    countInStats: draft.countInStats, activityType: recurring ? 'recurring' : draft.activityType,
+    highIntensity: draft.highIntensity, allowSplit: !recurring && Boolean(draft.allowSplit),
+    splitSessionMinutes: !recurring && draft.allowSplit ? draft.splitSessionMinutes : undefined,
+    prerequisiteGroupIds: !recurring ? Array.from(new Set(draft.prerequisiteGroupIds ?? [])) : [],
+    notes: draft.notes, status: 'active', createdAt: now, updatedAt: now,
+  }
 }
 
 function classifyGoalChange(before: AppState, after: AppState, existing: Goal | undefined, nextGoal: Goal): PlanChangeEvent['type'] {
@@ -310,6 +342,62 @@ export function AppProvider({ children }: { children: ReactNode }) {
     item.timeEntries.push({ id: uid('time'), minutes, createdAt: timestampForDate(todayISO()), source })
     item.updatedAt = nowISO()
   }), [commit])
+
+  const updateTimeEntry = useCallback((assignmentId: string, entryId: string, patch: { minutes?: number; date?: string }) => commit(draft => {
+    const assignment = draft.assignments.find(item => item.id === assignmentId)
+    const entry = assignment?.timeEntries.find(item => item.id === entryId)
+    if (!assignment || !entry) return
+    const previousMinutes = Math.max(0, Number(entry.minutes) || 0)
+    const previousDate = entry.createdAt.slice(0, 10)
+    if (patch.minutes !== undefined) {
+      const nextMinutes = Math.max(0, Math.round(patch.minutes))
+      entry.minutes = nextMinutes
+      assignment.actualMinutes = Math.max(0, assignment.actualMinutes + nextMinutes - previousMinutes)
+    }
+    if (patch.date) {
+      entry.originalCreatedAt = entry.originalCreatedAt ?? entry.createdAt
+      entry.createdAt = timestampForDate(patch.date)
+    }
+    const changedAt = nowISO()
+    entry.updatedAt = changedAt
+    assignment.updatedAt = changedAt
+    const nextDate = entry.createdAt.slice(0, 10)
+    const auditEvent: PlanChangeEvent = {
+      id: uid('event'), type: 'time-entry-change', action: 'repair', title: `修改“${assignment.title}”的时间记录`,
+      description: `时间流水由 ${previousDate} 的 ${previousMinutes} 分钟修改为 ${nextDate} 的 ${entry.minutes} 分钟。`,
+      affectedGoalIds: [], affectedGroupIds: [assignment.groupId], affectedAssignmentIds: [assignment.id],
+      affectedDates: Array.from(new Set([previousDate, nextDate])), createdAt: changedAt,
+      metadata: { operation: 'edit', entryId, previousMinutes, nextMinutes: entry.minutes, previousDate, nextDate },
+    }
+    draft.changeEvents = [...draft.changeEvents, auditEvent].slice(-100)
+  }), [commit])
+
+  const deleteTimeEntry = useCallback((assignmentId: string, entryId: string) => commit(draft => {
+    const assignment = draft.assignments.find(item => item.id === assignmentId)
+    const entry = assignment?.timeEntries.find(item => item.id === entryId)
+    if (!assignment || !entry) return
+    const deletedAt = nowISO()
+    const entryDate = entry.createdAt.slice(0, 10)
+    assignment.timeEntries = assignment.timeEntries.filter(item => item.id !== entryId)
+    assignment.actualMinutes = Math.max(0, assignment.actualMinutes - Math.max(0, Number(entry.minutes) || 0))
+    assignment.updatedAt = deletedAt
+    const auditEvent: PlanChangeEvent = {
+      id: uid('event'), type: 'time-entry-change', action: 'repair', title: `删除“${assignment.title}”的时间记录`,
+      description: `删除 ${entryDate} 的 ${entry.minutes} 分钟时间流水；任务累计实际同步扣减。`,
+      affectedGoalIds: [], affectedGroupIds: [assignment.groupId], affectedAssignmentIds: [assignment.id],
+      affectedDates: [entryDate], createdAt: deletedAt,
+      metadata: { operation: 'delete', entryId, deletedEntry: { ...entry } },
+    }
+    draft.changeEvents = [...draft.changeEvents, auditEvent].slice(-100)
+  }), [commit])
+
+  const captureDailyPlanBaseline = useCallback((date: string) => commit(draft => {
+    if (draft.dailyPlanBaselines.some(item => item.date === date)) return
+    const assignments = draft.assignments
+      .filter(item => item.scheduledDate === date)
+      .map(item => ({ assignmentId: item.id, groupId: item.groupId, title: item.title, estimatedMinutes: item.estimatedMinutes }))
+    draft.dailyPlanBaselines = [...draft.dailyPlanBaselines, { id: uid('baseline'), date, capturedAt: nowISO(), assignments }].slice(-400)
+  }, { history: false, markGuestModified: false }), [commit])
 
   const finishAssignment = useCallback((id: string, actualMinutes?: number, source: 'timer' | 'manual' | 'finish' = 'finish') => commit(draft => {
     const item = draft.assignments.find(candidate => candidate.id === id)
@@ -600,14 +688,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const before = stateRef.current
     const next = cloneActiveState(before)
     const now = nowISO()
-    const group: TaskGroup = {
-      id: uid('group'), subject: draft.subject, title: draft.title.trim() || '未命名任务组', priority: draft.priority,
-      quantity: Math.max(1, Math.round(draft.quantity)), unitMinutes: Math.max(1, Math.round(draft.unitMinutes)),
-      targetDate: next.settings.endDate, dueDate: next.settings.endDate, dailyMax: draft.dailyMax,
-      countInStats: draft.countInStats, activityType: draft.activityType, highIntensity: draft.highIntensity,
-      notes: draft.notes, status: 'active', createdAt: now, updatedAt: now,
-    }
-    const assignments = createAssignmentsForGroup(group).map(item => ({ ...item, createdAt: now, updatedAt: now, createdBy: 'user' as const }))
+    const group = taskGroupFromDraft(draft, next, now)
+    const assignments = createAssignmentsForGroup(group).map(item => ({
+      ...item, createdAt: now, updatedAt: now, createdBy: 'user' as const,
+      scheduledDate: draft.fixedDate ?? draft.preferredDate ?? item.scheduledDate,
+      locked: Boolean(draft.fixedDate) || item.locked,
+      intentStrength: draft.fixedDate ? 'locked' as const : draft.preferredDate ? 'manual' as const : item.intentStrength,
+      scheduleSource: draft.fixedDate || draft.preferredDate ? 'manual' as const : item.scheduleSource,
+    }))
     next.taskGroups.push(group)
     next.assignments.push(...assignments)
     next.goals = next.goals.map(goal => {
@@ -628,6 +716,207 @@ export function AppProvider({ children }: { children: ReactNode }) {
     next.changeEvents = [...next.changeEvents, event].slice(-100)
     next.updatedAt = now
     return { state: updateGoalAndGroupLifecycle(next), event, createdAssignmentIds: assignments.map(item => item.id), createdGroupIds: [group.id] }
+  }, [])
+
+  const createIntakeBatch = useCallback((name?: string) => {
+    const id = uid('intake')
+    const now = nowISO()
+    commit(draft => {
+      draft.intakeBatches.push(createIntakeBatchRecord(name, now, id))
+    }, { history: false })
+    return id
+  }, [commit])
+
+  const duplicateIntakeBatch = useCallback((batchId: string) => {
+    const id = uid('intake')
+    const now = nowISO()
+    commit(draft => {
+      const source = draft.intakeBatches.find(item => item.id === batchId)
+      if (!source) return
+      const taskGroups = source.taskGroups.map(item => ({
+        ...structuredClone(item),
+        id: uid('intake-item'),
+        createdAt: now,
+        updatedAt: now,
+        appliedAt: undefined,
+        appliedGroupId: undefined,
+      }))
+      draft.intakeBatches.push({
+        id,
+        name: `${source.name}（副本）`,
+        status: 'editing',
+        source: source.source,
+        taskGroups,
+        createdAt: now,
+        updatedAt: now,
+        lastEditedItemId: taskGroups.at(-1)?.id,
+      })
+    }, { history: false })
+    return id
+  }, [commit])
+
+  const updateIntakeBatch = useCallback((id: string, patch: Partial<Pick<IntakeBatch, 'name' | 'status' | 'lastEditedItemId'>>) => commit(draft => {
+    const batch = draft.intakeBatches.find(item => item.id === id)
+    if (!batch) return
+    if (patch.name !== undefined) batch.name = patch.name.trim() || batch.name
+    if (patch.status !== undefined) {
+      batch.status = patch.status
+      batch.archivedAt = patch.status === 'archived' ? nowISO() : undefined
+    }
+    if (patch.lastEditedItemId !== undefined) batch.lastEditedItemId = patch.lastEditedItemId
+    batch.updatedAt = nowISO()
+  }, { history: false }), [commit])
+
+  const addIntakeTaskGroup = useCallback((batchId: string, draft: TaskGroupDraft, source: Exclude<IntakeBatchSource, 'mixed'> = 'manual') => {
+    const id = uid('intake-item')
+    const now = nowISO()
+    commit(stateDraft => {
+      const batch = stateDraft.intakeBatches.find(item => item.id === batchId)
+      if (!batch) return
+      appendIntakeDraft(batch, draft, source, now, id)
+    }, { history: false })
+    return id
+  }, [commit])
+
+  const updateIntakeTaskGroup = useCallback((batchId: string, itemId: string, draft: TaskGroupDraft) => commit(stateDraft => {
+    const batch = stateDraft.intakeBatches.find(item => item.id === batchId)
+    const item = batch?.taskGroups.find(candidate => candidate.id === itemId)
+    if (!batch || !item || item.appliedAt) return
+    Object.assign(item, structuredClone(draft), {
+      id: item.id,
+      source: item.source,
+      createdAt: item.createdAt,
+      updatedAt: nowISO(),
+      title: draft.title.trim(),
+      quantity: Math.max(1, Math.round(draft.quantity)),
+      unitMinutes: Math.max(1, Math.round(draft.unitMinutes)),
+      goalIds: Array.from(new Set(draft.goalIds)),
+      recurrenceWeekdays: draft.recurrenceWeekdays ? Array.from(new Set(draft.recurrenceWeekdays)).sort() : undefined,
+      prerequisiteGroupIds: draft.prerequisiteGroupIds ? Array.from(new Set(draft.prerequisiteGroupIds)) : undefined,
+    })
+    batch.status = 'editing'
+    batch.lastEditedItemId = itemId
+    batch.updatedAt = nowISO()
+  }, { history: false }), [commit])
+
+  const removeIntakeTaskGroup = useCallback((batchId: string, itemId: string) => commit(draft => {
+    const batch = draft.intakeBatches.find(item => item.id === batchId)
+    if (!batch) return
+    batch.taskGroups = batch.taskGroups.filter(item => item.id !== itemId || Boolean(item.appliedAt))
+    if (batch.lastEditedItemId === itemId) batch.lastEditedItemId = undefined
+    batch.updatedAt = nowISO()
+  }, { history: false }), [commit])
+
+  const deleteIntakeBatch = useCallback((batchId: string) => commit(draft => {
+    draft.intakeBatches = draft.intakeBatches.filter(item => item.id !== batchId)
+  }), [commit])
+
+  const prepareIntakeBatch = useCallback((batchId: string, itemIds?: string[]): CreateResult => {
+    const before = stateRef.current
+    const next = cloneActiveState(before)
+    const batch = next.intakeBatches.find(item => item.id === batchId)
+    if (!batch) throw new Error('录入批次不存在，无法生成计划。')
+    const selectedIds = itemIds?.length ? new Set(itemIds) : undefined
+    const selected = batch.taskGroups.filter(item => !item.appliedAt && (!selectedIds || selectedIds.has(item.id)))
+    if (!selected.length) throw new Error('这个录入批次中没有可安排的任务。')
+
+    const now = nowISO()
+    const createdAssignmentIds: string[] = []
+    const createdGroupIds: string[] = []
+    const affectedGoalIds = new Set<string>()
+    const affectedDates = new Set<string>()
+    const preparedGroups = selected.map(item => ({ item, group: taskGroupFromDraft(item, next, now) }))
+    const titleLookup = new Map<string, string>()
+    for (const group of [...next.taskGroups, ...preparedGroups.map(entry => entry.group)]) if (!titleLookup.has(group.title.trim().toLowerCase())) titleLookup.set(group.title.trim().toLowerCase(), group.id)
+    for (const entry of preparedGroups) {
+      const requestedTitles = (entry.item.prerequisiteGroupTitles ?? []).map(title => title.trim()).filter(Boolean)
+      const unknownTitles = requestedTitles.filter(title => !titleLookup.has(title.toLowerCase()))
+      if (unknownTitles.length) throw new Error(`任务组“${entry.group.title}”引用了不存在的前置任务组：${unknownTitles.join('、')}。请先修正名称或先录入对应任务组。`)
+      const namedDependencies = requestedTitles.map(title => titleLookup.get(title.toLowerCase())).filter((id): id is string => Boolean(id))
+      entry.group.prerequisiteGroupIds = Array.from(new Set([...(entry.group.prerequisiteGroupIds ?? []), ...namedDependencies])).filter(id => id !== entry.group.id)
+    }
+    const dependencyCycles = dependencyCycleLabels([...next.taskGroups, ...preparedGroups.map(entry => entry.group)])
+    if (dependencyCycles.length) throw new Error(`检测到循环依赖：${dependencyCycles[0]}。请先修改前置任务组。`)
+    for (const { item, group } of preparedGroups) {
+      const assignments = createAssignmentsForGroup(group).map(assignment => ({
+        ...assignment,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: item.source === 'manual' ? 'user' as const : 'import' as const,
+        scheduledDate: item.fixedDate ?? item.preferredDate ?? assignment.scheduledDate,
+        locked: Boolean(item.fixedDate) || assignment.locked,
+        intentStrength: item.fixedDate ? 'locked' as const : item.preferredDate ? 'manual' as const : assignment.intentStrength,
+        scheduleSource: group.recurring ? 'recurring' as const : item.fixedDate || item.preferredDate ? 'import' as const : item.source === 'manual' ? 'system' as const : 'import' as const,
+      }))
+      next.taskGroups.push(group)
+      next.assignments.push(...assignments)
+      createdGroupIds.push(group.id)
+      createdAssignmentIds.push(...assignments.map(assignment => assignment.id))
+      assignments.forEach(assignment => { if (assignment.scheduledDate) affectedDates.add(assignment.scheduledDate) })
+      item.goalIds.forEach(goalId => affectedGoalIds.add(goalId))
+      next.goals = next.goals.map(goal => {
+        if (!item.goalIds.includes(goal.id)) return goal
+        const hasCondition = goal.completionConditions.some(condition => condition.groupId === group.id)
+        return {
+          ...goal,
+          linkedTaskGroupIds: Array.from(new Set([...goal.linkedTaskGroupIds, group.id])),
+          completionConditions: hasCondition ? goal.completionConditions : [...goal.completionConditions, { id: uid('condition'), groupId: group.id, mode: 'all' as const }],
+          updatedAt: now,
+        }
+      })
+      const declaredLatest = item.latestDate ?? item.desiredDate
+      if (declaredLatest) {
+        const desiredDate = item.desiredDate && item.desiredDate <= declaredLatest ? item.desiredDate : undefined
+        const goalTitle = item.goalTitle?.trim() || `${item.title}完成目标`
+        const existingGoal = next.goals.find(goal => goal.status !== 'archived' && goal.title === goalTitle && goal.latestDate === declaredLatest)
+        if (existingGoal) {
+          existingGoal.linkedTaskGroupIds = Array.from(new Set([...existingGoal.linkedTaskGroupIds, group.id]))
+          if (!existingGoal.completionConditions.some(condition => condition.groupId === group.id)) {
+            existingGoal.completionConditions.push({ id: uid('condition'), groupId: group.id, mode: 'all' })
+          }
+          existingGoal.updatedAt = now
+          affectedGoalIds.add(existingGoal.id)
+        } else {
+          const goalId = uid('goal')
+          next.goals.push({
+            id: goalId,
+            title: goalTitle,
+            description: `由录入批次“${batch.name}”创建。`,
+            priority: item.priority,
+            desiredDate,
+            latestDate: declaredLatest,
+            status: 'active',
+            completionConditions: [{ id: uid('condition'), groupId: group.id, mode: 'all' }],
+            linkedTaskGroupIds: [group.id],
+            linkedAssignmentIds: [],
+            createdAt: now,
+            updatedAt: now,
+          })
+          affectedGoalIds.add(goalId)
+        }
+        affectedDates.add(declaredLatest)
+        if (desiredDate) affectedDates.add(desiredDate)
+      }
+      item.appliedAt = now
+      item.appliedGroupId = group.id
+      item.updatedAt = now
+    }
+    batch.status = batch.taskGroups.every(item => Boolean(item.appliedAt)) ? 'applied' : 'editing'
+    batch.updatedAt = now
+    const event = planEvent({
+      type: 'new-task-insertion',
+      action: 'insert',
+      title: `安排录入批次：${batch.name}`,
+      description: `本次统一加入 ${createdGroupIds.length} 个任务组、${createdAssignmentIds.length} 项任务；确认方案前不会改变正式计划。`,
+      affectedGoalIds: [...affectedGoalIds],
+      affectedGroupIds: createdGroupIds,
+      affectedAssignmentIds: createdAssignmentIds,
+      affectedDates: [...affectedDates].sort(),
+      metadata: { intakeBatchId: batch.id, intakeItemIds: selected.map(item => item.id), preferredPreferences: ['preserve', 'balanced'] },
+    })
+    next.changeEvents = [...next.changeEvents, event].slice(-100)
+    next.updatedAt = now
+    return { state: updateGoalAndGroupLifecycle(next), event, createdAssignmentIds, createdGroupIds }
   }, [])
 
   const prepareTaskGroupEdit = useCallback((group: TaskGroup, numberingChoice: 'preserve' | 'number-all' = 'preserve'): PrepareStateResult => {
@@ -1081,17 +1370,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AppContextValue>(() => ({
     state, namespace, ready, loadedFromStorage, canUndo: history.current.length > 0,
     commit, replaceState, loadDataSpace, setDataSpace, clearDataSpace, undo,
-    updateSettings, updateDayConfig, updateAssignment, moveAssignments, finishAssignment, reopenAssignment, addTime,
+    updateSettings, updateDayConfig, updateAssignment, moveAssignments, finishAssignment, reopenAssignment, addTime, updateTimeEntry, deleteTimeEntry, captureDailyPlanBaseline,
     addTaskGroup, editTaskGroup, deleteTaskGroup, removeAssignment, prepareTaskGroupDelete, prepareAssignmentDelete, prepareAssignmentGroupChange,
-    prepareSingleAssignment, prepareTaskGroup, prepareTaskGroupEdit, prepareGoalChange, prepareGoalDelete, updateGoalMetadata, prepareCalendarConstraintChange, updateCalendarConstraintMetadata, prepareDurationChange, prepareReviewCompletion,
+    prepareSingleAssignment, prepareTaskGroup, createIntakeBatch, duplicateIntakeBatch, updateIntakeBatch, addIntakeTaskGroup, updateIntakeTaskGroup, removeIntakeTaskGroup, deleteIntakeBatch, prepareIntakeBatch,
+    prepareTaskGroupEdit, prepareGoalChange, prepareGoalDelete, updateGoalMetadata, prepareCalendarConstraintChange, updateCalendarConstraintMetadata, prepareDurationChange, prepareReviewCompletion,
     generateProposals, applySchedulingProposal, applyPreparedWithoutScheduling,
     restoreReplanHistory, recordReview, completeReview, previewPlanVersion, restorePlanVersion,
     startTimer, pauseTimer, stopTimer, resetAll, sequenceRenumberSuggestion,
     dismissSequenceRenumberSuggestion, applySequenceRenumber,
   }), [
     state, namespace, ready, loadedFromStorage, commit, replaceState, loadDataSpace, setDataSpace, clearDataSpace, undo,
-    updateSettings, updateDayConfig, updateAssignment, moveAssignments, finishAssignment, reopenAssignment, addTime,
-    addTaskGroup, editTaskGroup, deleteTaskGroup, removeAssignment, prepareTaskGroupDelete, prepareAssignmentDelete, prepareAssignmentGroupChange, prepareSingleAssignment, prepareTaskGroup, prepareTaskGroupEdit, prepareGoalChange,
+    updateSettings, updateDayConfig, updateAssignment, moveAssignments, finishAssignment, reopenAssignment, addTime, updateTimeEntry, deleteTimeEntry, captureDailyPlanBaseline,
+    addTaskGroup, editTaskGroup, deleteTaskGroup, removeAssignment, prepareTaskGroupDelete, prepareAssignmentDelete, prepareAssignmentGroupChange, prepareSingleAssignment, prepareTaskGroup,
+    createIntakeBatch, duplicateIntakeBatch, updateIntakeBatch, addIntakeTaskGroup, updateIntakeTaskGroup, removeIntakeTaskGroup, deleteIntakeBatch, prepareIntakeBatch, prepareTaskGroupEdit, prepareGoalChange,
     prepareGoalDelete, updateGoalMetadata, prepareCalendarConstraintChange, updateCalendarConstraintMetadata, prepareDurationChange, prepareReviewCompletion, generateProposals, applySchedulingProposal,
     applyPreparedWithoutScheduling, restoreReplanHistory, recordReview, completeReview,
     previewPlanVersion, restorePlanVersion, startTimer, pauseTimer, stopTimer, resetAll,

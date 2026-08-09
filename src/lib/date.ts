@@ -1,7 +1,18 @@
 import { addDays, eachDayOfInterval, format, isAfter, isBefore, parseISO } from 'date-fns'
 import type { AppState, DayConfig, DayType } from '../types'
 
-export const todayISO = () => format(new Date(), 'yyyy-MM-dd')
+let nowProvider = () => new Date()
+
+/** Injectable clock for deterministic date and timezone tests. */
+export const setNowProvider = (provider: () => Date) => { nowProvider = provider }
+export const resetNowProvider = () => { nowProvider = () => new Date() }
+export const withNowProvider = <T>(provider: () => Date, callback: () => T): T => {
+  const previous = nowProvider
+  nowProvider = provider
+  try { return callback() } finally { nowProvider = previous }
+}
+export const nowDate = () => new Date(nowProvider().getTime())
+export const todayISO = () => format(nowDate(), 'yyyy-MM-dd')
 
 /**
  * Create a stable timestamp for a calendar date.

@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
 const root = process.cwd()
+const releaseVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version
 const tscBin = path.join(root, 'node_modules', 'typescript', 'bin', 'tsc')
 const read = file => fs.readFileSync(path.join(root, file), 'utf8')
 const context = read('src/AppContext.tsx')
@@ -89,8 +90,8 @@ add('系统改动全部先预览',
   '直接提交、推荐调整和探索优化均经过统一预览确认。')
 
 add('多方案由用户决定但默认界面简洁',
-  /\[policy\.primaryPreference, firstAlternative\]/.test(app) && /initialVisibleCount/.test(proposal) && /比较另外 .* 个已生成方案/.test(proposal),
-  '预先计算推荐与备选，默认只展开推荐，用户可主动比较。')
+  /const initialPreferences = \[policy\.primaryPreference\]/.test(app) && /onGenerateMore/.test(proposal) && /生成更多不同方案/.test(proposal),
+  '默认只计算推荐方案；用户主动比较时再按需计算其他策略。')
 
 add('摘要计数可逐层展开到具体问题',
   /检测到的问题/.test(proposal) && /openSection/.test(proposal) && /问题明细/.test(proposal) && /涉及任务/.test(proposal),
@@ -271,8 +272,8 @@ add('复盘过去未完成任务可以顺延出去',
 const passed = results.filter(item => item.pass).length
 const output = { generatedAt: new Date().toISOString(), passed, total: results.length, results }
 fs.mkdirSync(path.join(root, 'validation'), { recursive: true })
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.15场景架构验证.json'), JSON.stringify(output, null, 2))
-const md = ['# Study Planner v0.8.15 场景架构验证', '', `- 通过：${passed} / ${results.length}`, `- 生成时间：${output.generatedAt}`, '', ...results.map(item => `- ${item.pass ? '✅' : '❌'} **${item.scenario}**：${item.evidence}`)]
-fs.writeFileSync(path.join(root, 'validation', 'v0.8.15场景架构验证.md'), md.join('\n') + '\n')
+fs.writeFileSync(path.join(root, 'validation', `v${releaseVersion}场景架构验证.json`), JSON.stringify(output, null, 2))
+const md = [`# Study Planner v${releaseVersion} 场景架构验证`, '', `- 通过：${passed} / ${results.length}`, `- 生成时间：${output.generatedAt}`, '', ...results.map(item => `- ${item.pass ? '✅' : '❌'} **${item.scenario}**：${item.evidence}`)]
+fs.writeFileSync(path.join(root, 'validation', `v${releaseVersion}场景架构验证.md`), md.join('\n') + '\n')
 console.log(md.join('\n'))
 if (passed !== results.length) process.exit(1)

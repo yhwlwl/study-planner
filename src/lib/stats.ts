@@ -1,9 +1,10 @@
-import type { Assignment, TaskGroup, TimeEntry } from '../types'
+import type { Assignment, DailyPlanBaseline, TaskGroup, TimeEntry } from '../types'
+import { nowDate } from './date'
 
 type EntrySource = NonNullable<TimeEntry['source']> | 'legacy'
 
 function isoToday() {
-  const now = new Date()
+  const now = nowDate()
   const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
   return local.toISOString().slice(0, 10)
 }
@@ -80,7 +81,8 @@ export function aggregateDaily(
   groups: Map<string, TaskGroup>,
   countWordsTime: boolean,
   start: string,
-  end: string
+  end: string,
+  baselines: DailyPlanBaseline[] = []
 ): DailyRow[] {
   const rows = new Map<string, DailyRow>()
   for (const date of dateRangeLocal(start, end)) {
@@ -109,6 +111,8 @@ export function aggregateDaily(
   const completedWork = new Map<string, number>()
   const plannedWork = new Map<string, number>()
   const today = isoToday()
+  const baselineByDate = new Map(baselines.filter(item => within(item.date, start, end)).map(item => [item.date, item]))
+  const assignmentById = new Map(assignments.map(item => [item.id, item]))
 
   const addActual = (date: string | undefined, minutes: number, counted: boolean, source: EntrySource) => {
     if (!date || minutes <= 0 || !within(date, start, end)) return
@@ -134,7 +138,7 @@ export function aggregateDaily(
     if (!isActiveGroup(group)) continue
     const counted = isCountedGroup(group, countWordsTime)
     const scheduled = assignment.scheduledDate
-    if (scheduled && within(scheduled, start, end)) {
+    if (scheduled && within(scheduled, start, end) && !baselineByDate.has(scheduled)) {
       const row = rows.get(scheduled)!
       row.plannedTasks += 1
       row.completedEquivalent += progressFraction(assignment)
@@ -156,6 +160,32 @@ export function aggregateDaily(
     }
     const residual = Math.max(0, assignment.actualMinutes - recorded)
     if (residual > 0) addActual(safeDate(assignment.completedAt) ?? scheduled, residual, counted, 'legacy')
+  }
+
+  for (const baseline of baselineByDate.values()) {
+    const row = rows.get(baseline.date)
+    if (!row) continue
+    row.plannedTasks = baseline.assignments.length
+    row.doneTasks = 0
+    row.partialTasks = 0
+    row.completedEquivalent = 0
+    row.lateTasks = 0
+    row.planned = 0
+    plannedWork.set(baseline.date, 0)
+    completedWork.set(baseline.date, 0)
+    for (const planned of baseline.assignments) {
+      const assignment = assignmentById.get(planned.assignmentId)
+      const group = groups.get(planned.groupId)
+      const progress = assignment ? progressFraction(assignment) : 0
+      row.completedEquivalent += progress
+      if (assignment?.status === 'done') row.doneTasks += 1
+      if (assignment?.status === 'partial') row.partialTasks += 1
+      if (baseline.date < today && assignment?.status !== 'done') row.lateTasks += 1
+      if (!isCountedGroup(group, countWordsTime)) continue
+      row.planned += planned.estimatedMinutes
+      plannedWork.set(baseline.date, (plannedWork.get(baseline.date) ?? 0) + planned.estimatedMinutes)
+      completedWork.set(baseline.date, (completedWork.get(baseline.date) ?? 0) + planned.estimatedMinutes * progress)
+    }
   }
 
   const result = [...rows.values()]

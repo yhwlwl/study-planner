@@ -1,0 +1,14 @@
+{
+  "generatedAt": "2026-08-09T12:28:53.549Z",
+  "checks": {
+    "continuousIntakePersists": true,
+    "formalPlanRemainsUntouched": true,
+    "noSchedulingArtifacts": true,
+    "p95Under100ms": true
+  },
+  "measurements": {
+    "count": 1000,
+    "p95Ms": 0.202,
+    "maxMs": 10.998
+  }
+}

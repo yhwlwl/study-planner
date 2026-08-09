@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity, AlertTriangle, BarChart3, CalendarDays, CheckCircle2, ChevronRight,
-  Clock3, Flame, Focus, Maximize2, Table2, Target, TrendingUp, X
+  Clock3, Flame, Focus, Maximize2, Pencil, Table2, Target, Trash2, TrendingUp, X
 } from 'lucide-react'
 import {
   Bar, BarChart, CartesianGrid, Cell, ComposedChart, Legend, Line, LineChart,
@@ -9,11 +9,13 @@ import {
 } from 'recharts'
 import { getDay, parseISO } from 'date-fns'
 import { useApp } from '../AppContext'
-import type { Assignment, Subject, TaskGroup } from '../types'
+import type { Assignment, DailyPlanBaseline, Subject, TaskGroup, TimeEntry } from '../types'
 import { dateRange, fmtDate, fmtWeekday, minutesText, shiftDate, todayISO } from '../lib/date'
 import { allDurationSuggestions, predictCompletion } from '../lib/planner'
 import { allGoalProgress } from '../lib/goals'
 import { aggregateDaily, type DailyRow } from '../lib/stats'
+import { Modal } from './Modal'
+import { NumericInput } from './NumericInput'
 
 type StatsTab = 'overview' | 'trend' | 'subjects' | 'quality'
 type RangePreset = 'today' | '7d' | 'week' | 'all' | 'custom'
@@ -48,6 +50,14 @@ interface InsightItem {
   title: string
   detail: string
   action?: 'replan' | 'subjects'
+}
+
+interface LedgerRow {
+  assignmentId: string
+  assignmentTitle: string
+  groupTitle: string
+  subject: Subject
+  entry: TimeEntry
 }
 
 const SUBJECTS: Subject[] = ['语文', '数学', '英语', '物理', '化学', '生物', '其他']
@@ -114,7 +124,14 @@ function rangeForPreset(preset: RangePreset, planStart: string, planEnd: string,
   return { start, end }
 }
 
-function aggregateSubjects(assignments: Assignment[], groupList: TaskGroup[], countWordsTime: boolean, start: string, end: string, subjectNames: Subject[] = SUBJECTS): SubjectRow[] {
+function aggregateSubjects(assignments: Assignment[], groupList: TaskGroup[], baselines: DailyPlanBaseline[], countWordsTime: boolean, start: string, end: string, subjectNames: Subject[] = SUBJECTS): SubjectRow[] {
+  const rangeBaselines = baselines.filter(item => within(item.date, start, end))
+  const capturedDates = new Set(rangeBaselines.map(item => item.date))
+  const baselineItems = rangeBaselines.flatMap(item => item.assignments)
+  const plannedForGroups = (groupIds: Set<string>) => baselineItems
+    .filter(item => groupIds.has(item.groupId))
+    .reduce((sum, item) => sum + item.estimatedMinutes, 0)
+    + assignments.reduce((sum, item) => sum + (groupIds.has(item.groupId) && within(item.scheduledDate, start, end) && !capturedDates.has(item.scheduledDate!) ? item.estimatedMinutes : 0), 0)
   return subjectNames.map(subject => {
     const subjectGroups = groupList.filter(group => group.subject === subject && !group.hidden)
     const groupIds = new Set(subjectGroups.map(group => group.id))
@@ -150,14 +167,14 @@ function aggregateSubjects(assignments: Assignment[], groupList: TaskGroup[], co
         title: group.title,
         done: groupItems.filter(item => item.status === 'done').length,
         total: groupItems.length,
-        planned: groupItems.reduce((sum, item) => sum + ((group.countInStats || countWordsTime) && within(item.scheduledDate, start, end) ? item.estimatedMinutes : 0), 0),
+        planned: group.countInStats || countWordsTime ? plannedForGroups(new Set([group.id])) : 0,
         actual: groupItems.reduce((sum, item) => sum + actualInRange(item), 0),
         accuracy: completed.length >= 3 && est > 0 ? (act - est) / est * 100 : undefined
       }
     })
     return {
       subject,
-      planned: items.reduce((sum, item) => sum + (countedIds.has(item.groupId) && within(item.scheduledDate, start, end) ? item.estimatedMinutes : 0), 0),
+      planned: plannedForGroups(countedIds),
       actual: items.reduce((sum, item) => sum + actualInRange(item), 0),
       done: items.filter(item => item.status === 'done').length,
       total: items.length,
@@ -183,28 +200,67 @@ function ViewToggle({ value, onChange }: { value: ViewMode; onChange: (value: Vi
 }
 
 function ChartPanel({ title, subtitle, children, onExpand, actions }: { title: string; subtitle?: string; children: any; onExpand?: () => void; actions?: any }) {
-  return <section className="stats-panel"><header><div><h3>{title}</h3>{subtitle && <p>{subtitle}</p>}</div><div className="stats-panel-actions">{actions}{onExpand && <button className="icon-button subtle" onClick={onExpand} title="放大查看"><Maximize2 size={16}/></button>}</div></header>{children}</section>
+  return <section className="stats-panel"><header><div><h3>{title}</h3>{subtitle && <p>{subtitle}</p>}</div><div className="stats-panel-actions">{actions}{onExpand && <button className="icon-button subtle" onClick={onExpand} title="放大查看" aria-label={`放大查看${title}`}><Maximize2 size={16}/></button>}</div></header>{children}</section>
 }
 
 function DailyTable({ rows, onSelect }: { rows: DailyRow[]; onSelect: (date: string) => void }) {
   return <div className="stats-table-wrap"><table className="stats-table"><thead><tr><th>日期</th><th>计划</th><th>实际</th><th>任务完成</th><th>工作量完成</th><th>延期</th></tr></thead><tbody>{rows.map(row => <tr key={row.date} onClick={() => onSelect(row.date)}><td>{row.shortLabel}</td><td>{minutesText(row.planned)}</td><td>{minutesText(row.actual)}</td><td>{percent(row.taskCompletion)}</td><td>{percent(row.workloadCompletion)}</td><td>{row.lateTasks}</td></tr>)}</tbody></table></div>
 }
 
-function DayDetail({ date, assignments, groups, countWordsTime, onClose }: { date?: string; assignments: Assignment[]; groups: Map<string, TaskGroup>; countWordsTime: boolean; onClose: () => void }) {
+function actualMinutesForDate(assignments: Assignment[], date: string) {
+  const result = new Map<string, number>()
+  for (const assignment of assignments) {
+    let recorded = 0
+    let onDate = 0
+    for (const entry of assignment.timeEntries ?? []) {
+      const minutes = Math.max(0, Number(entry.minutes) || 0)
+      recorded += minutes
+      if (safeDate(entry.createdAt) === date) onDate += minutes
+    }
+    const residual = Math.max(0, assignment.actualMinutes - recorded)
+    const fallbackDate = safeDate(assignment.completedAt) ?? assignment.scheduledDate
+    if (residual > 0 && fallbackDate === date) onDate += residual
+    if (onDate > 0) result.set(assignment.id, onDate)
+  }
+  return result
+}
+
+function DayDetail({ date, assignments, groups, baselines, countWordsTime, onClose }: { date?: string; assignments: Assignment[]; groups: Map<string, TaskGroup>; baselines: DailyPlanBaseline[]; countWordsTime: boolean; onClose: () => void }) {
+  const dialogRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (!date) return
+    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.setTimeout(() => dialogRef.current?.focus(), 0)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      activeElement?.focus()
+    }
+  }, [date, onClose])
   if (!date) return null
-  const tasks = assignments.filter(item => item.scheduledDate === date && isActiveGroup(groups.get(item.groupId)))
-  const planned = tasks.reduce((sum, item) => sum + (isCountedGroup(groups.get(item.groupId), countWordsTime) ? item.estimatedMinutes : 0), 0)
-  const actual = tasks.reduce((sum, item) => sum + (isCountedGroup(groups.get(item.groupId), countWordsTime) ? item.actualMinutes : 0), 0)
-  return <div className="stats-detail-backdrop" onMouseDown={onClose}><section className="stats-day-detail" onMouseDown={event => event.stopPropagation()}><header><div><span>{fmtWeekday(date)}</span><h2>{fmtDate(date, 'M月d日')}</h2><p>计划 {minutesText(planned)} · 当前任务累计实际 {minutesText(actual)}</p></div><button className="icon-button" onClick={onClose}><X size={18}/></button></header><div className="stats-day-task-list">{tasks.length ? tasks.map(task => { const group = groups.get(task.groupId)!; return <article key={task.id}><div><span className={`subject-pill subject-${group.subject}`}>{group.subject}</span><strong>{task.title}</strong></div><div className="stats-day-task-numbers"><span>预计 {minutesText(task.estimatedMinutes)}</span><span>实际 {minutesText(task.actualMinutes)}</span><span>{task.status === 'done' ? '已完成' : task.status === 'partial' ? `完成 ${task.progress}%` : '未完成'}</span></div></article> }) : <p className="muted-text">当天没有计划任务。</p>}</div></section></div>
+  const baseline = baselines.find(item => item.date === date)
+  const assignmentMap = new Map(assignments.map(item => [item.id, item]))
+  const plannedItems = baseline?.assignments ?? assignments
+    .filter(item => item.scheduledDate === date && isActiveGroup(groups.get(item.groupId)))
+    .map(item => ({ assignmentId: item.id, groupId: item.groupId, title: item.title, estimatedMinutes: item.estimatedMinutes }))
+  const plannedIds = new Set(plannedItems.map(item => item.assignmentId))
+  const actualByAssignment = actualMinutesForDate(assignments, date)
+  const actualOnly = assignments.filter(item => (actualByAssignment.get(item.id) ?? 0) > 0 && !plannedIds.has(item.id) && isActiveGroup(groups.get(item.groupId)))
+  const planned = plannedItems.reduce((sum, item) => sum + (isCountedGroup(groups.get(item.groupId), countWordsTime) ? item.estimatedMinutes : 0), 0)
+  const actual = assignments.reduce((sum, item) => sum + (isCountedGroup(groups.get(item.groupId), countWordsTime) ? actualByAssignment.get(item.id) ?? 0 : 0), 0)
+  return <div className="stats-detail-backdrop" onMouseDown={onClose}><section ref={dialogRef} tabIndex={-1} className="stats-day-detail" role="dialog" aria-modal="true" aria-label={`${fmtDate(date)}执行详情`} onMouseDown={event => event.stopPropagation()}><header><div><span>{fmtWeekday(date)}</span><h2>{fmtDate(date, 'M月d日')}</h2><p>原计划 {minutesText(planned)} · 当日实际 {minutesText(actual)}</p></div><button className="icon-button" aria-label="关闭日期详情" onClick={onClose}><X size={18}/></button></header>{baseline && <p className="stats-baseline-note">原计划来自 {new Date(baseline.capturedAt).toLocaleString()} 保存的不可变快照。</p>}<div className="stats-day-task-list">{plannedItems.length ? plannedItems.map(plannedItem => { const task = assignmentMap.get(plannedItem.assignmentId); const group = groups.get(plannedItem.groupId); const actualMinutes = actualByAssignment.get(plannedItem.assignmentId) ?? 0; return <article key={plannedItem.assignmentId}><div><span className={`subject-pill subject-${group?.subject ?? '其他'}`}>{group?.subject ?? '其他'}</span><strong>{plannedItem.title}</strong></div><div className="stats-day-task-numbers"><span>原计划 {minutesText(plannedItem.estimatedMinutes)}</span><span>当日实际 {minutesText(actualMinutes)}</span><span>{task?.status === 'done' ? '当前已完成' : task?.status === 'partial' ? `当前进度 ${task.progress}%` : task ? '当前未完成' : '任务已移除'}</span></div></article> }) : <p className="muted-text">当天没有原计划任务。</p>}</div>{actualOnly.length > 0 && <div className="stats-day-extra"><h3>计划外执行</h3><p>这些任务当天有学习流水，但不在当天原计划中。</p>{actualOnly.map(task => { const group = groups.get(task.groupId); return <article key={task.id}><div><span className={`subject-pill subject-${group?.subject ?? '其他'}`}>{group?.subject ?? '其他'}</span><strong>{task.title}</strong></div><span>当日实际 {minutesText(actualByAssignment.get(task.id) ?? 0)}</span></article> })}</div>}</section></div>
 }
 
 function FullscreenChart({ title, rows, onClose, onSelect }: { title: string; rows: DailyRow[]; onClose: () => void; onSelect: (date: string) => void }) {
   const [mode, setMode] = useState<ViewMode>('chart')
-  return <div className="stats-fullscreen"><header><div><span>统计详情</span><h2>{title}</h2></div><div><ViewToggle value={mode} onChange={setMode}/><button className="icon-button" onClick={onClose}><X size={19}/></button></div></header><main>{mode === 'table' ? <DailyTable rows={rows} onSelect={onSelect}/> : <ResponsiveContainer width="100%" height="100%"><ComposedChart data={rows} onClick={(event: any) => event?.activePayload?.[0] && onSelect(event.activePayload[0].payload.date)}><CartesianGrid strokeDasharray="3 3" vertical={false}/><XAxis dataKey="shortLabel"/><YAxis tickFormatter={(value: number) => `${Math.round(value / 60)}h`}/><Tooltip content={<ChartTooltip/>}/><Legend/><Bar dataKey="actual" name="实际" fill="#2563eb" radius={[6, 6, 0, 0]}/><Line type="monotone" dataKey="planned" name="计划" stroke="#94a3b8" strokeWidth={2} dot={false}/><Line type="monotone" dataKey="movingAverage" name="7日均值" stroke="#8b5cf6" strokeWidth={2} dot={false}/></ComposedChart></ResponsiveContainer>}</main></div>
+  return <div className="stats-fullscreen" role="dialog" aria-modal="true" aria-label={`${title}全屏详情`}><header><div><span>统计详情</span><h2>{title}</h2></div><div><ViewToggle value={mode} onChange={setMode}/><button className="icon-button" aria-label="关闭全屏统计" onClick={onClose}><X size={19}/></button></div></header><main>{mode === 'table' ? <DailyTable rows={rows} onSelect={onSelect}/> : <ResponsiveContainer width="100%" height="100%"><ComposedChart data={rows} onClick={(event: any) => event?.activePayload?.[0] && onSelect(event.activePayload[0].payload.date)}><CartesianGrid strokeDasharray="3 3" vertical={false}/><XAxis dataKey="shortLabel"/><YAxis tickFormatter={(value: number) => `${Math.round(value / 60)}h`}/><Tooltip content={<ChartTooltip/>}/><Legend/><Bar dataKey="actual" name="实际" fill="#2563eb" radius={[6, 6, 0, 0]}/><Line type="monotone" dataKey="planned" name="计划" stroke="#94a3b8" strokeWidth={2} dot={false}/><Line type="monotone" dataKey="movingAverage" name="7日均值" stroke="#8b5cf6" strokeWidth={2} dot={false}/></ComposedChart></ResponsiveContainer>}</main></div>
 }
 
 export function StatsPage({ onOpenReplan }: StatsPageProps) {
-  const { state } = useApp()
+  const { state, updateTimeEntry, deleteTimeEntry } = useApp()
   const [tab, setTab] = useState<StatsTab>('overview')
   const [preset, setPreset] = useState<RangePreset>(() => {
     const saved = window.localStorage.getItem('study-planner:stats-range')
@@ -218,17 +274,26 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
   const [expanded, setExpanded] = useState(false)
   const [expandedSubjects, setExpandedSubjects] = useState<Set<Subject>>(new Set())
   const [planPerspective, setPlanPerspective] = useState<'current'|'history'>('current')
+  const [ledgerOpen, setLedgerOpen] = useState(false)
+  const [ledgerStart, setLedgerStart] = useState(state.settings.startDate)
+  const [ledgerEnd, setLedgerEnd] = useState(todayISO())
+  const [ledgerEdit, setLedgerEdit] = useState<{ assignmentId: string; entryId: string; minutes: number; date: string }>()
 
   useEffect(() => { window.localStorage.setItem('study-planner:stats-range', preset) }, [preset])
 
   const groupMap = useMemo(() => new Map(state.taskGroups.map(group => [group.id, group])), [state.taskGroups])
   const range = rangeForPreset(preset, state.settings.startDate, state.settings.endDate, customStart, customEnd)
-  const daily = useMemo(() => aggregateDaily(state.assignments, groupMap, state.settings.countWordsTime, range.start, range.end), [state.assignments, groupMap, state.settings.countWordsTime, range.start, range.end])
-  const allDaily = useMemo(() => aggregateDaily(state.assignments, groupMap, state.settings.countWordsTime, state.settings.startDate, state.settings.endDate), [state.assignments, groupMap, state.settings.countWordsTime, state.settings.startDate, state.settings.endDate])
+  const daily = useMemo(() => aggregateDaily(state.assignments, groupMap, state.settings.countWordsTime, range.start, range.end, state.dailyPlanBaselines), [state.assignments, groupMap, state.settings.countWordsTime, range.start, range.end, state.dailyPlanBaselines])
+  const allDaily = useMemo(() => aggregateDaily(state.assignments, groupMap, state.settings.countWordsTime, state.settings.startDate, state.settings.endDate, state.dailyPlanBaselines), [state.assignments, groupMap, state.settings.countWordsTime, state.settings.startDate, state.settings.endDate, state.dailyPlanBaselines])
   const subjectNames = useMemo(() => Array.from(new Set([...SUBJECTS, ...state.settings.customSubjects, ...state.taskGroups.map(group => group.subject)])), [state.settings.customSubjects, state.taskGroups])
-  const subjects = useMemo(() => aggregateSubjects(state.assignments, state.taskGroups, state.settings.countWordsTime, range.start, range.end, subjectNames), [state.assignments, state.taskGroups, state.settings.countWordsTime, range.start, range.end, subjectNames])
+  const subjects = useMemo(() => aggregateSubjects(state.assignments, state.taskGroups, state.dailyPlanBaselines, state.settings.countWordsTime, range.start, range.end, subjectNames), [state.assignments, state.taskGroups, state.dailyPlanBaselines, state.settings.countWordsTime, range.start, range.end, subjectNames])
   const goalRows = useMemo(() => allGoalProgress(state), [state.goals, state.assignments, state.taskGroups])
   const durationSuggestions = useMemo(() => allDurationSuggestions(state), [state.assignments, state.taskGroups, state.settings.duration])
+  const ledgerRows = useMemo<LedgerRow[]>(() => state.assignments.flatMap(assignment => {
+    const group = groupMap.get(assignment.groupId)
+    if (!group) return []
+    return (assignment.timeEntries ?? []).map(entry => ({ assignmentId: assignment.id, assignmentTitle: assignment.title, groupTitle: group.title, subject: group.subject, entry }))
+  }).filter(item => within(safeDate(item.entry.createdAt), ledgerStart, ledgerEnd)).sort((a, b) => b.entry.createdAt.localeCompare(a.entry.createdAt)), [state.assignments, groupMap, ledgerStart, ledgerEnd])
 
   const totals = useMemo(() => {
     const planned = daily.reduce((sum, row) => sum + row.planned, 0)
@@ -328,7 +393,7 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
   const rangeLabel = preset === 'today' ? '今日' : preset === '7d' ? '近7天' : preset === 'week' ? '本周' : preset === 'all' ? '全部计划' : `${fmtDate(range.start, 'M.d')}—${fmtDate(range.end, 'M.d')}`
 
   return <div className="stats-page">
-    <section className="plan-perspective-bar"><div className="segmented-control"><button className={planPerspective === 'current' ? 'active' : ''} onClick={() => setPlanPerspective('current')}>目标概览</button><button className={planPerspective === 'history' ? 'active' : ''} onClick={() => setPlanPerspective('history')}>版本概览</button></div><span>{planPerspective === 'current' ? '查看当前目标、负载和预计' : `本机保存 ${state.planVersions.length} 个重大版本`}</span></section>
+    <section className="plan-perspective-bar"><div className="segmented-control"><button className={planPerspective === 'current' ? 'active' : ''} onClick={() => setPlanPerspective('current')}>目标概览</button><button className={planPerspective === 'history' ? 'active' : ''} onClick={() => setPlanPerspective('history')}>版本概览</button></div><div className="plan-perspective-actions"><span>{planPerspective === 'current' ? '查看当前目标、负载和预计' : `本机保存 ${state.planVersions.length} 个重大版本`}</span><button className="secondary-button" onClick={() => { setLedgerStart(range.start); setLedgerEnd(range.end > todayISO() ? todayISO() : range.end); setLedgerOpen(true) }}><Clock3 size={16}/>时间账本</button></div></section>
     {planPerspective === 'current' ? <section className="stats-goal-overview"><header><div><h2>当前目标概览</h2><p>全局时间与完成总数按任务去重；每个目标仍独立计算自己的条件。</p></div><span>时长建议 {durationSuggestions.length}</span></header><div>{goalRows.length ? goalRows.map(row => { const goal = state.goals.find(item => item.id === row.goalId)!; return <article key={row.goalId}><strong>{goal.title}</strong><span>{row.completedCount}/{row.requiredCount} · {Math.round(row.progress*100)}%</span><small>预计 {row.expectedCompletion ? fmtDate(row.expectedCompletion) : row.completed ? '已完成' : '无法预计'} · 剩余 {minutesText(row.estimatedRemainingMinutes)}</small><em className={row.latestRisk ? 'risk' : row.desiredRisk ? 'warning' : ''}>{row.latestRisk ? '最晚日期风险' : row.desiredRisk ? '期望日期风险' : '正常'}</em></article> }) : <p className="muted-text">暂无目标。</p>}</div></section> : <section className="stats-version-overview"><header><h2>历史计划演变</h2><p>展示重大版本的目标、任务量、负载和移动历史；完整快照仅保存在当前设备。</p></header>{state.planVersions.length ? <div>{[...state.planVersions].reverse().map(version => <article key={version.id}><div><strong>{version.reason}</strong><span>{new Date(version.timestamp).toLocaleString()}</span></div><div><span>目标 {version.summary.goalCount}</span><span>任务组 {version.summary.groupCount}</span><span>任务 {version.summary.assignmentCount}</span><span>完成 {version.summary.completedCount}</span><span>移动 {version.summary.movedTaskCount}</span><span>计划负载 {minutesText(version.summary.scheduledMinutes)}</span></div></article>)}</div> : <p className="muted-text">尚无重大版本。</p>}</section>}
     <section className="stats-toolbar">
       <div className="stats-tabs">{([['overview', '概览'], ['trend', '趋势'], ['subjects', '科目'], ['quality', '执行状态']] as const).map(([value, label]) => <button key={value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{label}</button>)}</div>
@@ -380,7 +445,11 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
       <div className="stats-data-note"><AlertTriangle size={17}/><p><strong>旧数据说明：</strong>旧版本没有记录每次改期历史和时间来源，因此计划变更率只依据当前任务保留的最近一次原日期；计时与手动补录从 v0.5.0 起可以精确区分。</p></div>
     </>}
 
-    <DayDetail date={selectedDate} assignments={state.assignments} groups={groupMap} countWordsTime={state.settings.countWordsTime} onClose={() => setSelectedDate(undefined)}/>
+    <DayDetail date={selectedDate} assignments={state.assignments} groups={groupMap} baselines={state.dailyPlanBaselines} countWordsTime={state.settings.countWordsTime} onClose={() => setSelectedDate(undefined)}/>
     {expanded && <FullscreenChart title="每日计划与实际" rows={daily} onClose={() => setExpanded(false)} onSelect={date => { setExpanded(false); setSelectedDate(date) }}/>} 
+    <Modal open={ledgerOpen} title="执行时间账本" onClose={() => { setLedgerOpen(false); setLedgerEdit(undefined) }} wide mobileFullscreen>
+      <div className="ledger-toolbar"><div><strong>按实际发生日期归属</strong><span>改期不会重写流水；历史补录会进入你选择的历史日期。</span></div><div><label><span>开始</span><input type="date" value={ledgerStart} onChange={event => setLedgerStart(event.target.value)}/></label><label><span>结束</span><input type="date" value={ledgerEnd} max={todayISO()} onChange={event => setLedgerEnd(event.target.value)}/></label></div></div>
+      <div className="ledger-list">{ledgerRows.length ? ledgerRows.map(row => { const editing = ledgerEdit?.entryId === row.entry.id; return <article key={`${row.assignmentId}-${row.entry.id}`} className={editing ? 'editing' : ''}><div className="ledger-main"><span className={`subject-pill subject-${row.subject}`}>{row.subject}</span><div><strong>{row.assignmentTitle}</strong><small>{row.groupTitle}</small></div></div>{editing ? <div className="ledger-edit-grid"><label><span>归属日期</span><input type="date" max={todayISO()} value={ledgerEdit.date} onChange={event => setLedgerEdit({ ...ledgerEdit, date: event.target.value })}/></label><label><span>分钟</span><NumericInput min={0} max={1440} value={ledgerEdit.minutes} onValueChange={minutes => setLedgerEdit({ ...ledgerEdit, minutes })}/></label></div> : <div className="ledger-facts"><strong>{minutesText(row.entry.minutes)}</strong><span>{fmtDate(row.entry.createdAt.slice(0, 10))}</span><small>{row.entry.source === 'timer' ? '计时器' : row.entry.source === 'finish' ? '完成时记录' : row.entry.source === 'inferred' ? '推断记录' : '手动补录'}</small><small>创建于 {new Date(row.entry.originalCreatedAt ?? row.entry.createdAt).toLocaleString()}</small>{row.entry.updatedAt && <small>修改于 {new Date(row.entry.updatedAt).toLocaleString()}</small>}</div>}<div className="ledger-actions">{editing ? <><button className="secondary-button" onClick={() => setLedgerEdit(undefined)}>取消</button><button className="primary-button" disabled={!ledgerEdit.date || ledgerEdit.minutes <= 0} onClick={() => { updateTimeEntry(row.assignmentId, row.entry.id, { date: ledgerEdit.date, minutes: ledgerEdit.minutes }); setLedgerEdit(undefined) }}>保存</button></> : <><button className="icon-button" aria-label={`编辑${row.assignmentTitle}的时间记录`} onClick={() => setLedgerEdit({ assignmentId: row.assignmentId, entryId: row.entry.id, minutes: row.entry.minutes, date: row.entry.createdAt.slice(0, 10) })}><Pencil size={16}/></button><button className="icon-button danger-icon" aria-label={`删除${row.assignmentTitle}的时间记录`} onClick={() => { if (window.confirm(`删除“${row.assignmentTitle}”在 ${fmtDate(row.entry.createdAt.slice(0, 10))} 的 ${row.entry.minutes} 分钟记录？\n\n任务累计实际和统计会同步扣减，审计事件会保留。`)) deleteTimeEntry(row.assignmentId, row.entry.id) }}><Trash2 size={16}/></button></>}</div></article> }) : <div className="empty-state"><Clock3 size={28}/><h3>这个范围还没有时间流水</h3><p>完成任务、手动补录或计时后会显示在这里。</p></div>}</div>
+    </Modal>
   </div>
 }

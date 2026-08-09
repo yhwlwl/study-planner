@@ -39,7 +39,7 @@ export function TaskGroupDialog({ open, onClose, state, initial, onCreate, onEdi
     setTitle(initial?.title ?? '')
     setSubject(initial?.subject ?? '其他')
     setPriority(initial?.priority ?? 3)
-    setQuantity(initial?.quantity ?? 1)
+    setQuantity(initial?.sourceQuantity ?? initial?.quantity ?? 1)
     setMinutes(initial?.unitMinutes ?? 30)
     setDailyMax(initial?.dailyMax)
     setActivityType(initial?.activityType ?? 'normal')
