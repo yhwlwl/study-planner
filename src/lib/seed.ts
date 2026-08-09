@@ -1,7 +1,7 @@
 import { addDays, format } from 'date-fns'
 import type {
-  AppSettings, AppState, Assignment, CalendarConstraint, Goal, GoalCondition, TaskActivityType,
-  TaskGroup,
+  AppSettings, AppState, Assignment, CalendarConstraint, Goal, GoalCondition, IntakeBatch, IntakeTaskGroupDraft,
+  TaskActivityType, TaskGroup,
 } from '../types'
 import { SCHEMA_VERSION } from '../types'
 import { dateRange, shiftDate, todayISO } from './date'
@@ -36,6 +36,8 @@ export function defaultSettings(input: Partial<AppSettings> = {}): AppSettings {
     showWarnings: true,
     optionalReview: true,
     sidebarCollapsed: false,
+    theme: 'system',
+    notificationsEnabled: false,
     planningMode: 'balanced',
     freezeDays: 2,
     regularOverbookMinutes: 0,
@@ -76,7 +78,9 @@ function expectedAutomaticTitle(taskGroup: TaskGroup, index: number): string {
 function assignmentsForGroup(taskGroup: TaskGroup): Assignment[] {
   const now = new Date().toISOString()
   if (taskGroup.recurring && taskGroup.recurrenceStart && taskGroup.recurrenceEnd) {
-    return dateRange(taskGroup.recurrenceStart, taskGroup.recurrenceEnd).map((date, index) => ({
+    const recurrenceDates = dateRange(taskGroup.recurrenceStart, taskGroup.recurrenceEnd)
+      .filter(date => !taskGroup.recurrenceWeekdays?.length || taskGroup.recurrenceWeekdays.includes(new Date(`${date}T12:00:00`).getDay()))
+    return recurrenceDates.map((date, index) => ({
       id: uid('task'), groupId: taskGroup.id, index: index + 1,
       title: `${taskGroup.title} · ${date.slice(5).replace('-', '.')}`,
       titleCustomized: false, durationCustomized: false, standalone: false,
@@ -85,9 +89,33 @@ function assignmentsForGroup(taskGroup: TaskGroup): Assignment[] {
       createdAt: now, updatedAt: now, createdBy: 'template',
     }))
   }
-  return Array.from({ length: taskGroup.quantity }, (_, index) => ({
+  const sourceQuantity = Math.max(1, taskGroup.sourceQuantity ?? taskGroup.quantity)
+  const splitMinutes = taskGroup.allowSplit && taskGroup.splitSessionMinutes && taskGroup.splitSessionMinutes < taskGroup.unitMinutes
+    ? taskGroup.splitSessionMinutes
+    : undefined
+  if (splitMinutes) {
+    const result: Assignment[] = []
+    for (let sourceIndex = 1; sourceIndex <= sourceQuantity; sourceIndex += 1) {
+      const splitTotal = Math.ceil(taskGroup.unitMinutes / splitMinutes)
+      for (let splitPart = 1; splitPart <= splitTotal; splitPart += 1) {
+        const consumed = (splitPart - 1) * splitMinutes
+        const estimatedMinutes = Math.min(splitMinutes, taskGroup.unitMinutes - consumed)
+        const sourceLabel = sourceQuantity > 1 ? ` ${String(sourceIndex).padStart(2, '0')}` : ''
+        result.push({
+          id: uid('task'), groupId: taskGroup.id, index: result.length + 1,
+          title: `${taskGroup.title}${sourceLabel} · 第 ${splitPart}/${splitTotal} 段`, titleCustomized: false,
+          estimatedMinutes, durationCustomized: false, standalone: Boolean(taskGroup.hiddenStandalone),
+          actualMinutes: 0, progress: 0, status: 'todo', locked: false, timeEntries: [],
+          scheduleSource: 'system', intentStrength: 'normal', createdAt: now, updatedAt: now, createdBy: 'template',
+          splitSourceIndex: sourceIndex, splitPart, splitTotal,
+        })
+      }
+    }
+    return result
+  }
+  return Array.from({ length: sourceQuantity }, (_, index) => ({
     id: uid('task'), groupId: taskGroup.id, index: index + 1,
-    title: expectedAutomaticTitle(taskGroup, index + 1), titleCustomized: false,
+    title: expectedAutomaticTitle({ ...taskGroup, quantity: sourceQuantity }, index + 1), titleCustomized: false,
     estimatedMinutes: taskGroup.unitMinutes, durationCustomized: false, standalone: Boolean(taskGroup.hiddenStandalone),
     actualMinutes: 0, progress: 0, status: 'todo', locked: false, timeEntries: [],
     scheduleSource: 'system', intentStrength: 'normal', createdAt: now, updatedAt: now, createdBy: 'template',
@@ -110,6 +138,8 @@ function createBaseState(settings: AppSettings, groups: TaskGroup[], templateKin
     timer: { accumulatedSeconds: 0, running: false },
     reviewRecords: [],
     changeEvents: [],
+    intakeBatches: [],
+    dailyPlanBaselines: [],
     guestModified: false,
     replanHistory: [],
     planVersions: [],
@@ -198,11 +228,14 @@ function normalizeGroup(raw: Partial<TaskGroup>, now: string): TaskGroup {
   return {
     id: raw.id ?? uid('group'), subject: String(raw.subject ?? '其他'), title,
     priority: ([0, 1, 2, 3, 5].includes(Number(raw.priority)) ? Number(raw.priority) : 1) as TaskGroup['priority'],
-    quantity: Math.max(0, Math.round(Number(raw.quantity ?? 0))), unitMinutes: Math.max(1, Math.round(Number(raw.unitMinutes ?? 30))),
+    quantity: Math.max(0, Math.round(Number(raw.quantity ?? 0))), sourceQuantity: raw.sourceQuantity ? Math.max(1, Math.round(Number(raw.sourceQuantity))) : undefined, unitMinutes: Math.max(1, Math.round(Number(raw.unitMinutes ?? 30))),
     targetDate: String(raw.targetDate ?? ''), dueDate: String(raw.dueDate ?? raw.targetDate ?? ''), dailyMax: raw.dailyMax,
     recurring: Boolean(raw.recurring), recurrenceStart: raw.recurrenceStart, recurrenceEnd: raw.recurrenceEnd,
+    recurrenceWeekdays: Array.isArray(raw.recurrenceWeekdays) ? raw.recurrenceWeekdays.map(Number).filter(day => day >= 0 && day <= 6) : undefined,
     countInStats: raw.countInStats ?? true, hidden: raw.hidden, hiddenStandalone: raw.hiddenStandalone,
     flexibleDuration: raw.flexibleDuration, allowSplit: raw.allowSplit ?? Boolean(raw.flexibleDuration || /作文|报告|整理|复习/.test(title)),
+    splitSessionMinutes: raw.splitSessionMinutes ? Math.max(5, Math.round(Number(raw.splitSessionMinutes))) : undefined,
+    prerequisiteGroupIds: Array.from(new Set((raw.prerequisiteGroupIds ?? []).map(String))),
     memoryTask: raw.memoryTask ?? /背诵|默写|文言文|古诗文|单词|词汇/.test(title),
     activityType: raw.activityType ?? inferActivity(String(raw.subject ?? '其他'), title),
     highIntensity: raw.highIntensity ?? /套卷|试卷|章末|综合|模拟/.test(title), notes: raw.notes, sourceLabel: raw.sourceLabel,
@@ -220,13 +253,75 @@ function normalizeAssignment(raw: Partial<Assignment>, group: TaskGroup | undefi
     scheduledDate: raw.scheduledDate, estimatedMinutes: estimate, actualMinutes: Math.max(0, Math.round(Number(raw.actualMinutes ?? 0))),
     progress: status === 'done' ? 100 : Math.min(99, Math.max(0, Math.round(Number(raw.progress ?? 0)))), status,
     locked: Boolean(raw.locked), completedAt: raw.completedAt, notes: raw.notes,
-    timeEntries: Array.isArray(raw.timeEntries) ? raw.timeEntries.map(entry => ({ ...entry, id: entry.id ?? uid('time'), minutes: Math.max(0, Math.round(Number(entry.minutes ?? 0))), createdAt: entry.createdAt ?? now })) : [],
+    timeEntries: Array.isArray(raw.timeEntries) ? raw.timeEntries.map(entry => ({ ...entry, id: entry.id ?? uid('time'), minutes: Math.max(0, Math.round(Number(entry.minutes ?? 0))), createdAt: entry.createdAt ?? now, updatedAt: entry.updatedAt, originalCreatedAt: entry.originalCreatedAt })) : [],
     scheduleSource: raw.scheduleSource ?? (group?.recurring ? 'recurring' : 'system'),
     intentStrength: raw.intentStrength ?? (raw.locked ? 'locked' : raw.scheduleSource === 'manual' ? 'manual' : 'normal'),
     previousDate: raw.previousDate, lastManualMoveAt: raw.lastManualMoveAt, remainingMinutes: raw.remainingMinutes,
     manuallyEstimated: raw.manuallyEstimated, titleCustomized: raw.titleCustomized ?? String(raw.title ?? expected) !== expected,
     durationCustomized: raw.durationCustomized ?? Boolean(raw.manuallyEstimated || estimate !== (group?.unitMinutes ?? estimate)),
     standalone: raw.standalone ?? Boolean(group?.hiddenStandalone), createdAt: raw.createdAt ?? now, updatedAt: raw.updatedAt ?? now, createdBy: raw.createdBy ?? 'migration',
+    splitSourceIndex: raw.splitSourceIndex, splitPart: raw.splitPart, splitTotal: raw.splitTotal,
+  }
+}
+
+function normalizeIntakeTask(raw: Partial<IntakeTaskGroupDraft>, now: string): IntakeTaskGroupDraft {
+  const recurring = Boolean(raw.recurring)
+  const recurrenceStart = raw.recurrenceStart
+  const recurrenceEnd = raw.recurrenceEnd && recurrenceStart && raw.recurrenceEnd < recurrenceStart ? recurrenceStart : raw.recurrenceEnd
+  return {
+    id: raw.id ?? uid('intake-item'),
+    title: String(raw.title ?? '').trim(),
+    subject: String(raw.subject ?? '其他'),
+    priority: ([0, 1, 2, 3, 5].includes(Number(raw.priority)) ? Number(raw.priority) : 3) as IntakeTaskGroupDraft['priority'],
+    unitMinutes: Math.max(1, Math.round(Number(raw.unitMinutes ?? 30))),
+    activityType: raw.activityType ?? inferActivity(String(raw.subject ?? '其他'), String(raw.title ?? '')),
+    dailyMax: raw.dailyMax ? Math.max(1, Math.round(Number(raw.dailyMax))) : undefined,
+    highIntensity: Boolean(raw.highIntensity),
+    countInStats: raw.countInStats ?? true,
+    quantity: Math.max(1, Math.round(Number(raw.quantity ?? 1))),
+    notes: raw.notes,
+    goalIds: Array.from(new Set((raw.goalIds ?? []).map(String))),
+    goalTitle: raw.goalTitle ? String(raw.goalTitle).trim() : undefined,
+    desiredDate: raw.desiredDate,
+    latestDate: raw.latestDate,
+    preferredDate: raw.preferredDate,
+    fixedDate: raw.fixedDate,
+    recurring,
+    recurrenceStart,
+    recurrenceEnd,
+    recurrenceWeekdays: Array.isArray(raw.recurrenceWeekdays) ? Array.from(new Set(raw.recurrenceWeekdays.map(Number).filter(day => day >= 0 && day <= 6))).sort() : undefined,
+    allowSplit: Boolean(raw.allowSplit),
+    splitSessionMinutes: raw.splitSessionMinutes ? Math.max(5, Math.round(Number(raw.splitSessionMinutes))) : undefined,
+    prerequisiteGroupIds: Array.from(new Set((raw.prerequisiteGroupIds ?? []).map(String))),
+    prerequisiteGroupTitles: Array.from(new Set((raw.prerequisiteGroupTitles ?? []).map(String).filter(Boolean))),
+    numberingChoice: raw.numberingChoice,
+    source: raw.source === 'paste' || raw.source === 'csv' || raw.source === 'xlsx' ? raw.source : 'manual',
+    createdAt: raw.createdAt ?? now,
+    updatedAt: raw.updatedAt ?? now,
+    appliedAt: raw.appliedAt,
+    appliedGroupId: raw.appliedGroupId,
+  }
+}
+
+function normalizeIntakeBatch(raw: Partial<IntakeBatch>, now: string): IntakeBatch {
+  const taskGroups = (raw.taskGroups ?? []).map(item => normalizeIntakeTask(item, now))
+  const sourceKinds = new Set(taskGroups.map(item => item.source))
+  const source = raw.source === 'mixed' || sourceKinds.size > 1
+    ? 'mixed'
+    : raw.source === 'paste' || raw.source === 'csv' || raw.source === 'xlsx'
+      ? raw.source
+      : taskGroups[0]?.source ?? 'manual'
+  const status = raw.status === 'pending' || raw.status === 'applied' || raw.status === 'archived' ? raw.status : 'editing'
+  return {
+    id: raw.id ?? uid('intake'),
+    name: String(raw.name ?? '未命名录入批次').trim() || '未命名录入批次',
+    status,
+    source,
+    taskGroups,
+    createdAt: raw.createdAt ?? now,
+    updatedAt: raw.updatedAt ?? now,
+    lastEditedItemId: raw.lastEditedItemId,
+    archivedAt: raw.archivedAt,
   }
 }
 
@@ -277,6 +372,7 @@ export function normalizeState(rawInput: AppState): AppState {
   taskGroups = taskGroups.filter(item => !item.hiddenStandalone || usedGroupIds.has(item.id))
   taskGroups = taskGroups.map(item => ({ ...item, quantity: assignments.filter(task => task.groupId === item.id).length }))
   const validGroupIds = new Set(taskGroups.map(item => item.id))
+  taskGroups = taskGroups.map(item => ({ ...item, prerequisiteGroupIds: (item.prerequisiteGroupIds ?? []).filter(id => id !== item.id && validGroupIds.has(id)) }))
   assignments = assignments.filter(item => validGroupIds.has(item.groupId))
   const goals = migrateLegacyGoals(raw, taskGroups, now)
     .map(goal => ({ ...goal, desiredDate: goal.desiredDate && goal.desiredDate > goal.latestDate ? goal.latestDate : goal.desiredDate, linkedTaskGroupIds: goal.linkedTaskGroupIds.filter(id => validGroupIds.has(id)), linkedAssignmentIds: goal.linkedAssignmentIds.filter(id => assignments.some(item => item.id === id)), completionConditions: goal.completionConditions.filter(item => validGroupIds.has(item.groupId)) }))
@@ -290,6 +386,14 @@ export function normalizeState(rawInput: AppState): AppState {
     taskGroups, assignments, goals, calendarConstraints: migrateConstraints(raw, now),
     acceptedConstraintExceptions: (raw.acceptedConstraintExceptions ?? []).filter(item => item?.date && item?.key).slice(-100),
     timer: raw.timer ?? { accumulatedSeconds: 0, running: false }, reviewRecords: raw.reviewRecords ?? [], changeEvents: raw.changeEvents ?? [],
+    intakeBatches: (raw.intakeBatches ?? []).map(item => normalizeIntakeBatch(item, now)).slice(-30),
+    dailyPlanBaselines: (raw.dailyPlanBaselines ?? []).filter(item => item?.date && Array.isArray(item.assignments)).map(item => ({
+      id: item.id ?? uid('baseline'), date: item.date, capturedAt: item.capturedAt ?? now,
+      assignments: item.assignments.map(assignment => ({
+        assignmentId: String(assignment.assignmentId), groupId: String(assignment.groupId), title: String(assignment.title),
+        estimatedMinutes: Math.max(1, Math.round(Number(assignment.estimatedMinutes ?? 0))),
+      })),
+    })).slice(-400),
     guestModified: raw.guestModified ?? false, lastCloudSyncAt: raw.lastCloudSyncAt, templateKind: raw.templateKind ?? 'blank',
     replanHistory: [...rawHistory].slice(-10), planVersions: [...rawVersions].slice(-10),
     conflictBackups: (rawBackups as unknown[]).map(compactSnapshot).filter((item): item is string => Boolean(item)).slice(-3),

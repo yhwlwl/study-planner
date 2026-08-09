@@ -1,7 +1,7 @@
 {
   "name": "study-planner",
   "private": true,
-  "version": "0.8.15",
+  "version": "0.9.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -17,7 +17,12 @@
     "test:mobile-review": "node scripts/mobile-review-layout-v0811.mjs",
     "test:mobile-proposal": "node scripts/mobile-proposal-layout-v0812.mjs",
     "test:mobile-modal": "node scripts/mobile-modal-footer-v0813.mjs",
-    "test:visit-log": "node scripts/visit-log-v0815.mjs"
+    "test:visit-log": "node scripts/visit-log-v0815.mjs",
+    "test:intake": "node scripts/runtime-intake-v09.mjs",
+    "test:planner-performance": "node scripts/runtime-planner-performance.mjs",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:quality": "npm run typecheck && npm test && npm run test:planner-performance"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.52.1",
@@ -27,14 +32,23 @@
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "recharts": "^2.15.4"
+    "read-excel-file": "^9.3.8",
+    "recharts": "^2.15.4",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
     "@types/react": "^18.3.23",
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^4.6.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "axe-core": "^4.13.0",
+    "fast-check": "^4.9.0",
+    "jsdom": "^29.0.0",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
-    "vite-plugin-pwa": "^1.0.1"
+    "vite-plugin-pwa": "^1.0.1",
+    "vitest": "^4.1.10"
   }
 }

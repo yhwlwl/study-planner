@@ -1,18 +1,18 @@
 {
-  "generatedAt": "2026-08-07T17:48:49.639Z",
-  "passed": 76,
-  "total": 76,
+  "generatedAt": "2026-08-09T12:26:45.246Z",
+  "passed": 78,
+  "total": 78,
   "failed": [],
   "checks": [
     {
       "group": "版本与迁移",
-      "name": "发布版本为 0.8.15",
+      "name": "发布版本为 0.9.0",
       "pass": true,
-      "evidence": "package.json: 0.8.15"
+      "evidence": "package.json: 0.9.0"
     },
     {
       "group": "版本与迁移",
-      "name": "状态架构版本已提升（当前为 9）",
+      "name": "状态架构版本已提升（当前为 10）",
       "pass": true,
       "evidence": "src/types.ts"
     },
@@ -168,7 +168,7 @@
     },
     {
       "group": "可解释方案",
-      "name": "推荐与备选预先计算但默认只展示推荐",
+      "name": "默认只计算推荐方案，其他方案按需生成",
       "pass": true,
       "evidence": "App orchestration + ProposalDialog"
     },
@@ -444,21 +444,33 @@
     },
     {
       "group": "自动验证",
+      "name": "录入工作区不触发排期且千项写入保持流畅",
+      "pass": true,
+      "evidence": "通过；正式计划零改动，详见 validation/录入工作区运行时验证.json"
+    },
+    {
+      "group": "自动验证",
+      "name": "100/500/1000 项真实调度与增量场景性能基准",
+      "pass": true,
+      "evidence": "通过；记录 P50/P95、基准设备与既有任务移动范围，详见 validation/真实调度性能基准.json"
+    },
+    {
+      "group": "自动验证",
       "name": "核心场景与三大系统架构验证",
       "pass": true,
-      "evidence": "全部通过，详见 validation/v0.8.15场景架构验证.md"
+      "evidence": "全部通过，详见 validation/v0.9.0场景架构验证.md"
     },
     {
       "group": "自动验证",
       "name": "桌面与手机界面布局审计",
       "pass": true,
-      "evidence": "全部通过，详见 validation/v0.8.15界面布局审计.md"
+      "evidence": "全部通过，详见 validation/v0.9.0界面布局审计.md"
     },
     {
       "group": "自动验证",
       "name": "全流程用户效率与统计口径验证",
       "pass": true,
-      "evidence": "全部通过，详见 validation/v0.8.15用户效率验证.md"
+      "evidence": "全部通过，详见 validation/v0.9.0用户效率验证.md"
     }
   ]
 }

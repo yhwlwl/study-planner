@@ -1,5 +1,5 @@
 /** Study Planner v0.8 领域模型。保留少量 v0.7 兼容字段，仅用于确定性迁移与旧界面渐进改造。 */
-export const SCHEMA_VERSION = 9 as const
+export const SCHEMA_VERSION = 10 as const
 
 export type ISODate = string
 export type Priority = 0 | 1 | 2 | 3 | 5
@@ -7,6 +7,7 @@ export type DayType = 'regular' | 'study' | 'travel' | 'custom'
 export type TaskStatus = 'todo' | 'partial' | 'done'
 export type Subject = string
 export type PlanningMode = 'sprint' | 'balanced' | 'relaxed'
+export type ThemePreference = 'system' | 'light' | 'dark'
 export type ScheduleSource = 'system' | 'manual' | 'carryover' | 'replan' | 'import' | 'recurring' | 'migration' | 'template'
 export type IntentStrength = 'normal' | 'manual' | 'locked'
 export type ReplanMode = 'repair' | 'full'
@@ -84,6 +85,8 @@ export interface AppSettings {
   showWarnings: boolean
   optionalReview: boolean
   sidebarCollapsed: boolean
+  theme: ThemePreference
+  notificationsEnabled: boolean
   planningMode: PlanningMode
   freezeDays: number
   regularOverbookMinutes: number
@@ -124,6 +127,8 @@ export interface TaskGroup {
   priority: Priority
   /** 兼容缓存；规范化时始终按 Assignment 实际数量重算。 */
   quantity: number
+  /** 拆分任务保留用户最初录入的项目数量；quantity 仍表示实际生成的学习项数量。 */
+  sourceQuantity?: number
   unitMinutes: number
   /** v0.7 兼容字段；不再作为可编辑目标日期来源。 */
   targetDate: string
@@ -133,11 +138,17 @@ export interface TaskGroup {
   recurring?: boolean
   recurrenceStart?: string
   recurrenceEnd?: string
+  /** 0-6 对应周日到周六；为空时表示日期范围内每天重复。 */
+  recurrenceWeekdays?: number[]
   countInStats: boolean
   hidden?: boolean
   hiddenStandalone?: boolean
   flexibleDuration?: boolean
   allowSplit?: boolean
+  /** 允许拆分时，每次学习的目标分钟数。 */
+  splitSessionMinutes?: number
+  /** 任务组级前置依赖，组内任务必须晚于这些任务组的已排任务。 */
+  prerequisiteGroupIds?: string[]
   memoryTask?: boolean
   activityType?: TaskActivityType
   highIntensity?: boolean
@@ -155,6 +166,8 @@ export interface TimeEntry {
   createdAt: string
   source?: 'timer' | 'manual' | 'finish' | 'inferred'
   countInStatistics?: boolean
+  updatedAt?: string
+  originalCreatedAt?: string
 }
 
 export interface Assignment {
@@ -183,6 +196,10 @@ export interface Assignment {
   createdAt?: string
   updatedAt?: string
   createdBy?: CreationSource
+  /** 可拆分任务所属的原始项目序号。 */
+  splitSourceIndex?: number
+  splitPart?: number
+  splitTotal?: number
 }
 
 export interface TimerState {
@@ -246,6 +263,7 @@ export type PlanChangeEventType =
   | 'bulk-move'
   | 'group-deletion'
   | 'goal-deletion'
+  | 'time-entry-change'
   | 'restore'
   | 'migration'
 
@@ -574,8 +592,63 @@ export interface TaskGroupDraft {
   quantity: number
   notes?: string
   goalIds: string[]
+  /** 录入阶段可直接声明目标；正式应用时会转换为 Goal，而不是写回任务组日期。 */
+  goalTitle?: string
+  desiredDate?: ISODate
+  latestDate?: ISODate
+  /** 尽量安排在此日，但容量或硬约束不允许时可由方案调整。 */
+  preferredDate?: ISODate
+  /** 必须安排在此日，生成后为锁定任务。 */
+  fixedDate?: ISODate
+  recurring?: boolean
+  recurrenceStart?: ISODate
+  recurrenceEnd?: ISODate
+  recurrenceWeekdays?: number[]
+  allowSplit?: boolean
+  splitSessionMinutes?: number
+  prerequisiteGroupIds?: string[]
+  /** 导入时可用任务组名称声明依赖，应用批次时再解析为 ID。 */
+  prerequisiteGroupTitles?: string[]
   /** 编辑单项组扩展为多项时，明确保护原名或统一编号。 */
   numberingChoice?: 'preserve' | 'number-all'
+}
+
+export type IntakeBatchStatus = 'editing' | 'pending' | 'calculating' | 'applied' | 'archived'
+export type IntakeBatchSource = 'manual' | 'paste' | 'csv' | 'xlsx' | 'mixed'
+
+export interface IntakeTaskGroupDraft extends TaskGroupDraft {
+  id: string
+  createdAt: string
+  updatedAt: string
+  source: Exclude<IntakeBatchSource, 'mixed'>
+  appliedAt?: string
+  appliedGroupId?: string
+}
+
+export interface IntakeBatch {
+  id: string
+  name: string
+  status: IntakeBatchStatus
+  source: IntakeBatchSource
+  taskGroups: IntakeTaskGroupDraft[]
+  createdAt: string
+  updatedAt: string
+  lastEditedItemId?: string
+  archivedAt?: string
+}
+
+export interface DailyPlanBaselineAssignment {
+  assignmentId: string
+  groupId: string
+  title: string
+  estimatedMinutes: number
+}
+
+export interface DailyPlanBaseline {
+  id: string
+  date: ISODate
+  capturedAt: string
+  assignments: DailyPlanBaselineAssignment[]
 }
 
 export interface GoalDraft {
@@ -610,6 +683,8 @@ export interface AppStatePortable {
   timer: TimerState
   reviewRecords: ReviewRecord[]
   changeEvents: PlanChangeEvent[]
+  intakeBatches: IntakeBatch[]
+  dailyPlanBaselines: DailyPlanBaseline[]
   guestModified: boolean
   lastCloudSyncAt?: string
   templateKind?: 'summer' | 'demo' | 'blank'
@@ -703,6 +778,8 @@ export interface ReplanRequest {
   localRadius?: number
   affectedAssignmentIds?: string[]
   event?: PlanChangeEvent
+  /** summary 只生成方案摘要；full 额外计算逐项解释和替代日期。 */
+  explanationLevel?: 'summary' | 'full'
 }
 
 export interface ReplanAlternative {
