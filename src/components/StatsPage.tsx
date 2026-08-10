@@ -298,7 +298,120 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
   }).filter(item => within(safeDate(item.entry.createdAt), ledgerStart, ledgerEnd)).sort((a, b) => b.entry.createdAt.localeCompare(a.entry.createdAt)), [state.assignments, groupMap, ledgerStart, ledgerEnd])
 
   const totals = useMemo(() => {
-    const planned = daily.reduce((sum, row) => sum + row.planned, 0)…2654 tokens truncated…span>任务组 {version.summary.groupCount}</span><span>任务 {version.summary.assignmentCount}</span><span>完成 {version.summary.completedCount}</span><span>移动 {version.summary.movedTaskCount}</span><span>计划负载 {minutesText(version.summary.scheduledMinutes)}</span></div></article>)}</div> : <p className="muted-text">尚无重大版本。</p>}</section>}
+    const planned = daily.reduce((sum, row) => sum + row.planned, 0)
+    const actual = daily.reduce((sum, row) => sum + row.actual, 0)
+    const extra = daily.reduce((sum, row) => sum + row.extraActual, 0)
+    const timer = daily.reduce((sum, row) => sum + row.timerActual, 0)
+    const manual = daily.reduce((sum, row) => sum + row.manualActual, 0)
+    const legacy = daily.reduce((sum, row) => sum + row.legacyActual, 0)
+    const tasks = daily.reduce((sum, row) => sum + row.plannedTasks, 0)
+    const completed = daily.reduce((sum, row) => sum + row.completedEquivalent, 0)
+    const plannedWork = daily.reduce((sum, row) => sum + row.planned, 0)
+    const completedWork = daily.reduce((sum, row) => sum + row.planned * row.workloadCompletion / 100, 0)
+    return {
+      planned, actual, extra, timer, manual, legacy,
+      taskCompletion: tasks ? completed / tasks * 100 : 0,
+      workloadCompletion: plannedWork ? completedWork / plannedWork * 100 : 0,
+      late: daily.reduce((sum, row) => sum + row.lateTasks, 0),
+      focusSessions: daily.reduce((sum, row) => sum + row.focusSessions, 0)
+    }
+  }, [daily])
+
+  const todayRow = allDaily.find(row => row.date === todayISO())
+  const learningStreak = calculateStreak(allDaily, row => row.actual >= 30)
+  const targetStreak = calculateStreak(allDaily, row => row.planned > 0 ? row.actual >= row.planned * .5 : row.actual >= 30)
+  const corePrediction = predictCompletion(state, group => group.priority === 5)
+  const overallPrediction = predictCompletion(state)
+
+  const completedCounted = state.assignments.filter(item => {
+    const group = groupMap.get(item.groupId)
+    return isCountedGroup(group, state.settings.countWordsTime) && item.status === 'done' && item.completedAt && item.scheduledDate
+  })
+  const onTime = completedCounted.filter(item => safeDate(item.completedAt)! <= item.scheduledDate!).length
+  const onTimeRate = completedCounted.length ? onTime / completedCounted.length * 100 : 0
+  const changedTasks = state.assignments.filter(item => item.previousDate && isActiveGroup(groupMap.get(item.groupId))).length
+  const activeTasks = state.assignments.filter(item => isActiveGroup(groupMap.get(item.groupId))).length
+  const changeRate = activeTasks ? changedTasks / activeTasks * 100 : 0
+  const carryovers = state.assignments.filter(item => item.scheduleSource === 'carryover' && isActiveGroup(groupMap.get(item.groupId))).length
+
+  const timerEntries = state.assignments.flatMap(item => {
+    const group = groupMap.get(item.groupId)
+    if (!isCountedGroup(group, state.settings.countWordsTime)) return []
+    return (item.timeEntries ?? []).filter(entry => entry.source === 'timer' && entry.minutes >= 1).map(entry => entry.minutes)
+  })
+  const averageFocus = timerEntries.length ? Math.round(timerEntries.reduce((sum, value) => sum + value, 0) / timerEntries.length) : 0
+  const longestFocus = timerEntries.length ? Math.max(...timerEntries) : 0
+
+  const priorityData = [5, 3, 2, 1, 0].map(priority => {
+    const ids = new Set(state.taskGroups.filter(group => group.priority === priority && !group.hidden).map(group => group.id))
+    const items = state.assignments.filter(item => ids.has(item.groupId))
+    return { priority: priority === 5 ? '核心' : priority === 3 ? '高' : priority === 2 ? '中' : priority === 1 ? '低' : '可选', completion: items.length ? items.reduce((sum, item) => sum + progressFraction(item), 0) / items.length * 100 : 0 }
+  }).filter(item => item.completion > 0 || item.priority !== '可选')
+
+  const insights = useMemo<InsightItem[]>(() => {
+    const result: InsightItem[] = []
+    const recent = allDaily.filter(row => row.date <= todayISO()).slice(-7)
+    const previous = allDaily.filter(row => row.date <= shiftDate(todayISO(), -7)).slice(-7)
+    const recentCompletion = recent.length ? recent.reduce((sum, row) => sum + row.workloadCompletion, 0) / recent.length : 0
+    const previousCompletion = previous.length ? previous.reduce((sum, row) => sum + row.workloadCompletion, 0) / previous.length : 0
+    const change = recentCompletion - previousCompletion
+    if (previous.length && Math.abs(change) >= 5) result.push({ tone: change > 0 ? 'positive' : 'warning', title: `近7天工作量完成率${change > 0 ? '提高' : '下降'} ${Math.abs(Math.round(change))}%`, detail: `当前均值 ${Math.round(recentCompletion)}%，上一个7天均值 ${Math.round(previousCompletion)}%。`, action: change < 0 ? 'replan' : undefined })
+    const underestimated = subjects.filter(item => item.accuracy !== undefined && item.accuracy > 10).sort((a, b) => (b.accuracy ?? 0) - (a.accuracy ?? 0))[0]
+    if (underestimated) result.push({ tone: 'warning', title: `${underestimated.subject}任务平均低估 ${Math.round(underestimated.accuracy!)}%`, detail: `基于 ${underestimated.sampleSize} 个已完成任务，后续排期应预留更多时间。`, action: 'subjects' })
+    const weakDays = recent.slice(-3).filter(row => row.planned > 0 && row.actual < row.planned * .5)
+    if (weakDays.length >= 2) result.push({ tone: 'warning', title: '最近3天有多天实际学习不足计划一半', detail: `${weakDays.map(row => row.shortLabel).join('、')} 的执行差距较大，建议查看计划调整方案。`, action: 'replan' })
+    const riskyGoal = goalRows.find(item => item.latestRisk || item.desiredRisk)
+    if (riskyGoal) {
+      const goal = state.goals.find(item => item.id === riskyGoal.goalId)
+      if (goal) result.push({ tone: 'warning', title: `目标“${goal.title}”存在日期风险`, detail: `预计完成 ${riskyGoal.expectedCompletion ? fmtDate(riskyGoal.expectedCompletion, 'M月d日') : '尚无法判断'}；期望 ${goal.desiredDate ? fmtDate(goal.desiredDate, 'M月d日') : '未设置'}，最晚 ${fmtDate(goal.latestDate, 'M月d日')}。`, action: 'replan' })
+    }
+    const totalSubjectActual = subjects.reduce((sum, item) => sum + item.actual, 0)
+    const dominant = subjects.filter(item => totalSubjectActual > 0 && item.actual / totalSubjectActual > state.settings.subjectShareLimit).sort((a, b) => b.actual - a.actual)[0]
+    if (dominant) result.push({ tone: 'neutral', title: `${dominant.subject}占当前范围有效学习时间 ${Math.round(dominant.actual / totalSubjectActual * 100)}%`, detail: '投入较集中，可结合剩余高优先级任务判断是否需要平衡。', action: 'subjects' })
+    return result.slice(0, 4)
+  }, [allDaily, subjects, state.settings.subjectShareLimit, goalRows, state.goals])
+
+  const positiveHeatMinutes = allDaily.map(row => row.actual).filter(value => value > 0).sort((a, b) => a - b)
+  const maxHeatMinutes = positiveHeatMinutes.length ? Math.max(1, positiveHeatMinutes[Math.min(positiveHeatMinutes.length - 1, Math.floor(positiveHeatMinutes.length * .9))]) : 1
+  const heatOffset = (getDay(parseISO(state.settings.startDate)) + 6) % 7
+  const heatCells: Array<DailyRow | undefined> = [...Array.from({ length: heatOffset }, () => undefined), ...allDaily]
+  const subjectRanking = [...subjects].sort((a, b) => b.actual - a.actual)
+  const heatLevel = (row: DailyRow) => {
+    const value = heatMetric === 'minutes' ? row.actual / maxHeatMinutes : row.workloadCompletion / 100
+    if (value <= 0) return 0
+    if (value < .25) return 1
+    if (value < .5) return 2
+    if (value < .75) return 3
+    return 4
+  }
+
+  const toggleSubject = (subject: Subject) => setExpandedSubjects(current => {
+    const next = new Set(current)
+    if (next.has(subject)) next.delete(subject)
+    else next.add(subject)
+    return next
+  })
+
+  const rangeLabel = preset === 'today' ? '今日' : preset === '7d' ? '近7天' : preset === 'week' ? '本周' : preset === 'all' ? '全部计划' : `${fmtDate(range.start, 'M.d')}—${fmtDate(range.end, 'M.d')}`
+
+  const openStatisticsReport = () => {
+    const reportWindow = window.open('', '_blank')
+    if (!reportWindow) {
+      setReportNotice('浏览器阻止了报告窗口，请允许本站打开新窗口后重试。')
+      return
+    }
+    reportWindow.opener = null
+    reportWindow.document.open()
+    reportWindow.document.write(buildStatisticsReportHtml(state, range))
+    reportWindow.document.close()
+    reportWindow.focus()
+    window.setTimeout(() => reportWindow.print(), 250)
+    setReportNotice('统计报告已打开，请在打印窗口选择“另存为 PDF”。')
+  }
+
+  return <div className="stats-page">
+    <section className="plan-perspective-bar"><div className="segmented-control"><button className={planPerspective === 'current' ? 'active' : ''} onClick={() => setPlanPerspective('current')}>目标概览</button><button className={planPerspective === 'history' ? 'active' : ''} onClick={() => setPlanPerspective('history')}>版本概览</button></div><div className="plan-perspective-actions"><span>{planPerspective === 'current' ? '查看当前目标、负载和预计' : `本机保存 ${state.planVersions.length} 个重大版本`}</span><button className="secondary-button" onClick={() => { setLedgerStart(range.start); setLedgerEnd(range.end > todayISO() ? todayISO() : range.end); setLedgerOpen(true) }}><Clock3 size={16}/>时间账本</button></div></section>
+    {planPerspective === 'current' ? <section className="stats-goal-overview"><header><div><h2>当前目标概览</h2><p>全局时间与完成总数按任务去重；每个目标仍独立计算自己的条件。</p></div><span>时长建议 {durationSuggestions.length}</span></header><div>{goalRows.length ? goalRows.map(row => { const goal = state.goals.find(item => item.id === row.goalId)!; return <article key={row.goalId}><strong>{goal.title}</strong><span>{row.completedCount}/{row.requiredCount} · {Math.round(row.progress*100)}%</span><small>预计 {row.expectedCompletion ? fmtDate(row.expectedCompletion) : row.completed ? '已完成' : '无法预计'} · 剩余 {minutesText(row.estimatedRemainingMinutes)}</small><em className={row.latestRisk ? 'risk' : row.desiredRisk ? 'warning' : ''}>{row.latestRisk ? '最晚日期风险' : row.desiredRisk ? '期望日期风险' : '正常'}</em></article> }) : <p className="muted-text">暂无目标。</p>}</div></section> : <section className="stats-version-overview"><header><h2>历史计划演变</h2><p>展示重大版本的目标、任务量、负载和移动历史；完整快照仅保存在当前设备。</p></header>{state.planVersions.length ? <div>{[...state.planVersions].reverse().map(version => <article key={version.id}><div><strong>{version.reason}</strong><span>{new Date(version.timestamp).toLocaleString()}</span></div><div><span>目标 {version.summary.goalCount}</span><span>任务组 {version.summary.groupCount}</span><span>任务 {version.summary.assignmentCount}</span><span>完成 {version.summary.completedCount}</span><span>移动 {version.summary.movedTaskCount}</span><span>计划负载 {minutesText(version.summary.scheduledMinutes)}</span></div></article>)}</div> : <p className="muted-text">尚无重大版本。</p>}</section>}
     <section className="stats-toolbar">
       <div className="stats-tabs">{([['overview', '概览'], ['trend', '趋势'], ['subjects', '科目'], ['quality', '执行状态']] as const).map(([value, label]) => <button key={value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{label}</button>)}</div>
       <div className="stats-toolbar-actions"><div className="stats-range-controls"><select value={preset} onChange={event => setPreset(event.target.value as RangePreset)}><option value="today">今日</option><option value="7d">近7天</option><option value="week">本周</option><option value="all">全部</option><option value="custom">自定义</option></select>{preset === 'custom' && <><input type="date" value={customStart} onChange={event => setCustomStart(event.target.value)}/><span>至</span><input type="date" value={customEnd} onChange={event => setCustomEnd(event.target.value)}/></>}<em>{rangeLabel}</em></div><button className="secondary-button" onClick={openStatisticsReport}><Download size={16}/>导出统计 PDF</button></div>
