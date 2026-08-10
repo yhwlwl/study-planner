@@ -23,7 +23,7 @@ export function GuidePage({ onNavigate }: { onNavigate: (page: GuidePageId) => v
     <section className="guide-hero">
       <div className="guide-hero-copy">
         <span className="guide-eyebrow"><BookOpen size={15}/>使用教程</span>
-        <h2>先把现实装进来，再让计划跟着你走</h2>
+        <h2>先录入任务，再让计划跟着你走</h2>
         <p>这不是一张静态待办清单。你先收集任务、设置可用时间，再用今日执行和复盘记录真实进展。现实变化时，系统只在你确认后修复计划。</p>
         <div className="guide-hero-actions">
           <button type="button" className="primary-button" onClick={() => onNavigate('intake')}><Inbox size={16}/>开始录入任务</button>
