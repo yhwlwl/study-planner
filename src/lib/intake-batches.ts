@@ -1,4 +1,4 @@
-import type { IntakeBatch, IntakeBatchSource, IntakeTaskGroupDraft, TaskGroupDraft } from '../types'
+import type { IntakeBatch, IntakeBatchSource, IntakeItemKind, IntakeTaskGroupDraft, TaskGroupDraft } from '../types'
 import { uid } from './id'
 
 /**
@@ -24,9 +24,11 @@ export function appendIntakeDraft(
   source: Exclude<IntakeBatchSource, 'mixed'>,
   now: string,
   id = uid('intake-item'),
+  kind: IntakeItemKind = 'group',
 ): IntakeTaskGroupDraft {
   const item: IntakeTaskGroupDraft = {
     ...structuredClone(draft),
+    kind,
     id,
     title: draft.title.trim(),
     quantity: Math.max(1, Math.round(draft.quantity)),

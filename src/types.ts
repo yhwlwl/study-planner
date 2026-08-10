@@ -615,14 +615,18 @@ export interface TaskGroupDraft {
 
 export type IntakeBatchStatus = 'editing' | 'pending' | 'calculating' | 'applied' | 'archived'
 export type IntakeBatchSource = 'manual' | 'paste' | 'csv' | 'xlsx' | 'mixed'
+export type IntakeItemKind = 'single' | 'group'
 
 export interface IntakeTaskGroupDraft extends TaskGroupDraft {
+  /** 旧批次没有该字段时按任务组处理。 */
+  kind?: IntakeItemKind
   id: string
   createdAt: string
   updatedAt: string
   source: Exclude<IntakeBatchSource, 'mixed'>
   appliedAt?: string
   appliedGroupId?: string
+  appliedAssignmentId?: string
 }
 
 export interface IntakeBatch {
@@ -768,6 +772,8 @@ export interface ReplanRequest {
   fromDate: string
   strategy?: ReplanStrategy
   freezeDays?: number
+  /** 本次完整重排是否允许把未来任务纳入今天的候选窗口。 */
+  includeToday?: boolean
   todayExtraMinutes?: number
   /** 用户逐项允许的未来任务进入今天的任务 ID；仅对本轮计算生效。 */
   allowTodayIncomingAssignments?: string[]
@@ -777,6 +783,15 @@ export interface ReplanRequest {
   limitOverrides?: ReplanLimitOverride[]
   localRadius?: number
   affectedAssignmentIds?: string[]
+  /** 一次减负操作的可执行负载条件；只在本次方案计算中生效。 */
+  loadConstraints?: {
+    startDate: ISODate
+    endDate: ISODate
+    maxMinutesPerDay?: number
+    lightDaysPerWeek?: number
+    maxHighLoadStreak?: number
+    maxLongHighPerDay?: number
+  }
   event?: PlanChangeEvent
   /** summary 只生成方案摘要；full 额外计算逐项解释和替代日期。 */
   explanationLevel?: 'summary' | 'full'

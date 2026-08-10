@@ -57,7 +57,9 @@ interface AppContextValue {
   createIntakeBatch: (name?: string) => string
   duplicateIntakeBatch: (batchId: string) => string
   updateIntakeBatch: (id: string, patch: Partial<Pick<IntakeBatch, 'name' | 'status' | 'lastEditedItemId'>>) => void
+  addIntakeSingleTask: (batchId: string, draft: NewTaskDraft) => string
   addIntakeTaskGroup: (batchId: string, draft: TaskGroupDraft, source?: Exclude<IntakeBatchSource, 'mixed'>) => string
+  updateIntakeSingleTask: (batchId: string, itemId: string, draft: NewTaskDraft) => void
   updateIntakeTaskGroup: (batchId: string, itemId: string, draft: TaskGroupDraft) => void
   removeIntakeTaskGroup: (batchId: string, itemId: string) => void
   deleteIntakeBatch: (batchId: string) => void
@@ -152,6 +154,46 @@ function taskGroupFromDraft(draft: TaskGroupDraft, state: AppState, now: string)
     splitSessionMinutes: !recurring && draft.allowSplit ? draft.splitSessionMinutes : undefined,
     prerequisiteGroupIds: !recurring ? Array.from(new Set(draft.prerequisiteGroupIds ?? [])) : [],
     notes: draft.notes, status: 'active', createdAt: now, updatedAt: now,
+  }
+}
+
+function taskGroupDraftFromSingleTask(draft: NewTaskDraft): TaskGroupDraft {
+  return {
+    title: draft.title.trim(),
+    subject: draft.subject?.trim() || '其他',
+    priority: draft.priority ?? 3,
+    unitMinutes: Math.max(1, Math.round(draft.estimatedMinutes)),
+    activityType: 'normal',
+    highIntensity: false,
+    countInStats: true,
+    quantity: 1,
+    notes: draft.notes,
+    goalIds: [],
+    recurring: false,
+    allowSplit: false,
+    prerequisiteGroupIds: [],
+  }
+}
+
+function taskGroupFromIntakeDraft(draft: IntakeTaskGroupDraft, state: AppState, now: string): TaskGroup {
+  const group = taskGroupFromDraft(draft, state, now)
+  if (draft.kind !== 'single') return group
+  return {
+    ...group,
+    quantity: 1,
+    sourceQuantity: 1,
+    dailyMax: undefined,
+    recurring: false,
+    recurrenceStart: undefined,
+    recurrenceEnd: undefined,
+    recurrenceWeekdays: undefined,
+    hidden: true,
+    hiddenStandalone: true,
+    activityType: 'normal',
+    highIntensity: false,
+    allowSplit: false,
+    splitSessionMinutes: undefined,
+    prerequisiteGroupIds: [],
   }
 }
 
@@ -740,6 +782,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         updatedAt: now,
         appliedAt: undefined,
         appliedGroupId: undefined,
+        appliedAssignmentId: undefined,
       }))
       draft.intakeBatches.push({
         id,
@@ -778,11 +821,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return id
   }, [commit])
 
+  const addIntakeSingleTask = useCallback((batchId: string, draft: NewTaskDraft) => {
+    const id = uid('intake-item')
+    const now = nowISO()
+    commit(stateDraft => {
+      const batch = stateDraft.intakeBatches.find(item => item.id === batchId)
+      if (!batch) return
+      appendIntakeDraft(batch, taskGroupDraftFromSingleTask(draft), 'manual', now, id, 'single')
+    }, { history: false })
+    return id
+  }, [commit])
+
+  const updateIntakeSingleTask = useCallback((batchId: string, itemId: string, draft: NewTaskDraft) => commit(stateDraft => {
+    const batch = stateDraft.intakeBatches.find(item => item.id === batchId)
+    const item = batch?.taskGroups.find(candidate => candidate.id === itemId)
+    if (!batch || !item || item.appliedAt) return
+    const normalized = taskGroupDraftFromSingleTask(draft)
+    Object.assign(item, structuredClone(normalized), {
+      kind: 'single' as const,
+      id: item.id,
+      source: item.source,
+      createdAt: item.createdAt,
+      updatedAt: nowISO(),
+    })
+    batch.status = 'editing'
+    batch.lastEditedItemId = itemId
+    batch.updatedAt = nowISO()
+  }, { history: false }), [commit])
+
   const updateIntakeTaskGroup = useCallback((batchId: string, itemId: string, draft: TaskGroupDraft) => commit(stateDraft => {
     const batch = stateDraft.intakeBatches.find(item => item.id === batchId)
     const item = batch?.taskGroups.find(candidate => candidate.id === itemId)
     if (!batch || !item || item.appliedAt) return
     Object.assign(item, structuredClone(draft), {
+      kind: 'group' as const,
       id: item.id,
       source: item.source,
       createdAt: item.createdAt,
@@ -825,7 +897,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const createdGroupIds: string[] = []
     const affectedGoalIds = new Set<string>()
     const affectedDates = new Set<string>()
-    const preparedGroups = selected.map(item => ({ item, group: taskGroupFromDraft(item, next, now) }))
+    const preparedGroups = selected.map(item => ({ item, group: taskGroupFromIntakeDraft(item, next, now) }))
     const titleLookup = new Map<string, string>()
     for (const group of [...next.taskGroups, ...preparedGroups.map(entry => entry.group)]) if (!titleLookup.has(group.title.trim().toLowerCase())) titleLookup.set(group.title.trim().toLowerCase(), group.id)
     for (const entry of preparedGroups) {
@@ -899,6 +971,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       item.appliedAt = now
       item.appliedGroupId = group.id
+      item.appliedAssignmentId = item.kind === 'single' ? assignments[0]?.id : undefined
       item.updatedAt = now
     }
     batch.status = batch.taskGroups.every(item => Boolean(item.appliedAt)) ? 'applied' : 'editing'
@@ -907,7 +980,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       type: 'new-task-insertion',
       action: 'insert',
       title: `安排录入批次：${batch.name}`,
-      description: `本次统一加入 ${createdGroupIds.length} 个任务组、${createdAssignmentIds.length} 项任务；确认方案前不会改变正式计划。`,
+      description: `本次统一加入 ${selected.length} 项录入内容，共生成 ${createdAssignmentIds.length} 项任务；确认方案前不会改变正式计划。`,
       affectedGoalIds: [...affectedGoalIds],
       affectedGroupIds: createdGroupIds,
       affectedAssignmentIds: createdAssignmentIds,
@@ -1372,7 +1445,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     commit, replaceState, loadDataSpace, setDataSpace, clearDataSpace, undo,
     updateSettings, updateDayConfig, updateAssignment, moveAssignments, finishAssignment, reopenAssignment, addTime, updateTimeEntry, deleteTimeEntry, captureDailyPlanBaseline,
     addTaskGroup, editTaskGroup, deleteTaskGroup, removeAssignment, prepareTaskGroupDelete, prepareAssignmentDelete, prepareAssignmentGroupChange,
-    prepareSingleAssignment, prepareTaskGroup, createIntakeBatch, duplicateIntakeBatch, updateIntakeBatch, addIntakeTaskGroup, updateIntakeTaskGroup, removeIntakeTaskGroup, deleteIntakeBatch, prepareIntakeBatch,
+    prepareSingleAssignment, prepareTaskGroup, createIntakeBatch, duplicateIntakeBatch, updateIntakeBatch, addIntakeSingleTask, addIntakeTaskGroup, updateIntakeSingleTask, updateIntakeTaskGroup, removeIntakeTaskGroup, deleteIntakeBatch, prepareIntakeBatch,
     prepareTaskGroupEdit, prepareGoalChange, prepareGoalDelete, updateGoalMetadata, prepareCalendarConstraintChange, updateCalendarConstraintMetadata, prepareDurationChange, prepareReviewCompletion,
     generateProposals, applySchedulingProposal, applyPreparedWithoutScheduling,
     restoreReplanHistory, recordReview, completeReview, previewPlanVersion, restorePlanVersion,
@@ -1382,7 +1455,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     state, namespace, ready, loadedFromStorage, commit, replaceState, loadDataSpace, setDataSpace, clearDataSpace, undo,
     updateSettings, updateDayConfig, updateAssignment, moveAssignments, finishAssignment, reopenAssignment, addTime, updateTimeEntry, deleteTimeEntry, captureDailyPlanBaseline,
     addTaskGroup, editTaskGroup, deleteTaskGroup, removeAssignment, prepareTaskGroupDelete, prepareAssignmentDelete, prepareAssignmentGroupChange, prepareSingleAssignment, prepareTaskGroup,
-    createIntakeBatch, duplicateIntakeBatch, updateIntakeBatch, addIntakeTaskGroup, updateIntakeTaskGroup, removeIntakeTaskGroup, deleteIntakeBatch, prepareIntakeBatch, prepareTaskGroupEdit, prepareGoalChange,
+    createIntakeBatch, duplicateIntakeBatch, updateIntakeBatch, addIntakeSingleTask, addIntakeTaskGroup, updateIntakeSingleTask, updateIntakeTaskGroup, removeIntakeTaskGroup, deleteIntakeBatch, prepareIntakeBatch, prepareTaskGroupEdit, prepareGoalChange,
     prepareGoalDelete, updateGoalMetadata, prepareCalendarConstraintChange, updateCalendarConstraintMetadata, prepareDurationChange, prepareReviewCompletion, generateProposals, applySchedulingProposal,
     applyPreparedWithoutScheduling, restoreReplanHistory, recordReview, completeReview,
     previewPlanVersion, restorePlanVersion, startTimer, pauseTimer, stopTimer, resetAll,

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-09T12:28:47.809Z",
+  "generatedAt": "2026-08-10T02:50:44.133Z",
   "pass": true,
   "previewIssues": 2,
   "issueTitles": [
@@ -7,17 +7,17 @@
     "化学预习课节数"
   ],
   "proposals": 1,
-  "legalDate": "2026-08-12",
+  "legalDate": "2026-08-13",
   "partialDecisionProposals": 1,
   "acceptedExceptionKeys": [
     "capacity"
   ],
-  "recalculatedDate": "2026-08-10",
+  "recalculatedDate": "2026-08-11",
   "selectedCandidatePartialDecision": true,
   "minimumScopedAssignments": [
     "cap-task"
   ],
-  "recalculatedSelectedDate": "2026-08-10",
+  "recalculatedSelectedDate": "2026-08-11",
   "completedHistoryExcluded": true,
   "nonWorseningOverloadAllowed": true,
   "incomingTaskStillValidated": true,

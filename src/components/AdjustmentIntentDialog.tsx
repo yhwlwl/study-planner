@@ -1,176 +1,327 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { AppState, PlanChangeEvent, SchedulingPreference } from '../types'
+import {
+  ArrowUpRight, CalendarDays, CheckCircle2, ChevronLeft, Clock3, ListChecks,
+  RefreshCw, SlidersHorizontal, Sparkles,
+} from 'lucide-react'
+import type { AppState, DurationSuggestion, PlanChangeEvent, SchedulingPreference } from '../types'
+import { analyzePlan, allDurationSuggestions } from '../lib/planner'
 import { cloneActiveState } from '../lib/state'
+import { dateRange, getCapacity, shiftDate, todayISO } from '../lib/date'
 import { uid } from '../lib/id'
-import { dateRange, todayISO } from '../lib/date'
 import { Modal } from './Modal'
 import { NumericInput } from './NumericInput'
 
-type AdjustmentReason = 'availability-change' | 'current-conflicts' | 'too-tiring' | 'future-replan' | 'execution-difference'
-type LoadOutcome = 'daily-lower' | 'light-days' | 'avoid-streak' | 'spread-intensity'
+export type AdjustmentReason = 'current-conflicts' | 'too-tiring' | 'future-replan' | 'execution-difference'
+type ActiveAction = 'center' | 'availability' | 'deadline' | 'bulk-move' | 'current-conflicts' | 'duration' | 'load' | 'replan'
+type LoadPreference = 'preserve' | 'balanced' | 'goal' | 'rest'
 type ReplanOutcome = 'preserve' | 'balanced' | 'goal' | 'rest'
 
-const reasonCopy: Record<AdjustmentReason, { title: string; description: string; action: PlanChangeEvent['action']; eventType: PlanChangeEvent['type'] }> = {
-  'availability-change': { title: '这几天没空或需要休息', description: '把临时行程、生病或休息日直接标到日期上，再修复受影响任务。', action: 'repair', eventType: 'availability-change' },
-  'current-conflicts': { title: '有任务冲突或排不下', description: '处理超容量、每日上限、未安排任务和目标期限风险。', action: 'repair', eventType: 'execution-difference' },
-  'too-tiring': { title: '最近太累，想减轻计划', description: '降低连续高负载、长任务和高强度集中。', action: 'optimize', eventType: 'load-preference-change' },
-  'future-replan': { title: '未来安排需要重新组织', description: '重新评估剩余日期，同时保护执行记录和人工安排。', action: 'rebuild', eventType: 'future-replanning' },
-  'execution-difference': { title: '处理执行后的变化', description: '针对复盘或实际执行差异修复后续计划。', action: 'repair', eventType: 'execution-difference' },
+const preferenceCopy: Record<LoadPreference, { title: string; description: string }> = {
+  preserve: { title: '尽量保持现在的安排', description: '只在新条件确实放不下时移动任务。' },
+  balanced: { title: '让每天更均匀', description: '在不突破硬约束的前提下平衡每天的负载。' },
+  goal: { title: '优先保障最近目标', description: '优先把临近目标日期的任务安排好。' },
+  rest: { title: '留出更多休息空间', description: '接受更多缓冲，减少连续高负载。' },
 }
 
-const loadOutcomes: Record<LoadOutcome, { title: string; description: string; preference: SchedulingPreference }> = {
-  'daily-lower': { title: '每天少安排一些', description: '优先降低普通日总负载，允许完成日期适度后移但不越过最晚期限。', preference: 'rest' },
-  'light-days': { title: '增加完整轻量日', description: '在未来周期中保留更明显的恢复日和缓冲空间。', preference: 'rest' },
-  'avoid-streak': { title: '避免连续高负载', description: '重点打散连续满载或接近满载的日期。', preference: 'balanced' },
-  'spread-intensity': { title: '分散长任务和高强度', description: '减少同一天或连续几天集中出现长任务和高强度任务。', preference: 'balanced' },
+const actionGroups: Array<{ title: string; description: string; items: Array<{ id: Exclude<ActiveAction, 'center'>; title: string; description: string; tone?: 'attention' | 'secondary' }> }> = [
+  {
+    title: '调整计划条件',
+    description: '先说明新的日期、期限或移动要求，系统再计算受影响的任务。',
+    items: [
+      { id: 'availability', title: '调整日期可用时间', description: '临时有事、休息或只能学习一会儿。' },
+      { id: 'deadline', title: '修改任务或目标期限', description: '截止日期提前、推迟或完成要求发生变化。' },
+      { id: 'bulk-move', title: '批量移动任务', description: '将所选任务移到某天，或整体顺延若干天。' },
+    ],
+  },
+  {
+    title: '根据当前状态调整',
+    description: '处理已经出现的问题，或明确告诉系统未来要怎么取舍。',
+    items: [
+      { id: 'current-conflicts', title: '修复当前计划问题', description: '只处理已检测到的容量、期限或规则冲突。', tone: 'attention' },
+      { id: 'duration', title: '校准任务预计时长', description: '根据同类任务的实际用时更新未来预计；有新冲突才调整日期。' },
+      { id: 'load', title: '减少未来一段时间的负载', description: '设置每日上限、轻量日、连续高负载和长任务条件。' },
+      { id: 'replan', title: '重新安排剩余计划', description: '保留历史、已完成和锁定内容，重新计算未完成任务。' },
+    ],
+  },
+]
+
+function inPlanDate(date: string, state: AppState) {
+  return date < state.settings.startDate ? state.settings.startDate : date > state.settings.endDate ? state.settings.endDate : date
 }
 
-const replanOutcomes: Record<ReplanOutcome, { title: string; description: string; preference: SchedulingPreference }> = {
-  preserve: { title: '尽量保持现在的安排', description: '只在确有必要时移动任务。', preference: 'preserve' },
-  balanced: { title: '让每天更均匀', description: '平衡负载、科目、强度和长任务。', preference: 'balanced' },
-  goal: { title: '更早保障最近目标', description: '优先满足最近的目标日期。', preference: 'goal' },
-  rest: { title: '留出更多休息空间', description: '降低连续高负载并增加缓冲。', preference: 'rest' },
+function ActionCard({ title, description, tone, onClick }: { title: string; description: string; tone?: 'attention' | 'secondary'; onClick: () => void }) {
+  return <button type="button" className={`adjustment-action-card ${tone ?? ''}`} onClick={onClick}>
+    <span className="adjustment-action-copy"><strong>{title}</strong><span>{description}</span></span>
+    <ArrowUpRight size={18} aria-hidden="true" />
+  </button>
 }
 
-export function AdjustmentIntentDialog({ open, state, initialDate, initialReason = 'current-conflicts', onClose, onPrepared, onNavigate }: {
+function ActionHeader({ title, description, onBack }: { title: string; description: string; onBack: () => void }) {
+  return <>
+    <button type="button" className="adjustment-back-button" onClick={onBack}><ChevronLeft size={17} />返回调整中心</button>
+    <section className="adjustment-action-header">
+      <div className="adjustment-action-icon"><SlidersHorizontal size={21} /></div>
+      <div><strong>{title}</strong><p>{description}</p></div>
+    </section>
+  </>
+}
+
+export function AdjustmentIntentDialog({
+  open, state, initialDate, initialReason = 'current-conflicts', onClose, onPrepared,
+  onOpenIntake, onOpenDeadline, onOpenBulkMove, onDurationSuggestion,
+}: {
   open: boolean
   state: AppState
   initialDate?: string
   initialReason?: AdjustmentReason
   onClose: () => void
   onPrepared: (prepared: AppState, event: PlanChangeEvent) => void
-  onNavigate?: (target: 'intake' | 'goals' | 'calendar' | 'tasks') => void
+  onOpenIntake?: () => void
+  onOpenDeadline?: () => void
+  onOpenBulkMove?: () => void
+  onDurationSuggestion?: (suggestion: DurationSuggestion) => void
 }) {
-  const [reason, setReason] = useState<AdjustmentReason>(initialReason)
-  const [loadOutcome, setLoadOutcome] = useState<LoadOutcome>('daily-lower')
-  const [replanOutcome, setReplanOutcome] = useState<ReplanOutcome>('balanced')
-  const [todayMode, setTodayMode] = useState<'none' | '30' | '60' | 'custom'>('none')
-  const [customMinutes, setCustomMinutes] = useState(30)
-  const defaultConstraintDate = initialDate ?? (todayISO() < state.settings.startDate ? state.settings.startDate : todayISO() > state.settings.endDate ? state.settings.endDate : todayISO())
-  const [constraintStart, setConstraintStart] = useState(defaultConstraintDate)
-  const [constraintEnd, setConstraintEnd] = useState(defaultConstraintDate)
+  const today = todayISO()
+  const defaultDate = inPlanDate(initialDate ?? today, state)
+  const [activeAction, setActiveAction] = useState<ActiveAction>('center')
+  const [availabilityStart, setAvailabilityStart] = useState(defaultDate)
+  const [availabilityEnd, setAvailabilityEnd] = useState(defaultDate)
   const [availabilityMode, setAvailabilityMode] = useState<'unavailable' | 'reduced'>('unavailable')
   const [availableMinutes, setAvailableMinutes] = useState(60)
   const [availabilityReason, setAvailabilityReason] = useState('临时没有学习时间')
+  const [loadStart, setLoadStart] = useState(defaultDate)
+  const [loadEnd, setLoadEnd] = useState(inPlanDate(shiftDate(defaultDate, 6), state))
+  const [loadDailyMax, setLoadDailyMax] = useState(Math.max(30, Math.round(getCapacity(state, defaultDate) * 0.8)))
+  const [lightDaysPerWeek, setLightDaysPerWeek] = useState(1)
+  const [maxHighLoadStreak, setMaxHighLoadStreak] = useState(2)
+  const [maxLongHighPerDay, setMaxLongHighPerDay] = useState(1)
+  const [loadPreference, setLoadPreference] = useState<LoadPreference>('rest')
+  const [replanStart, setReplanStart] = useState(defaultDate)
+  const [includeToday, setIncludeToday] = useState(false)
+  const [replanSubject, setReplanSubject] = useState('all')
+  const [replanOutcome, setReplanOutcome] = useState<ReplanOutcome>('balanced')
+  const [todayMode, setTodayMode] = useState<'none' | '30' | '60' | 'custom'>('none')
+  const [customMinutes, setCustomMinutes] = useState(30)
+
+  const currentIssues = useMemo(() => analyzePlan(state, today).filter(issue => issue.level === 'danger'), [state, today])
+  const durationSuggestions = useMemo(() => allDurationSuggestions(state), [state])
+  const subjects = useMemo(() => Array.from(new Set(state.taskGroups.map(group => group.subject))).sort(), [state.taskGroups])
+  const initialAction: ActiveAction = initialReason === 'too-tiring' ? 'load' : initialReason === 'future-replan' ? 'replan' : initialDate ? 'current-conflicts' : 'center'
+
   useEffect(() => {
     if (!open) return
-    setReason(initialReason)
-    setLoadOutcome('daily-lower')
-    setReplanOutcome('balanced')
-    setTodayMode('none')
-    setCustomMinutes(30)
-    setConstraintStart(defaultConstraintDate)
-    setConstraintEnd(defaultConstraintDate)
+    setActiveAction(initialAction)
+    setAvailabilityStart(defaultDate)
+    setAvailabilityEnd(defaultDate)
     setAvailabilityMode('unavailable')
     setAvailableMinutes(60)
     setAvailabilityReason('临时没有学习时间')
-  }, [open, initialReason, initialDate, defaultConstraintDate])
-  const copy = reasonCopy[reason]
-  const showTodayCapacity = (initialDate ?? todayISO()) === todayISO() && (reason === 'current-conflicts' || reason === 'future-replan')
-  const todayExtraMinutes = showTodayCapacity ? (todayMode === '30' ? 30 : todayMode === '60' ? 60 : todayMode === 'custom' ? customMinutes : 0) : 0
-  const selectedPreference = reason === 'too-tiring' ? loadOutcomes[loadOutcome].preference : reason === 'future-replan' ? replanOutcomes[replanOutcome].preference : 'preserve'
-  const preferenceOrder = useMemo(() => [selectedPreference, ...(['preserve', 'balanced', 'goal', 'rest'] as SchedulingPreference[]).filter(item => item !== selectedPreference)], [selectedPreference])
-  const outcomeLabel = reason === 'too-tiring' ? loadOutcomes[loadOutcome].title : reason === 'future-replan' ? replanOutcomes[replanOutcome].title : undefined
+    setLoadStart(defaultDate)
+    setLoadEnd(inPlanDate(shiftDate(defaultDate, 6), state))
+    setLoadDailyMax(Math.max(30, Math.round(getCapacity(state, defaultDate) * 0.8)))
+    setLightDaysPerWeek(1)
+    setMaxHighLoadStreak(2)
+    setMaxLongHighPerDay(1)
+    setLoadPreference('rest')
+    setReplanStart(defaultDate)
+    setIncludeToday(false)
+    setReplanSubject('all')
+    setReplanOutcome('balanced')
+    setTodayMode('none')
+    setCustomMinutes(30)
+  }, [open, initialAction, defaultDate, state])
+
+  const backToCenter = () => setActiveAction('center')
+  const todayExtraMinutes = todayMode === '30' ? 30 : todayMode === '60' ? 60 : todayMode === 'custom' ? Math.max(0, customMinutes) : 0
 
   const submit = () => {
     const now = new Date().toISOString()
-    const availabilityDates = reason === 'availability-change' && constraintStart && constraintEnd && constraintStart <= constraintEnd
-      ? dateRange(constraintStart, constraintEnd)
-      : []
-    const event: PlanChangeEvent = {
-      id: uid('event'), type: copy.eventType, action: copy.action,
-      title: copy.title, description: outcomeLabel ? `${copy.description} 本次希望：${outcomeLabel}。` : copy.description,
-      affectedGoalIds: [], affectedGroupIds: [], affectedAssignmentIds: [],
-      affectedDates: availabilityDates.length ? availabilityDates : initialDate ? [initialDate] : [], createdAt: now,
-      metadata: {
-        preferredPreference: selectedPreference,
-        preferredPreferences: preferenceOrder,
-        requestedOutcome: reason === 'too-tiring' ? loadOutcome : reason === 'future-replan' ? replanOutcome : 'fix-current',
-        todayExtraMinutes,
-        sourceDate: initialDate ?? todayISO(),
-        availabilityMode: reason === 'availability-change' ? availabilityMode : undefined,
-        capacityMinutes: reason === 'availability-change' ? (availabilityMode === 'unavailable' ? 0 : availableMinutes) : undefined,
-      },
-    }
     const prepared = cloneActiveState(state)
-    if (reason === 'availability-change') {
-      if (!availabilityDates.length) return
+    let event: PlanChangeEvent
+
+    if (activeAction === 'availability') {
+      if (!availabilityStart || !availabilityEnd || availabilityStart > availabilityEnd) return
+      const dates = dateRange(availabilityStart, availabilityEnd)
       prepared.calendarConstraints.push({
-        id: uid('constraint'), startDate: constraintStart, endDate: constraintEnd,
+        id: uid('constraint'), startDate: availabilityStart, endDate: availabilityEnd,
         kind: availabilityMode === 'unavailable' ? 'unavailable' : 'reduced-capacity',
         capacityMinutes: availabilityMode === 'unavailable' ? 0 : Math.max(0, Math.min(1440, availableMinutes)),
-        protected: true, reason: availabilityReason.trim() || copy.title,
-        createdAt: now, updatedAt: now,
+        protected: true, reason: availabilityReason.trim() || '调整日期可用时间', createdAt: now, updatedAt: now,
       })
-      event.description = `${constraintStart} 至 ${constraintEnd}：${availabilityMode === 'unavailable' ? '完全不安排学习任务' : `可用 ${Math.max(0, Math.min(1440, availableMinutes))} 分钟`}。系统将保护这段日期并先预览受影响任务。`
+      event = {
+        id: uid('event'), type: 'availability-change', action: 'repair', title: '调整日期可用时间',
+        description: `${availabilityStart} 至 ${availabilityEnd}：${availabilityMode === 'unavailable' ? '完全不安排学习任务' : `每天可用 ${Math.max(0, Math.min(1440, availableMinutes))} 分钟`}。系统会保护这段日期并预览受影响任务。`,
+        affectedGoalIds: [], affectedGroupIds: [], affectedAssignmentIds: [], affectedDates: dates, createdAt: now,
+        metadata: { availabilityMode, capacityMinutes: availabilityMode === 'unavailable' ? 0 : availableMinutes, preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'] },
+      }
+    } else if (activeAction === 'current-conflicts') {
+      event = {
+        id: uid('event'), type: 'execution-difference', action: 'repair', title: '修复当前计划问题',
+        description: `当前检测到 ${currentIssues.length} 个容量、期限或规则问题。只处理这些问题，不主动重写没有问题的未来安排。`,
+        affectedGoalIds: [], affectedGroupIds: [], affectedAssignmentIds: [],
+        affectedDates: currentIssues.flatMap(issue => issue.date ? [issue.date] : []).filter((date, index, values) => values.indexOf(date) === index), createdAt: now,
+        metadata: { preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'], requestedOutcome: 'fix-current', sourceDate: initialDate ?? today },
+      }
+    } else if (activeAction === 'load') {
+      const start = loadStart <= loadEnd ? loadStart : loadEnd
+      const end = loadStart <= loadEnd ? loadEnd : loadStart
+      const loadConstraints = {
+        startDate: start, endDate: end,
+        maxMinutesPerDay: Math.max(30, Math.min(1440, Math.round(loadDailyMax))),
+        lightDaysPerWeek: Math.max(0, Math.min(7, Math.round(lightDaysPerWeek))),
+        maxHighLoadStreak: Math.max(0, Math.min(14, Math.round(maxHighLoadStreak))),
+        maxLongHighPerDay: Math.max(0, Math.min(10, Math.round(maxLongHighPerDay))),
+      }
+      event = {
+        id: uid('event'), type: 'load-preference-change', action: 'optimize', title: '减少未来一段时间的负载',
+        description: `${start} 至 ${end}：每天最多 ${loadConstraints.maxMinutesPerDay} 分钟；每周至少 ${loadConstraints.lightDaysPerWeek} 个轻量日；最多连续 ${loadConstraints.maxHighLoadStreak} 个高负载日；每天最多 ${loadConstraints.maxLongHighPerDay} 个长任务或高强度任务。`,
+        affectedGoalIds: [], affectedGroupIds: [], affectedAssignmentIds: [], affectedDates: dateRange(start, end), createdAt: now,
+        metadata: {
+          preferredPreference: loadPreference, preferredPreferences: [loadPreference, ...(['preserve', 'balanced', 'goal', 'rest'] as SchedulingPreference[]).filter(item => item !== loadPreference)],
+          loadConstraints, requestedOutcome: 'reduce-load', sourceDate: start,
+        },
+      }
+    } else if (activeAction === 'replan') {
+      const candidates = state.assignments.filter(item => {
+        if (item.status === 'done' || state.timer.assignmentId === item.id) return false
+        if (replanSubject === 'all') return true
+        return state.taskGroups.find(group => group.id === item.groupId)?.subject === replanSubject
+      })
+      const fixedAssignmentIds = replanSubject === 'all'
+        ? []
+        : state.assignments.filter(item => !candidates.some(candidate => candidate.id === item.id) && item.status !== 'done').map(item => item.id)
+      const preferences: SchedulingPreference[] = [replanOutcome, ...(['preserve', 'balanced', 'goal', 'rest'] as SchedulingPreference[]).filter(item => item !== replanOutcome)]
+      event = {
+        id: uid('event'), type: 'future-replanning', action: 'rebuild', title: '重新安排剩余计划',
+        description: `从 ${replanStart} 开始${includeToday ? '，包含今天' : '，不改动今天'}；${replanSubject === 'all' ? '重新计算全部未完成任务' : `只调整“${replanSubject}”任务`}；${preferenceCopy[replanOutcome].description}`,
+        affectedGoalIds: [], affectedGroupIds: [], affectedAssignmentIds: candidates.map(item => item.id),
+        affectedDates: [replanStart], createdAt: now,
+        metadata: {
+          preferredPreference: replanOutcome, preferredPreferences: preferences, requestedOutcome: replanOutcome,
+          fromDate: replanStart, includeToday, fixedAssignmentIds: fixedAssignmentIds.length ? fixedAssignmentIds : undefined,
+          scopeSubject: replanSubject, todayExtraMinutes,
+        },
+      }
+    } else {
+      return
     }
+
     prepared.changeEvents = [...prepared.changeEvents, event].slice(-100)
     prepared.updatedAt = now
     onPrepared(prepared, event)
   }
 
-  return <Modal open={open} title="计划有变化" onClose={onClose} wide mobileFullscreen className="adjustment-modal">
-    <div className="adjustment-dialog-shell">
-      <section className="adjustment-intro">
-        <div>
-          <span className="adjustment-eyebrow">计划有变化</span>
-          <strong>用当前发生的事来选择，不必理解调度术语</strong>
-          <p>系统会先生成一个推荐方案；确认前不会修改计划，之后仍可比较其他实质不同的方案。</p>
-        </div>
-        <div className="adjustment-intro-badges"><span>改动先预览</span><span>方案可比较</span><span>决定权归你</span></div>
-      </section>
-
-      {onNavigate && <nav className="adjustment-scenario-links" aria-label="常见变化快捷入口">
-        <button type="button" onClick={() => setReason('availability-change')}><strong>临时没空／身体不舒服</strong><span>设置一段不可用或降容日期</span></button>
-        <button type="button" onClick={() => { onClose(); onNavigate('intake') }}><strong>突然多了一批任务</strong><span>先收进录入工作区，确认后再排期</span></button>
-        <button type="button" onClick={() => { onClose(); onNavigate('goals') }}><strong>截止日期提前或推迟</strong><span>修改目标期限并查看影响</span></button>
-        <button type="button" onClick={() => { onClose(); onNavigate('calendar') }}><strong>把未来任务移到今天／顺延</strong><span>在月历中选任务和目标日期，可一次性豁免今天接收规则</span></button>
-        <button type="button" onClick={() => setReason('execution-difference')}><strong>今天比预计更快或更慢</strong><span>按已经记录的实际执行修复后续</span></button>
-        <button type="button" onClick={() => setReason('too-tiring')}><strong>想减轻未来几天</strong><span>选择减负方式并比较结果</span></button>
-        <button type="button" onClick={() => setReason('future-replan')}><strong>想重组整个未来计划</strong><span>保留历史后重新评估剩余安排</span></button>
-      </nav>}
-
-      <div className="adjustment-layout">
-        <main className="adjustment-main">
-          <section className="adjustment-step">
-            <header className="adjustment-step-header"><span className="adjustment-step-index">1</span><div><strong>这次为什么需要调整？</strong><p>选择最接近当前情况的一项。</p></div></header>
-            <div className="adjustment-reason-grid">
-              {(Object.keys(reasonCopy) as AdjustmentReason[]).filter(item => item !== 'execution-difference' || initialReason === 'execution-difference' || reason === 'execution-difference').map(item => <button type="button" key={item} className={reason === item ? 'selected' : ''} onClick={() => setReason(item)}><span className="choice-indicator">{reason === item ? '已选择' : '选择'}</span><strong>{reasonCopy[item].title}</strong><span>{reasonCopy[item].description}</span></button>)}
-            </div>
-          </section>
-
-          {reason === 'too-tiring' && <section className="adjustment-step adjustment-section"><header className="adjustment-step-header"><span className="adjustment-step-index">2</span><div><strong>你最希望怎样减轻计划？</strong><p>选择最重要的结果，之后仍可比较其他方案。</p></div></header><div className="adjustment-outcome-grid">{(Object.keys(loadOutcomes) as LoadOutcome[]).map(item => <button type="button" key={item} className={loadOutcome === item ? 'selected' : ''} onClick={() => setLoadOutcome(item)}><span className="choice-indicator">{loadOutcome === item ? '已选择' : '选择'}</span><strong>{loadOutcomes[item].title}</strong><small>{loadOutcomes[item].description}</small></button>)}</div></section>}
-
-          {reason === 'future-replan' && <section className="adjustment-step adjustment-section"><header className="adjustment-step-header"><span className="adjustment-step-index">2</span><div><strong>这次重组最希望得到什么？</strong><p>选择主要取舍；所有永久硬约束继续生效。</p></div></header><div className="adjustment-outcome-grid">{(Object.keys(replanOutcomes) as ReplanOutcome[]).map(item => <button type="button" key={item} className={replanOutcome === item ? 'selected' : ''} onClick={() => setReplanOutcome(item)}><span className="choice-indicator">{replanOutcome === item ? '已选择' : '选择'}</span><strong>{replanOutcomes[item].title}</strong><small>{replanOutcomes[item].description}</small></button>)}</div></section>}
-
-          {reason === 'availability-change' && <section className="adjustment-step adjustment-section">
-            <header className="adjustment-step-header"><span className="adjustment-step-index">2</span><div><strong>哪几天、还能安排多少？</strong><p>这段日期会被保护，后续任务只能通过明确例外移入。</p></div></header>
-            <div className="adjustment-availability-form">
-              <label className="field"><span>开始日期</span><input type="date" min={state.settings.startDate} max={state.settings.endDate} value={constraintStart} onChange={event => { setConstraintStart(event.target.value); if (constraintEnd < event.target.value) setConstraintEnd(event.target.value) }}/></label>
-              <label className="field"><span>结束日期</span><input type="date" min={constraintStart} max={state.settings.endDate} value={constraintEnd} onChange={event => setConstraintEnd(event.target.value)}/></label>
-              <fieldset className="field span-2"><legend>可用情况</legend><div className="segmented-control"><button type="button" className={availabilityMode === 'unavailable' ? 'active' : ''} onClick={() => setAvailabilityMode('unavailable')}>完全没空／休息</button><button type="button" className={availabilityMode === 'reduced' ? 'active' : ''} onClick={() => setAvailabilityMode('reduced')}>只能学一会儿</button></div></fieldset>
-              {availabilityMode === 'reduced' && <label className="field"><span>每天可用分钟</span><NumericInput min={0} max={1440} value={availableMinutes} onValueChange={setAvailableMinutes}/></label>}
-              <label className={`field ${availabilityMode === 'unavailable' ? 'span-2' : ''}`}><span>原因（可选）</span><input value={availabilityReason} onChange={event => setAvailabilityReason(event.target.value)} placeholder="例如：旅行、发烧、校内活动"/></label>
-            </div>
-          </section>}
-        </main>
-
-        <aside className="adjustment-sidebar">
-          {showTodayCapacity ? <section className="adjustment-section adjustment-today-section">
-            <header><div><strong>今天还能接收多少新任务？</strong><span>只有你明确开放的分钟数可接收未来任务。</span></div></header>
-            <div className="adjustment-today-control">
-              <button type="button" className={todayMode === 'none' ? 'active' : ''} onClick={() => setTodayMode('none')}><strong>不再新增</strong><span>今天保持现状</span></button>
-              <button type="button" className={todayMode === '30' ? 'active' : ''} onClick={() => setTodayMode('30')}><strong>30 分钟</strong><span>接收少量任务</span></button>
-              <button type="button" className={todayMode === '60' ? 'active' : ''} onClick={() => setTodayMode('60')}><strong>60 分钟</strong><span>接收一段任务</span></button>
-              <button type="button" className={todayMode === 'custom' ? 'active' : ''} onClick={() => setTodayMode('custom')}><strong>自定义</strong><span>精确设置分钟</span></button>
-            </div>
-            {todayMode === 'custom' && <label className="field compact-field"><span>额外分钟</span><NumericInput min={0} max={720} value={customMinutes} onValueChange={setCustomMinutes}/></label>}
-          </section> : <div className="adjustment-context-note"><strong>本次不需要重新询问今天容量</strong><span>{reason === 'too-tiring' ? '减负只调整未来负载，不会向今天新增任务。' : reason === 'execution-difference' ? '复盘中的日期决定已经由用户逐项给出。' : '当前变化不涉及向今天接收新任务。'}</span></div>}
-          <div className="adjustment-guarantees"><strong>系统始终保护</strong><span>过去日期、已完成任务、正在计时任务、锁定任务、目标最晚日期和受保护日期。手动安排不是锁定，但会被高权重保留。</span></div>
-        </aside>
+  const renderCenter = () => <>
+    <section className="adjustment-intro">
+      <div>
+        <span className="adjustment-eyebrow">计划调整中心</span>
+        <strong>先选择你要执行的动作</strong>
+        <p>黑色标题是要做的事，灰色说明是适用场景。系统会先生成预览，确认后才会改变正式计划。</p>
       </div>
+      <div className="adjustment-intro-badges"><span>改动先预览</span><span>历史不改写</span><span>可随时撤销</span></div>
+    </section>
+    <div className="adjustment-action-groups">
+      {actionGroups.map(group => <section className="adjustment-action-group" key={group.title}>
+        <header><div><strong>{group.title}</strong><span>{group.description}</span></div></header>
+        <div className="adjustment-action-grid">
+          {group.items.map(item => <ActionCard key={item.id} title={item.title} description={item.id === 'current-conflicts' ? `${item.description} 当前 ${currentIssues.length} 个待处理问题。` : item.description} tone={item.tone} onClick={() => {
+            if (item.id === 'deadline') { onClose(); onOpenDeadline?.(); return }
+            if (item.id === 'bulk-move') { onClose(); onOpenBulkMove?.(); return }
+            setActiveAction(item.id)
+          }} />)}
+        </div>
+      </section>)}
+    </div>
+    <section className="adjustment-related-entry">
+      <div><strong>有新任务需要加入？</strong><span>先添加到录入，之后再统一安排，不会打乱当前正式计划。</span></div>
+      <button type="button" className="secondary-button" onClick={() => { onClose(); onOpenIntake?.() }}>打开录入 <ArrowUpRight size={15} /></button>
+    </section>
+  </>
 
-      <div className="modal-actions adjustment-actions"><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={reason === 'availability-change' && (!constraintStart || !constraintEnd || constraintStart > constraintEnd)} onClick={submit}>分析并预览推荐方案</button></div>
+  const renderAvailability = () => <>
+    <ActionHeader title="调整日期可用时间" description="临时有事、休息或只能学习一会儿。先设置日期和分钟数，再预览受影响任务。" onBack={backToCenter} />
+    <section className="adjustment-form-section">
+      <div className="adjustment-form-grid">
+        <label className="field"><span>开始日期</span><input type="date" min={state.settings.startDate} max={state.settings.endDate} value={availabilityStart} onChange={event => { setAvailabilityStart(event.target.value); if (availabilityEnd < event.target.value) setAvailabilityEnd(event.target.value) }} /></label>
+        <label className="field"><span>结束日期</span><input type="date" min={availabilityStart} max={state.settings.endDate} value={availabilityEnd} onChange={event => setAvailabilityEnd(event.target.value)} /></label>
+        <fieldset className="field span-2"><legend>这段时间还能学习吗？</legend><div className="segmented-control"><button type="button" className={availabilityMode === 'unavailable' ? 'active' : ''} onClick={() => setAvailabilityMode('unavailable')}>完全没空／休息</button><button type="button" className={availabilityMode === 'reduced' ? 'active' : ''} onClick={() => setAvailabilityMode('reduced')}>每天只能学一会儿</button></div></fieldset>
+        {availabilityMode === 'reduced' && <label className="field"><span>每天最多分钟</span><NumericInput min={0} max={1440} value={availableMinutes} onValueChange={setAvailableMinutes} /></label>}
+        <label className={`field ${availabilityMode === 'unavailable' ? 'span-2' : ''}`}><span>原因（可选）</span><input value={availabilityReason} onChange={event => setAvailabilityReason(event.target.value)} placeholder="例如：旅行、发烧、校内活动" /></label>
+      </div>
+      <div className="adjustment-form-note"><CalendarDays size={17} /><span>这段日期会被保护。系统只搬出必要任务，不会把这次临时变化变成永久的每日规则。</span></div>
+    </section>
+  </>
+
+  const renderCurrentConflicts = () => <>
+    <ActionHeader title="修复当前计划问题" description="只处理已经检测到的容量、期限或规则冲突，尽量少移动没有问题的任务。" onBack={backToCenter} />
+    <section className="adjustment-form-section">
+      <div className={`adjustment-issue-summary ${currentIssues.length ? 'has-issues' : 'clear'}`}>
+        {currentIssues.length ? <RefreshCw size={20} /> : <CheckCircle2 size={20} />}
+        <div><strong>{currentIssues.length ? `当前检测到 ${currentIssues.length} 个待处理问题` : '当前没有明显硬冲突'}</strong><span>{currentIssues.length ? '下一步会生成只针对这些问题的最小修复预览。' : '仍然可以生成一次校验，确认当前安排符合容量、期限和规则。'}</span></div>
+      </div>
+      {currentIssues.length > 0 && <ul className="adjustment-issue-list">{currentIssues.slice(0, 8).map((issue, index) => <li key={`${issue.date ?? 'all'}-${index}`}><span>{issue.date ?? '计划范围'}</span>{issue.message}</li>)}</ul>}
+    </section>
+  </>
+
+  const renderDuration = () => <>
+    <ActionHeader title="校准任务预计时长" description="根据同类任务的实际用时更新未来预计。已完成、部分完成和手动改过时长的任务不会被覆盖。" onBack={backToCenter} />
+    <section className="adjustment-form-section">
+      {durationSuggestions.length ? <div className="duration-calibration-list">{durationSuggestions.map(suggestion => {
+        const group = state.taskGroups.find(item => item.id === suggestion.groupId)
+        return <article key={suggestion.groupId} className="duration-calibration-card"><div><strong>{group?.title ?? '任务组'}</strong><span>当前 {suggestion.currentEstimate} 分钟 · 最近 {suggestion.sampleCount} 个样本平均 {Math.round(suggestion.recentAverage)} 分钟</span><small>建议更新为 {suggestion.suggestedEstimate} 分钟；只改变预计时长，日期会先保持不动并重新校验。</small></div><button type="button" className="secondary-button" onClick={() => { onClose(); onDurationSuggestion?.(suggestion) }}>预览更新影响</button></article>
+      })}</div> : <div className="adjustment-empty-state"><Clock3 size={23} /><strong>暂时没有校准建议</strong><span>需要达到最少样本数，并且实际用时持续偏离当前预计后，系统才会提出调整。</span></div>}
+    </section>
+  </>
+
+  const renderLoad = () => <>
+    <ActionHeader title="减少未来一段时间的负载" description="把希望达到的条件直接告诉系统，再由系统在范围内重新安排未完成任务。" onBack={backToCenter} />
+    <section className="adjustment-form-section">
+      <div className="adjustment-form-grid">
+        <label className="field"><span>开始日期</span><input type="date" min={state.settings.startDate} max={state.settings.endDate} value={loadStart} onChange={event => setLoadStart(event.target.value)} /></label>
+        <label className="field"><span>结束日期</span><input type="date" min={loadStart} max={state.settings.endDate} value={loadEnd} onChange={event => setLoadEnd(event.target.value)} /></label>
+        <label className="field"><span>每天最多安排（分钟）</span><NumericInput min={30} max={1440} step={10} value={loadDailyMax} onValueChange={setLoadDailyMax} /></label>
+        <label className="field"><span>每周至少几个轻量日</span><NumericInput min={0} max={7} value={lightDaysPerWeek} onValueChange={setLightDaysPerWeek} /></label>
+        <label className="field"><span>最多连续几个高负载日</span><NumericInput min={0} max={14} value={maxHighLoadStreak} onValueChange={setMaxHighLoadStreak} /></label>
+        <label className="field"><span>每天最多几个长／高强度任务</span><NumericInput min={0} max={10} value={maxLongHighPerDay} onValueChange={setMaxLongHighPerDay} /></label>
+      </div>
+      <fieldset className="adjustment-choice-fieldset"><legend>如果条件互相挤压，优先保留什么？</legend><div className="adjustment-preference-options">{(['rest', 'balanced', 'preserve', 'goal'] as LoadPreference[]).map(item => <button type="button" key={item} className={loadPreference === item ? 'selected' : ''} onClick={() => setLoadPreference(item)}><strong>{preferenceCopy[item].title}</strong><span>{preferenceCopy[item].description}</span></button>)}</div></fieldset>
+      <div className="adjustment-form-note"><Sparkles size={17} /><span>这些条件只用于本次减负预览；确认后，任务日期会按方案改变，原有历史记录和锁定内容保持不动。</span></div>
+    </section>
+  </>
+
+  const renderReplan = () => {
+    const canIncludeToday = replanStart <= today
+    return <>
+      <ActionHeader title="重新安排剩余计划" description="保留历史、已完成和锁定内容，从指定日期开始重新计算未完成任务。" onBack={backToCenter} />
+      <section className="adjustment-form-section">
+        <div className="adjustment-form-grid">
+          <label className="field"><span>从哪天开始</span><input type="date" min={state.settings.startDate} max={state.settings.endDate} value={replanStart} onChange={event => setReplanStart(event.target.value)} /></label>
+          <label className="field"><span>调整哪些任务</span><select value={replanSubject} onChange={event => setReplanSubject(event.target.value)}><option value="all">全部未完成任务</option>{subjects.map(subject => <option value={subject} key={subject}>{subject}任务</option>)}</select></label>
+        </div>
+        <label className="adjustment-check-row"><input type="checkbox" checked={includeToday && canIncludeToday} onChange={event => setIncludeToday(event.target.checked)} disabled={!canIncludeToday} /><span><strong>包含今天</strong><small>把今天尚未完成的任务也纳入重排；未来任务是否进入今天，仍需在下面明确开放额外分钟。</small></span></label>
+        {includeToday && canIncludeToday && <div className="adjustment-today-control compact">{(['none', '30', '60', 'custom'] as const).map(item => <button type="button" key={item} className={todayMode === item ? 'active' : ''} onClick={() => setTodayMode(item)}><strong>{item === 'none' ? '不再新增' : item === 'custom' ? '自定义' : `${item} 分钟`}</strong><span>{item === 'none' ? '今天保持现状' : '额外接收未来任务'}</span></button>)}</div>}
+        {includeToday && todayMode === 'custom' && <label className="field compact-field"><span>今天额外可用分钟</span><NumericInput min={0} max={720} value={customMinutes} onValueChange={setCustomMinutes} /></label>}
+        <fieldset className="adjustment-choice-fieldset"><legend>这次重排采用什么取舍？</legend><div className="adjustment-preference-options">{(['preserve', 'balanced', 'goal', 'rest'] as ReplanOutcome[]).map(item => <button type="button" key={item} className={replanOutcome === item ? 'selected' : ''} onClick={() => setReplanOutcome(item)}><strong>{preferenceCopy[item].title}</strong><span>{preferenceCopy[item].description}</span></button>)}</div></fieldset>
+        <div className="adjustment-form-note"><ListChecks size={17} /><span>已完成、部分执行记录、锁定和过去日期都会被保护；只会重新计算你选择范围内仍未完成的任务。</span></div>
+      </section>
+    </>
+  }
+
+  const isCenter = activeAction === 'center'
+  const submitLabel = activeAction === 'availability' ? '分析日期变化' : activeAction === 'current-conflicts' ? '分析并预览最小修复' : activeAction === 'load' ? '生成减负预览' : activeAction === 'replan' ? '生成重新安排预览' : ''
+  const canSubmit = activeAction === 'availability'
+    ? Boolean(availabilityStart && availabilityEnd && availabilityStart <= availabilityEnd)
+    : activeAction === 'load'
+      ? Boolean(loadStart && loadEnd && loadStart <= loadEnd)
+      : activeAction === 'replan'
+        ? Boolean(replanStart)
+        : activeAction === 'current-conflicts'
+
+  return <Modal open={open} title="计划调整中心" onClose={onClose} wide mobileFullscreen className="adjustment-modal">
+    <div className="adjustment-dialog-shell">
+      {isCenter ? renderCenter() : activeAction === 'availability' ? renderAvailability() : activeAction === 'current-conflicts' ? renderCurrentConflicts() : activeAction === 'duration' ? renderDuration() : activeAction === 'load' ? renderLoad() : activeAction === 'replan' ? renderReplan() : renderCenter()}
+      {!isCenter && activeAction !== 'duration' && <div className="adjustment-guarantees"><strong>系统始终保护</strong><span>过去日期、已完成任务、正在计时任务、锁定任务、目标最晚日期和受保护日期。手动安排不是锁定，但会被高权重保留。</span></div>}
+      {!isCenter && activeAction !== 'duration' && <div className="modal-actions adjustment-actions"><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={!canSubmit} onClick={submit}>{submitLabel}</button></div>}
     </div>
   </Modal>
 }

@@ -270,6 +270,7 @@ function normalizeIntakeTask(raw: Partial<IntakeTaskGroupDraft>, now: string): I
   const recurrenceEnd = raw.recurrenceEnd && recurrenceStart && raw.recurrenceEnd < recurrenceStart ? recurrenceStart : raw.recurrenceEnd
   return {
     id: raw.id ?? uid('intake-item'),
+    kind: raw.kind === 'single' ? 'single' : 'group',
     title: String(raw.title ?? '').trim(),
     subject: String(raw.subject ?? '其他'),
     priority: ([0, 1, 2, 3, 5].includes(Number(raw.priority)) ? Number(raw.priority) : 3) as IntakeTaskGroupDraft['priority'],
@@ -300,6 +301,7 @@ function normalizeIntakeTask(raw: Partial<IntakeTaskGroupDraft>, now: string): I
     updatedAt: raw.updatedAt ?? now,
     appliedAt: raw.appliedAt,
     appliedGroupId: raw.appliedGroupId,
+    appliedAssignmentId: raw.appliedAssignmentId,
   }
 }
 

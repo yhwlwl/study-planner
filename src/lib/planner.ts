@@ -97,6 +97,7 @@ interface DayStats {
   counts: Map<string, number>
   longCount: number
   highIntensityCount: number
+  longOrHighCount: number
   incomingTodayMinutes: number
 }
 
@@ -111,6 +112,7 @@ function blankStats(): DayStats {
     counts: new Map(),
     longCount: 0,
     highIntensityCount: 0,
+    longOrHighCount: 0,
     incomingTodayMinutes: 0
   }
 }
@@ -328,6 +330,7 @@ function statsMap(state: AppState, excluded = new Set<string>()) {
       for (const key of activityKeys(group, assignment)) addCount(day, key)
       if (isLongTask(assignment)) day.longCount += 1
       if (isHighIntensity(group, assignment)) day.highIntensityCount += 1
+      if (isLongTask(assignment) || isHighIntensity(group, assignment)) day.longOrHighCount += 1
       const minutes = assignment.actualMinutes > 0 ? assignment.actualMinutes : assignment.estimatedMinutes
       day.subjectMinutes.set(group.subject, (day.subjectMinutes.get(group.subject) ?? 0) + minutes)
       map.set(date, day)
@@ -343,6 +346,7 @@ function statsMap(state: AppState, excluded = new Set<string>()) {
     for (const key of activityKeys(group, assignment)) addCount(day, key)
     if (isLongTask(assignment)) day.longCount += 1
     if (isHighIntensity(group, assignment)) day.highIntensityCount += 1
+    if (isLongTask(assignment) || isHighIntensity(group, assignment)) day.longOrHighCount += 1
     map.set(assignment.scheduledDate, day)
   }
   return map
@@ -358,6 +362,7 @@ function addToStats(stats: Map<string, DayStats>, date: string, assignment: Assi
   for (const key of activityKeys(group, assignment)) addCount(day, key)
   if (isLongTask(assignment)) day.longCount += 1
   if (isHighIntensity(group, assignment)) day.highIntensityCount += 1
+  if (isLongTask(assignment) || isHighIntensity(group, assignment)) day.longOrHighCount += 1
   if (date === todayISO() && originalDate !== date) day.incomingTodayMinutes += minutes
   stats.set(date, day)
 }
@@ -374,6 +379,7 @@ function removeFromStats(stats: Map<string, DayStats>, date: string, assignment:
   for (const key of activityKeys(group, assignment)) day.counts.set(key, Math.max(0, (day.counts.get(key) ?? 0) - 1))
   if (isLongTask(assignment)) day.longCount = Math.max(0, day.longCount - 1)
   if (isHighIntensity(group, assignment)) day.highIntensityCount = Math.max(0, day.highIntensityCount - 1)
+  if (isLongTask(assignment) || isHighIntensity(group, assignment)) day.longOrHighCount = Math.max(0, day.longOrHighCount - 1)
   if (date === todayISO() && originalDate !== date) day.incomingTodayMinutes = Math.max(0, day.incomingTodayMinutes - minutes)
   stats.set(date, day)
 }
@@ -384,8 +390,16 @@ function statsWithoutAssignment(base: Map<string, DayStats>, assignment: Assignm
   return result
 }
 
+function loadConstraintForDate(request: ReplanRequest, date: string) {
+  const constraints = request.loadConstraints
+  if (!constraints || date < constraints.startDate || date > constraints.endDate) return undefined
+  return constraints
+}
+
 function hardCapacity(state: AppState, date: string, request: ReplanRequest, day?: DayStats, assignmentId?: string) {
-  const base = overrideLimit(state, request, date, 'capacity', getCapacity(state, date), assignmentId) ?? getCapacity(state, date)
+  const configured = overrideLimit(state, request, date, 'capacity', getCapacity(state, date), assignmentId) ?? getCapacity(state, date)
+  const loadConstraint = loadConstraintForDate(request, date)
+  const base = loadConstraint?.maxMinutesPerDay != null ? Math.min(configured, Math.max(0, Math.round(loadConstraint.maxMinutesPerDay))) : configured
   if (date !== todayISO()) return base
   const actual = (day?.actualMinutes ?? 0) + (day?.inferredMinutes ?? 0)
   return Math.max(base, actual + Math.max(0, request.todayExtraMinutes ?? 0))
@@ -495,6 +509,30 @@ function validatePlacement(
   const capacity = hardCapacity(state, date, request, day, assignment.id)
   if (projected > capacity) violations.push({ key: 'capacity', label: '超过当天硬容量', current: projected, limit: capacity, hard: true })
 
+  const loadConstraint = loadConstraintForDate(request, date)
+  if (loadConstraint?.maxLongHighPerDay != null) {
+    const projectedLongHigh = day.longOrHighCount + (isLongTask(assignment) || isHighIntensity(group, assignment) ? 1 : 0)
+    if (projectedLongHigh > loadConstraint.maxLongHighPerDay) {
+      violations.push({ key: 'load-long-high-max', label: '超过本次减负设置的长任务／高强度任务上限', current: projectedLongHigh, limit: loadConstraint.maxLongHighPerDay, hard: true })
+    }
+  }
+  if (loadConstraint?.maxHighLoadStreak != null) {
+    const highThreshold = state.settings.highLoadThreshold
+    const projectedRatio = capacity > 0 ? projected / capacity : 1
+    let streak = projectedRatio >= highThreshold ? 1 : 0
+    for (let offset = 1; streak > 0 && offset <= 31; offset += 1) {
+      const previousDate = shiftDate(date, -offset)
+      if (previousDate < loadConstraint.startDate) break
+      const previous = stats.get(previousDate)
+      const previousCapacity = hardCapacity(state, previousDate, request, previous)
+      if (!previous || previousCapacity <= 0 || previous.totalMinutes / previousCapacity < highThreshold) break
+      streak += 1
+    }
+    if (streak > loadConstraint.maxHighLoadStreak) {
+      violations.push({ key: 'load-high-streak', label: '会超过本次设置的连续高负载天数', current: streak, limit: loadConstraint.maxHighLoadStreak, hard: true })
+    }
+  }
+
   for (const key of activityKeys(group, assignment)) {
     const fallback = defaultLimit(state, date, key, group)
     if (fallback === undefined) continue
@@ -526,12 +564,13 @@ function candidateScore(
   strategy: ReplanStrategy,
   originalDate: string | undefined,
   baseline: ReturnType<typeof baselineMaps>,
-  preferredShift?: number
+  preferredShift?: number,
+  request: ReplanRequest = { mode: 'repair', fromDate: todayISO() }
 ) {
   const day = stats.get(date) ?? blankStats()
   const minutes = effectiveMinutes(assignment)
   const projected = day.totalMinutes + minutes
-  const capacity = Math.max(1, hardCapacity(state, date, { mode: 'repair', fromDate: todayISO() }, day))
+  const capacity = Math.max(1, hardCapacity(state, date, request, day))
   const ratio = projected / capacity
   const distance = originalDate ? Math.abs(differenceInCalendarDays(parseISO(date), parseISO(originalDate))) : daysFrom(state.settings.startDate, date)
   const moveWeight = strategy === 'preserve' ? 240 : strategy === 'rest' ? 150 : strategy === 'balanced' ? 85 : 35
@@ -572,7 +611,7 @@ function candidateScore(
   const precedingHigh = Array.from({ length: Math.max(1, state.settings.highLoadStreak - 1) }, (_, index) => shiftDate(date, -(index + 1)))
     .every(previousDate => {
       const previous = stats.get(previousDate)
-      const cap = getCapacity(state, previousDate)
+      const cap = hardCapacity(state, previousDate, request, previous)
       return Boolean(previous && cap > 0 && previous.totalMinutes / cap >= state.settings.highLoadThreshold)
     })
   if (precedingHigh && ratio >= state.settings.highLoadThreshold) score += strategy === 'goal' ? 1800 : 10000
@@ -586,7 +625,7 @@ function candidateScore(
 function planningStart(request: ReplanRequest) {
   const today = todayISO()
   const requested = request.fromDate || today
-  if (request.mode === 'full' && !after(requested, today) && !(request.todayExtraMinutes && request.todayExtraMinutes > 0)) return shiftDate(today, 1)
+  if (request.mode === 'full' && !after(requested, today) && !request.includeToday && !(request.todayExtraMinutes && request.todayExtraMinutes > 0)) return shiftDate(today, 1)
   return before(requested, today) ? today : requested
 }
 
@@ -750,6 +789,9 @@ function applyAutomaticBufferDays(state: AppState, request: ReplanRequest) {
   const minimumSafetySlack = Math.max(30, Math.round(state.settings.regularMinutes * 0.15))
   const baseline = statsMap(state)
   const manuallyProtectedDates = new Set(state.assignments.filter(item => item.scheduledDate && !groups.get(item.groupId)?.recurring && (item.locked || item.intentStrength === 'manual')).map(item => item.scheduledDate!))
+  const requestedLightDays = request.loadConstraints?.lightDaysPerWeek == null
+    ? 1
+    : Math.max(0, Math.min(7, Math.round(request.loadConstraints.lightDaysPerWeek)))
 
   for (let offset = 0; offset < dates.length; offset += 7) {
     const block = dates.slice(offset, offset + 7)
@@ -759,28 +801,33 @@ function applyAutomaticBufferDays(state: AppState, request: ReplanRequest) {
       if (config.userSet || config.type === 'travel') return false
       return !manuallyProtectedDates.has(date)
     })
-    if (!candidates.length) continue
-    const selected = candidates.sort((a, b) => (baseline.get(a)?.totalMinutes ?? 0) - (baseline.get(b)?.totalMinutes ?? 0) || b.localeCompare(a))[0]
-    const originalCapacity = getCapacity(state, selected)
-    const base = getBaseCapacity(state, selected)
-    const bufferCapacity = Math.round(base * state.settings.bufferUtilization)
-    const targetCapacityReduction = Math.max(0, originalCapacity - bufferCapacity) * state.settings.targetUtilization
+    if (!candidates.length || requestedLightDays <= 0) continue
+    const ordered = candidates.sort((a, b) => (baseline.get(a)?.totalMinutes ?? 0) - (baseline.get(b)?.totalMinutes ?? 0) || b.localeCompare(a))
+    let selectedCount = 0
+    for (const selected of ordered) {
+      if (selectedCount >= requestedLightDays) break
+      const originalCapacity = getCapacity(state, selected)
+      const base = getBaseCapacity(state, selected)
+      const bufferCapacity = Math.round(base * state.settings.bufferUtilization)
+      const targetCapacityReduction = Math.max(0, originalCapacity - bufferCapacity) * state.settings.targetUtilization
 
-    // 休息方案不能为了“凑出缓冲日”而把其余日期重新压满，甚至制造无处可排的任务。
-    // 只有剩余工作量在目标利用率下仍留有安全余量时，才自动新增这一周的缓冲日。
-    if (targetSlack - targetCapacityReduction < minimumSafetySlack) continue
+      // 休息方案不能为了“凑出缓冲日”而把其余日期重新压满，甚至制造无处可排的任务。
+      // 只有剩余工作量在目标利用率下仍留有安全余量时，才自动新增这一周的缓冲日。
+      if (targetSlack - targetCapacityReduction < minimumSafetySlack) continue
 
-    state.dayConfigs[selected] = {
-      ...(state.dayConfigs[selected] ?? { date: selected, type: 'regular' as const }),
-      date: selected,
-      isBufferDay: true,
-      availableMinutes: bufferCapacity,
-      bufferReason: '系统为休息、超时和临时安排预留',
-      bufferPreference: 'preserve',
-      bufferProtected: false,
-      userSet: false
+      state.dayConfigs[selected] = {
+        ...(state.dayConfigs[selected] ?? { date: selected, type: 'regular' as const }),
+        date: selected,
+        isBufferDay: true,
+        availableMinutes: bufferCapacity,
+        bufferReason: '系统按本次减负条件预留轻量日',
+        bufferPreference: 'preserve',
+        bufferProtected: false,
+        userSet: false
+      }
+      targetSlack -= targetCapacityReduction
+      selectedCount += 1
     }
-    targetSlack -= targetCapacityReduction
   }
 }
 
@@ -896,7 +943,7 @@ function conflictFromRejections(
   existing: ReplanConstraintConflict[]
 ) {
   const limitViolations = rejected.flatMap(item => item.violations.map(violation => ({ date: item.date, violation })))
-    .filter(item => item.violation.key === 'capacity' || item.violation.key.startsWith('group:') || item.violation.key.startsWith('activity:') || item.violation.key === 'long' || item.violation.key === 'high-intensity' || item.violation.key === 'date-protection' || item.violation.key === 'protected-buffer' || item.violation.key === 'buffer-high-intensity' || item.violation.key === 'buffer-long-task' || isTodayIncomingConstraint(item.violation.key))
+    .filter(item => item.violation.key === 'capacity' || item.violation.key.startsWith('group:') || item.violation.key.startsWith('activity:') || item.violation.key === 'long' || item.violation.key === 'high-intensity' || item.violation.key === 'load-long-high-max' || item.violation.key === 'load-high-streak' || item.violation.key === 'date-protection' || item.violation.key === 'protected-buffer' || item.violation.key === 'buffer-high-intensity' || item.violation.key === 'buffer-long-task' || isTodayIncomingConstraint(item.violation.key))
   if (!limitViolations.length) return
   const chosen = limitViolations.sort((a, b) => a.violation.current - b.violation.current)[0]
   const key = `${chosen.date}:${chosen.violation.key}`
@@ -1049,7 +1096,7 @@ function buildScenario(input: AppState, request: ReplanRequest, strategy: Replan
         continue
       }
       const preferredShift = originalDate ? preferredShiftByOrigin.get(originalDate) : undefined
-      legal.push({ date, score: candidateScore(state, stats, assignment, group, date, strategy, originalDate, baseline, preferredShift) })
+      legal.push({ date, score: candidateScore(state, stats, assignment, group, date, strategy, originalDate, baseline, preferredShift, request) })
     }
     legal.sort((a, b) => a.score - b.score || a.date.localeCompare(b.date))
     const radius = Math.max(1, request.localRadius ?? state.settings.localRepairRadius)
@@ -1289,6 +1336,7 @@ function normalizeReplanRequest(input: AppState, request: ReplanRequest): Replan
     ...request,
     fromDate: request.fromDate || todayISO(),
     freezeDays: request.freezeDays ?? input.settings.freezeDays,
+    includeToday: request.includeToday === true,
     todayExtraMinutes: Math.max(0, request.todayExtraMinutes ?? 0),
     allowTodayIncomingAssignments: request.allowTodayIncomingAssignments ?? [],
     localRadius: request.localRadius ?? input.settings.localRepairRadius,
@@ -2373,12 +2421,15 @@ export interface GenerateProposalOptions {
  * 事件中的日期是“约束/目标发生在哪一天”，不等于调度只能从那一天开始。
  * 目标提前到 8 月 6 日时，需要利用今天起的全部未来容量，而不是到 8 月 6 日才开始排。
  */
-function proposalPlanningStart(state: AppState, _event: PlanChangeEvent): string {
+function proposalPlanningStart(state: AppState, event: PlanChangeEvent): string {
   // 事件日期只是目标、行程或原安排的位置。候选窗口仍从今天的未来开始：
   // 这样 8/10–8/15 的旅行既可把任务提前到旅行前，也可顺延到旅行后；
   // “偏好某日”的新任务仍由手动意图评分优先保留原日，而不是禁止更早的合法替代日。
   const today = todayISO()
-  return before(today, state.settings.startDate) ? state.settings.startDate : today
+  const requested = typeof event.metadata?.fromDate === 'string' ? event.metadata.fromDate : today
+  if (before(requested, state.settings.startDate)) return state.settings.startDate
+  if (after(requested, state.settings.endDate)) return state.settings.endDate
+  return requested
 }
 
 /**
@@ -2390,10 +2441,15 @@ export function generateSchedulingProposals(input: AppState, event: PlanChangeEv
   const baseline = options.baseline ?? input
   const mode: ReplanMode = event.action === 'optimize' || event.action === 'rebuild' ? 'full' : 'repair'
   const fromDate = proposalPlanningStart(input, event)
+  const rawLoadConstraints = event.metadata?.loadConstraints
+  const loadConstraints = rawLoadConstraints && typeof rawLoadConstraints === 'object'
+    ? rawLoadConstraints as ReplanRequest['loadConstraints']
+    : undefined
   const request: ReplanRequest = {
     mode,
     fromDate,
     freezeDays: input.settings.freezeDays,
+    includeToday: event.metadata?.includeToday === true,
     todayExtraMinutes: options.todayExtraMinutes ?? Number(event.metadata?.todayExtraMinutes ?? 0),
     allowTodayIncomingAssignments: todayIncomingAssignmentIds(options.acceptedExceptions ?? []),
     // Earlier accepted date-protection exceptions are audit records, not standing permission for future changes.
@@ -2414,6 +2470,7 @@ export function generateSchedulingProposals(input: AppState, event: PlanChangeEv
       return base
     })(),
     affectedAssignmentIds: event.affectedAssignmentIds,
+    loadConstraints,
     event,
     explanationLevel: (options.expansionLevel ?? 0) >= 2 ? 'full' : 'summary',
   }

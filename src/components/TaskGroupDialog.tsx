@@ -11,11 +11,12 @@ const activityOptions: { value: TaskActivityType; label: string }[] = [
   { value: 'chem-preview', label: '化学预习课（默认每天最多1节）' }, { value: 'math-paper', label: '数学整套试卷（默认每天最多1套）' },
 ]
 
-export function TaskGroupDialog({ open, onClose, state, initial, onCreate, onEdit }: {
+export function TaskGroupDialog({ open, onClose, state, initial, defaultDate, onCreate, onEdit }: {
   open: boolean
   onClose: () => void
   state: AppState
   initial?: TaskGroup
+  defaultDate?: string
   onCreate: (draft: TaskGroupDraft, schedule: boolean) => void
   onEdit?: (group: TaskGroup, numberingChoice: 'preserve' | 'number-all') => void
 }) {
@@ -54,15 +55,15 @@ export function TaskGroupDialog({ open, onClose, state, initial, onCreate, onEdi
   const chosenSubject = customSubject.trim() || subject
   const initialItemCount = initial ? state.assignments.filter(item => item.groupId === initial.id).length : 0
   const becomesMultiItem = Boolean(initial && !initial.recurring && initialItemCount === 1 && quantity > 1)
-  const draft = (): TaskGroupDraft => ({ title: title.trim(), subject: chosenSubject, priority, unitMinutes: minutes, activityType, dailyMax, highIntensity, countInStats, quantity, notes: notes.trim() || undefined, goalIds, numberingChoice })
-  const create = (schedule: boolean) => { if (!title.trim()) return; onCreate(draft(), schedule) }
+  const draft = (): TaskGroupDraft => ({ title: title.trim(), subject: chosenSubject, priority, unitMinutes: minutes, activityType, dailyMax, highIntensity, countInStats, quantity, notes: notes.trim() || undefined, goalIds, numberingChoice, preferredDate: initial ? undefined : defaultDate })
+  const create = () => { if (!title.trim()) return; onCreate(draft(), true) }
   const edit = () => {
     if (!initial || !onEdit || !title.trim()) return
     onEdit({ ...initial, title: title.trim(), subject: chosenSubject, priority, quantity, unitMinutes: minutes, dailyMax, activityType, highIntensity, countInStats, notes: notes.trim() || undefined }, numberingChoice)
     onClose()
   }
 
-  return <Modal open={open} title={initial ? '编辑任务组' : '创建任务组'} onClose={onClose} wide mobileFullscreen>
+  return <Modal open={open} title={initial ? '编辑任务组' : '添加任务组并安排'} onClose={onClose} wide mobileFullscreen>
     <div className="form-grid">
       <label className="field span-2"><span>任务组名称</span><input autoFocus value={title} onChange={event => setTitle(event.target.value)} placeholder="例如：化学预习" /></label>
       <label className="field"><span>科目／类别</span><select value={subject} onChange={event => { setSubject(event.target.value); setCustomSubject('') }}>{subjects.map(item => <option key={item}>{item}</option>)}</select></label>
@@ -82,11 +83,11 @@ export function TaskGroupDialog({ open, onClose, state, initial, onCreate, onEdi
       </fieldset>}
       {!initial && state.goals.length > 0 && <fieldset className="field span-2 goal-link-field"><legend>同时加入目标（可选）</legend><small>勾选后，会把“完成这个任务组的全部任务”作为该目标的一项完成条件。需要只完成一半或指定数量时，请创建后到“目标”页面修改条件。</small>{state.goals.filter(goal => goal.status !== 'archived').map(goal => <label key={goal.id}><input type="checkbox" checked={goalIds.includes(goal.id)} onChange={event => setGoalIds(current => event.target.checked ? [...new Set([...current, goal.id])] : current.filter(id => id !== goal.id))}/><span>{goal.title} · 最晚 {goal.latestDate}</span></label>)}</fieldset>}
       <label className="field span-2"><span>备注</span><textarea rows={3} value={notes} onChange={event => setNotes(event.target.value)}/></label>
-      {!initial && <div className="form-note span-2">任务组只定义共享规则，真正进入日历的是生成的单项任务。阶段目标和最终截止日期统一由“目标”管理。</div>}
+      {!initial && <div className="form-note span-2">{defaultDate ? `系统会优先把任务安排到 ${defaultDate}，` : ''}提交后先生成安排预览；确认前不会改变正式计划。任务组会按数量生成具体任务。</div>}
     </div>
     <div className="modal-actions">
       <button className="secondary-button" onClick={onClose}>取消</button>
-      {initial ? <button className="primary-button" onClick={edit}>保存任务组</button> : <><button className="secondary-button" onClick={() => create(false)}>创建为未安排任务</button><button className="primary-button" onClick={() => create(true)}>创建并预览排期</button></>}
+      {initial ? <button className="primary-button" onClick={edit}>保存任务组</button> : <button className="primary-button" onClick={create}>生成安排预览</button>}
     </div>
   </Modal>
 }

@@ -3,7 +3,7 @@ import {
   Archive, Check, ChevronRight, ClipboardPaste, Copy, Download, FileSpreadsheet, FolderPlus, Inbox, Pencil, Plus,
   Save, Trash2, Upload, X,
 } from 'lucide-react'
-import type { AppState, IntakeBatch, IntakeTaskGroupDraft, PlanChangeEvent, Priority, TaskGroupDraft } from '../types'
+import type { AppState, IntakeBatch, IntakeTaskGroupDraft, NewTaskDraft, PlanChangeEvent, Priority, TaskGroupDraft } from '../types'
 import { useApp } from '../AppContext'
 import { dateRange, getCapacity, todayISO } from '../lib/date'
 import {
@@ -14,6 +14,8 @@ import {
 import { downloadTextFile } from '../lib/exports'
 import { Modal } from './Modal'
 import { NumericInput } from './NumericInput'
+import { SingleTaskDialog } from './SingleTaskDialog'
+import type { TaskCreationKind } from './AddTaskDialog'
 
 const priorities: Array<{ value: Priority; label: string }> = [
   { value: 5, label: '核心' }, { value: 3, label: '高' }, { value: 2, label: '中' }, { value: 1, label: '低' }, { value: 0, label: '可选' },
@@ -34,12 +36,15 @@ function emptyDraft(state: AppState): TaskGroupDraft {
   }
 }
 
-export function IntakePage({ onPrepared, onNavigate }: {
+export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAddRequestHandled }: {
   onPrepared: (state: AppState, event: PlanChangeEvent) => void
   onNavigate: (page: 'today' | 'tasks' | 'goals' | 'settings') => void
+  onAddTask: (batchId?: string) => void
+  addRequest?: { id: string; kind: TaskCreationKind; batchId?: string }
+  onAddRequestHandled: () => void
 }) {
   const {
-    state, canUndo, undo, createIntakeBatch, duplicateIntakeBatch, updateIntakeBatch, addIntakeTaskGroup, updateIntakeTaskGroup,
+    state, canUndo, undo, createIntakeBatch, duplicateIntakeBatch, updateIntakeBatch, addIntakeSingleTask, addIntakeTaskGroup, updateIntakeSingleTask, updateIntakeTaskGroup,
     removeIntakeTaskGroup, deleteIntakeBatch, prepareIntakeBatch, resetAll,
   } = useApp()
   const activeBatches = useMemo(() => state.intakeBatches.filter(batch => batch.status !== 'archived'), [state.intakeBatches])
@@ -48,6 +53,9 @@ export function IntakePage({ onPrepared, onNavigate }: {
   const [activeId, setActiveId] = useState<string>()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingItem, setEditingItem] = useState<IntakeTaskGroupDraft>()
+  const [singleDialogOpen, setSingleDialogOpen] = useState(false)
+  const [editingSingle, setEditingSingle] = useState<IntakeTaskGroupDraft>()
+  const [dialogBatchId, setDialogBatchId] = useState<string>()
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [pasteOpen, setPasteOpen] = useState(false)
   const [pasteText, setPasteText] = useState('')
@@ -57,6 +65,7 @@ export function IntakePage({ onPrepared, onNavigate }: {
   const [skipDuplicates, setSkipDuplicates] = useState(true)
   const [deletedBatchName, setDeletedBatchName] = useState<string>()
   const fileRef = useRef<HTMLInputElement>(null)
+  const handledAddRequestId = useRef<string>()
 
   useEffect(() => {
     if (activeId && activeBatches.some(batch => batch.id === activeId)) return
@@ -100,6 +109,26 @@ export function IntakePage({ onPrepared, onNavigate }: {
     return id
   }
 
+  useEffect(() => {
+    if (!addRequest || handledAddRequestId.current === addRequest.id) return
+    handledAddRequestId.current = addRequest.id
+    const requestedBatch = addRequest.batchId && state.intakeBatches.some(batch => batch.id === addRequest.batchId && batch.status !== 'archived')
+      ? addRequest.batchId
+      : undefined
+    const batchId = requestedBatch ?? createIntakeBatch()
+    setActiveId(batchId)
+    setSelectedIds([])
+    setDialogBatchId(batchId)
+    if (addRequest.kind === 'single') {
+      setEditingSingle(undefined)
+      setSingleDialogOpen(true)
+    } else {
+      setEditingItem(undefined)
+      setDialogOpen(true)
+    }
+    onAddRequestHandled()
+  }, [addRequest, createIntakeBatch, onAddRequestHandled, state.intakeBatches])
+
   const startWithImport = () => {
     createBatch()
     setImportSource('paste')
@@ -107,10 +136,9 @@ export function IntakePage({ onPrepared, onNavigate }: {
     setPasteOpen(true)
   }
 
-  const startContinuousEntry = () => {
-    createBatch()
-    setEditingItem(undefined)
-    setDialogOpen(true)
+  const startAddTask = () => {
+    const id = createBatch()
+    onAddTask(id)
   }
 
   const schedule = () => {
@@ -118,7 +146,7 @@ export function IntakePage({ onPrepared, onNavigate }: {
     const ids = selectedIds.length ? selectedIds : pendingItems.map(item => item.id)
     const invalid = pendingItems.filter(item => ids.includes(item.id) && intakeDraftIssues(item, state).length)
     if (invalid.length) {
-      window.alert(`有 ${invalid.length} 个任务组需要先修正。`)
+      window.alert(`有 ${invalid.length} 项录入内容需要先修正。`)
       return
     }
     const prepared = prepareIntakeBatch(active.id, ids)
@@ -139,7 +167,7 @@ export function IntakePage({ onPrepared, onNavigate }: {
     setImportResult(undefined)
     setPasteText('')
     setPasteOpen(false)
-    if (!added) window.alert('没有新增任务组。请检查重复项或导入错误。')
+    if (!added) window.alert('没有新增内容。请检查重复项或导入错误。')
   }
 
   const handleFile = async (file: File) => {
@@ -160,7 +188,7 @@ export function IntakePage({ onPrepared, onNavigate }: {
   return <div className="intake-page">
     <section className="intake-intro">
       <div>
-        <span className="intake-kicker"><Inbox size={16}/>任务录入工作区</span>
+        <span className="intake-kicker"><Inbox size={16}/>录入</span>
         <h2>{state.assignments.length ? '先把新增任务收齐，再决定如何调整计划' : '先录入任务，完成后统一生成第一份计划'}</h2>
         <p>{state.assignments.length
           ? '录入中的内容不会改变今天和未来的正式安排。你可以分几次完成，再统一安排全部或所选任务。'
@@ -169,7 +197,7 @@ export function IntakePage({ onPrepared, onNavigate }: {
       <button className="primary-button" onClick={createBatch}><FolderPlus size={17}/>新建录入批次</button>
     </section>
     {!state.assignments.length && <nav className="intake-setup-steps" aria-label="首次建档进度">
-      <button className={pendingItems.length ? 'complete active' : 'active'} onClick={() => undefined}><span>1</span><strong>任务清单</strong><small>{pendingItems.length ? `${pendingItems.length} 组已录入` : '正在进行'}</small></button>
+      <button className={pendingItems.length ? 'complete active' : 'active'} onClick={() => undefined}><span>1</span><strong>任务清单</strong><small>{pendingItems.length ? `${pendingItems.length} 项已录入` : '正在进行'}</small></button>
       <button className={state.goals.length ? 'complete' : ''} onClick={() => onNavigate('goals')}><span>2</span><strong>目标期限</strong><small>{state.goals.length ? `${state.goals.length} 个目标` : '可稍后补充'}</small></button>
       <button className="complete" onClick={() => onNavigate('settings')}><span>3</span><strong>可用时间</strong><small>当前约 {minutesText(Math.round(capacity))}</small></button>
       <button disabled={!pendingItems.length || Boolean(issueCount)} onClick={schedule}><span>4</span><strong>首次排期</strong><small>{issueCount ? `先修正 ${issueCount} 项` : pendingItems.length ? '已可生成预览' : '等待任务'}</small></button>
@@ -183,7 +211,7 @@ export function IntakePage({ onPrepared, onNavigate }: {
           const pending = batch.taskGroups.filter(item => !item.appliedAt).length
           const archived = batch.status === 'archived'
           return <button key={batch.id} className={`intake-batch-button ${batch.id === active?.id ? 'active' : ''} ${archived ? 'archived' : ''}`} onClick={() => { if (archived) updateIntakeBatch(batch.id, { status: 'editing' }); setActiveId(batch.id); setSelectedIds([]) }}>
-            <span><strong>{batch.name}</strong><small>{archived ? '已归档，点击恢复' : batch.status === 'calculating' ? '正在生成排期预览' : pending ? `${pending} 个待安排任务组` : batch.taskGroups.length ? '已全部安排' : '尚未录入'}</small></span>
+            <span><strong>{batch.name}</strong><small>{archived ? '已归档，点击恢复' : batch.status === 'calculating' ? '正在生成排期预览' : pending ? `${pending} 项待安排内容` : batch.taskGroups.length ? '已全部安排' : '尚未录入'}</small></span>
             <span className="intake-batch-count">{batchSummary.assignmentCount}</span>
             <ChevronRight size={16}/>
           </button>
@@ -192,11 +220,11 @@ export function IntakePage({ onPrepared, onNavigate }: {
 
       <section className="intake-workspace">
         {!active ? <div className="intake-empty-main">
-          <Inbox size={34}/><h3>{state.assignments.length ? '新增内容先进入待安排' : '选择最省力的建档方式'}</h3><p>录入期间只保存和校验，不会重新计算正式计划。随时退出都能继续。</p>
+          <Inbox size={34}/><h3>{state.assignments.length ? '新增内容先保存到录入' : '选择最省力的建档方式'}</h3><p>录入期间只保存和校验，不会重新计算正式计划。随时退出都能继续。</p>
           <div className="intake-empty-options">
             <button className="primary-button" onClick={startWithImport}><Upload size={17}/><span><strong>导入任务清单</strong><small>粘贴文本、CSV 或 XLSX</small></span></button>
-            <button className="secondary-button" onClick={startContinuousEntry}><Plus size={17}/><span><strong>连续创建任务组</strong><small>保存后立即录入下一条</small></span></button>
-            {!state.assignments.length && <button className="secondary-button" onClick={() => { if (window.confirm('载入示例计划会替换当前空白空间，录入草稿将不保留。继续吗？')) void resetAll('demo').then(() => onNavigate('today')) }}><FileSpreadsheet size={17}/><span><strong>暂时体验示例计划</strong><small>先看看完整使用效果</small></span></button>}
+            <button className="secondary-button" onClick={startAddTask}><Plus size={17}/><span><strong>添加任务</strong><small>独立任务或任务组</small></span></button>
+            {!state.assignments.length && <button className="secondary-button" onClick={() => { if (window.confirm('载入示例计划会替换当前空白空间，录入内容将不保留。继续吗？')) void resetAll('demo').then(() => onNavigate('today')) }}><FileSpreadsheet size={17}/><span><strong>暂时体验示例计划</strong><small>先看看完整使用效果</small></span></button>}
           </div>
         </div> : <>
           <header className="intake-workspace-head">
@@ -213,7 +241,7 @@ export function IntakePage({ onPrepared, onNavigate }: {
           </header>
 
           <div className="intake-summary" aria-label="录入汇总">
-            <div><span>待安排任务组</span><strong>{summary.groupCount}</strong></div>
+            <div><span>待安排内容</span><strong>{summary.groupCount}</strong></div>
             <div><span>预计生成任务</span><strong>{summary.assignmentCount}</strong></div>
             <div><span>新增工作量</span><strong>{minutesText(summary.minutes)}</strong></div>
             <div className={capacityGap < 0 ? 'danger' : ''}><span>计划容量余量</span><strong>{capacityGap < 0 ? `缺 ${minutesText(-capacityGap)}` : `余 ${minutesText(capacityGap)}`}</strong></div>
@@ -223,8 +251,8 @@ export function IntakePage({ onPrepared, onNavigate }: {
 
           <div className="intake-toolbar">
             <div>
-              <button className="primary-button" onClick={() => { setEditingItem(undefined); setDialogOpen(true) }}><Plus size={16}/>新增任务组</button>
-              <button className="secondary-button" onClick={() => { setImportSource('paste'); setImportResult(undefined); setPasteOpen(true) }}><ClipboardPaste size={16}/>粘贴清单</button>
+              <button className="primary-button" onClick={() => onAddTask(active.id)}><Plus size={16}/>添加任务</button>
+              <button className="secondary-button" onClick={() => { setImportSource('paste'); setImportResult(undefined); setPasteOpen(true) }}><ClipboardPaste size={16}/>自然语言 / 粘贴清单</button>
               <button className="secondary-button" disabled={importBusy} onClick={() => fileRef.current?.click()}><Upload size={16}/>{importBusy ? '读取中' : '导入文件'}</button>
               <button className="text-button" onClick={() => downloadTextFile('study-planner-import-template.csv', buildIntakeCsvTemplate(), 'text/csv')}><Download size={15}/>下载完整模板</button>
               <input ref={fileRef} hidden type="file" accept=".txt,.csv,.tsv,.xlsx,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => event.target.files?.[0] && void handleFile(event.target.files[0])}/>
@@ -232,34 +260,34 @@ export function IntakePage({ onPrepared, onNavigate }: {
             <div className="intake-readiness">
               {issueCount ? <span className="danger-text">{issueCount} 个字段问题</span> : <span className="success-text"><Check size={15}/>可以生成预览</span>}
               <button className="primary-button" disabled={!pendingItems.length || Boolean(issueCount)} onClick={schedule}>
-                {selectedIds.length ? `安排所选 ${selectedIds.length} 组` : state.assignments.length ? '安排本批任务' : '生成第一份计划'}
+                {selectedIds.length ? `安排所选 ${selectedIds.length} 项` : state.assignments.length ? '安排本批任务' : '生成第一份计划'}
               </button>
             </div>
           </div>
 
           {pendingItems.length ? <div className="intake-table-wrap">
             <table className="intake-table">
-              <thead><tr><th><input aria-label="选择全部待安排任务组" type="checkbox" checked={selectedIds.length === pendingItems.length && pendingItems.length > 0} onChange={event => setSelectedIds(event.target.checked ? pendingItems.map(item => item.id) : [])}/></th><th>任务组</th><th>数量</th><th>单项预计</th><th>规则</th><th>状态</th><th><span className="sr-only">操作</span></th></tr></thead>
+              <thead><tr><th><input aria-label="选择全部待安排内容" type="checkbox" checked={selectedIds.length === pendingItems.length && pendingItems.length > 0} onChange={event => setSelectedIds(event.target.checked ? pendingItems.map(item => item.id) : [])}/></th><th>录入内容</th><th>数量</th><th>单项预计</th><th>规则</th><th>状态</th><th><span className="sr-only">操作</span></th></tr></thead>
               <tbody>{pendingItems.map(item => {
                 const issues = intakeDraftIssues(item, state)
                 const duplicate = duplicateSignatures.has(intakeDraftSignature(item))
                 return <tr key={item.id} id={`intake-item-${item.id}`} className={issues.length ? 'has-error' : ''}>
                   <td><input aria-label={`选择 ${item.title}`} type="checkbox" checked={selectedIds.includes(item.id)} onChange={event => setSelectedIds(current => event.target.checked ? [...new Set([...current, item.id])] : current.filter(id => id !== item.id))}/></td>
-                  <td><strong>{item.title || '未命名任务组'}</strong><small>{item.subject}，{priorities.find(option => option.value === item.priority)?.label ?? item.priority}优先级{item.latestDate ? `，最晚 ${item.latestDate}` : item.desiredDate ? `，期望 ${item.desiredDate}` : ''}</small></td>
-                  <td>{item.recurring ? '按重复日期' : item.quantity}</td>
+                  <td><strong>{item.title || (item.kind === 'single' ? '未命名独立任务' : '未命名任务组')}</strong><small><span className="intake-kind-label">{item.kind === 'single' ? '独立任务' : '任务组'}</span>{item.subject}，{priorities.find(option => option.value === item.priority)?.label ?? item.priority}优先级{item.latestDate ? `，最晚 ${item.latestDate}` : item.desiredDate ? `，期望 ${item.desiredDate}` : ''}</small></td>
+                  <td>{item.kind === 'single' ? '1' : item.recurring ? '按重复日期' : item.quantity}</td>
                   <td>{item.unitMinutes} 分钟</td>
-                  <td>{item.recurring ? '重复任务' : item.allowSplit ? `可拆分标记 · 建议 ${item.splitSessionMinutes ?? 30} 分钟` : item.dailyMax ? `每天最多 ${item.dailyMax} 项` : '普通任务'}</td>
+                  <td>{item.kind === 'single' ? '独立任务' : item.recurring ? '重复任务' : item.allowSplit ? `可拆分标记 · 建议 ${item.splitSessionMinutes ?? 30} 分钟` : item.dailyMax ? `每天最多 ${item.dailyMax} 项` : '普通任务组'}</td>
                   <td>{issues.length ? <span className="danger-text">{issues.join('；')}</span> : duplicate ? <span className="warning-text">疑似重复</span> : <span className="success-text">已保存</span>}</td>
-                  <td><div className="row-actions"><button className="icon-button" aria-label={`编辑 ${item.title}`} onClick={() => { setEditingItem(item); setDialogOpen(true) }}><Pencil size={16}/></button><button className="icon-button danger-icon" aria-label={`删除 ${item.title}`} onClick={() => removeIntakeTaskGroup(active.id, item.id)}><X size={16}/></button></div></td>
+                  <td><div className="row-actions"><button className="icon-button" aria-label={`编辑 ${item.title}`} onClick={() => { setDialogBatchId(active.id); if (item.kind === 'single') { setEditingSingle(item); setSingleDialogOpen(true) } else { setEditingItem(item); setDialogOpen(true) } }}><Pencil size={16}/></button><button className="icon-button danger-icon" aria-label={`删除 ${item.title}`} onClick={() => removeIntakeTaskGroup(active.id, item.id)}><X size={16}/></button></div></td>
                 </tr>
               })}</tbody>
             </table>
           </div> : <div className="intake-list-empty"><FileSpreadsheet size={28}/><h3>这个批次还是空的</h3><p>逐项新增，或一次导入现有任务清单。</p></div>}
 
-          {active.taskGroups.some(item => item.appliedAt) && <details className="intake-applied"><summary>已从本批次加入计划的任务组（{active.taskGroups.filter(item => item.appliedAt).length}）</summary><ul>{active.taskGroups.filter(item => item.appliedAt).map(item => <li key={item.id}>{item.title}</li>)}</ul></details>}
+          {active.taskGroups.some(item => item.appliedAt) && <details className="intake-applied"><summary>已从本批次加入计划的内容（{active.taskGroups.filter(item => item.appliedAt).length}）</summary><ul>{active.taskGroups.filter(item => item.appliedAt).map(item => <li key={item.id}>{item.title}</li>)}</ul></details>}
 
           <div className="intake-next-step">
-            <div><strong>{state.assignments.length ? '当前正式计划不会被草稿改动' : '还可以先完善目标和可用时间'}</strong><p>{state.assignments.length ? '需要时再安排本批任务，系统会先展示它对原计划的影响。' : '目标和容量设置完成后，第一次排期会更接近真实情况。'}</p></div>
+            <div><strong>{state.assignments.length ? '当前正式计划不会被录入内容改动' : '还可以先完善目标和可用时间'}</strong><p>{state.assignments.length ? '需要时再安排本批任务，系统会先展示它对原计划的影响。' : '目标和容量设置完成后，第一次排期会更接近真实情况。'}</p></div>
             <div>{!state.assignments.length && <><button className="secondary-button" onClick={() => onNavigate('goals')}>设置目标</button><button className="secondary-button" onClick={() => onNavigate('settings')}>设置可用时间</button></>}<button className="text-button" onClick={() => updateIntakeBatch(active.id, { status: 'archived' })}><Archive size={15}/>归档批次</button></div>
           </div>
         </>}
@@ -272,16 +300,44 @@ export function IntakePage({ onPrepared, onNavigate }: {
       open={dialogOpen}
       state={state}
       initial={editingItem}
-      onClose={() => { setDialogOpen(false); setEditingItem(undefined) }}
+      onClose={() => { setDialogOpen(false); setEditingItem(undefined); setDialogBatchId(undefined) }}
       onSave={(draft, keepOpen) => {
-        if (!active) return
-        if (editingItem) updateIntakeTaskGroup(active.id, editingItem.id, draft)
-        else addIntakeTaskGroup(active.id, draft)
-        if (!keepOpen || editingItem) { setDialogOpen(false); setEditingItem(undefined) }
+        const targetBatchId = dialogBatchId ?? active?.id
+        if (!targetBatchId) return
+        if (editingItem) updateIntakeTaskGroup(targetBatchId, editingItem.id, draft)
+        else addIntakeTaskGroup(targetBatchId, draft)
+        if (!keepOpen || editingItem) { setDialogOpen(false); setEditingItem(undefined); setDialogBatchId(undefined) }
       }}
     />
 
-    <Modal open={pasteOpen} title={importResult ? '确认导入结果' : '粘贴任务清单'} onClose={() => { setPasteOpen(false); setImportResult(undefined) }} wide mobileFullscreen>
+    <SingleTaskDialog
+      key={`${dialogBatchId ?? active?.id ?? 'none'}-${editingSingle?.id ?? 'new-single'}`}
+      open={singleDialogOpen}
+      state={state}
+      creationMode="intake"
+      initial={editingSingle ? {
+        title: editingSingle.title,
+        standalone: true,
+        subject: editingSingle.subject,
+        priority: editingSingle.priority,
+        estimatedMinutes: editingSingle.unitMinutes,
+        schedulingIntent: 'system',
+        locked: false,
+        notes: editingSingle.notes,
+      } : undefined}
+      onClose={() => { setSingleDialogOpen(false); setEditingSingle(undefined); setDialogBatchId(undefined) }}
+      onSubmit={(draft: NewTaskDraft) => {
+        const targetBatchId = dialogBatchId ?? active?.id
+        if (!targetBatchId) return
+        if (editingSingle) updateIntakeSingleTask(targetBatchId, editingSingle.id, draft)
+        else addIntakeSingleTask(targetBatchId, draft)
+        setSingleDialogOpen(false)
+        setEditingSingle(undefined)
+        setDialogBatchId(undefined)
+      }}
+    />
+
+    <Modal open={pasteOpen} title={importResult ? '确认导入结果' : '自然语言录入 / 粘贴清单'} onClose={() => { setPasteOpen(false); setImportResult(undefined) }} wide mobileFullscreen>
       {!importResult ? <div className="intake-paste-form">
         <label className="field"><span>每行一个任务，或直接粘贴表格</span><textarea autoFocus rows={12} value={pasteText} onChange={event => setPasteText(event.target.value)} placeholder={'数学卷 8 套，每套 90 分钟\n物理错题整理 12 次，每次 30 分钟\n\n也可以粘贴列：任务组、科目、数量、预计时长、优先级'}/><small>系统只解析并生成预览，不会直接修改正式计划。</small></label>
       </div> : <ImportPreview result={importResult} onChange={setImportResult}/>} 
@@ -362,7 +418,7 @@ function IntakeTaskDialog({ open, state, initial, onClose, onSave }: {
     if (keepOpen && !initial) setForm(emptyDraft(state))
   }
 
-  return <Modal open={open} title={initial ? '编辑录入任务组' : '新增到录入批次'} onClose={onClose} wide mobileFullscreen>
+  return <Modal open={open} title={initial ? '编辑录入中的任务组' : '添加任务组到录入'} onClose={onClose} wide mobileFullscreen>
     <div className="form-grid">
       <label className="field span-2"><span>任务组名称</span><input autoFocus value={form.title} onChange={event => patch('title', event.target.value)} placeholder="例如：化学预习"/></label>
       <label className="field"><span>科目／类别</span><input list="intake-subjects" value={form.subject} onChange={event => patch('subject', event.target.value)}/><datalist id="intake-subjects">{state.settings.customSubjects.map(subject => <option key={subject} value={subject}/>)}</datalist></label>

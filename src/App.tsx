@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import { addMonths, endOfMonth, format, getDay, isWithinInterval, parseISO, startOfMonth } from 'date-fns'
 import { useApp } from './AppContext'
-import type { AppState, Assignment, BufferPreference, DayType, PlanAdjustmentPolicy, PlanChangeEvent, Priority, SchedulingProposal, SequenceRenumberSuggestion, ConstraintException, Subject, TaskGroup } from './types'
+import type { AppState, Assignment, BufferPreference, DayType, PlanAdjustmentPolicy, PlanChangeEvent, Priority, SchedulingIntent, SchedulingProposal, SequenceRenumberSuggestion, ConstraintException, Subject, TaskGroup } from './types'
 import { clampDate, constraintsForDate, dateRange, dayTypeLabel, fmtDate, fmtWeekday, getCapacity, getDayConfig, isDateProtected, minutesText, shiftDate, timestampForDate, todayISO } from './lib/date'
 import { actualLearningSnapshot, allDurationSuggestions, analyzePlan, checkAssignmentPlacement, effectiveMinutes, planningDayLoad, predictCompletion, previewPreparedChange } from './lib/planner'
 import { allGoalProgress, nearestRelevantGoalDate } from './lib/goals'
@@ -19,8 +19,11 @@ import { Modal } from './components/Modal'
 import { Drawer } from './components/Drawer'
 import { TaskCard } from './components/TaskCard'
 import { AdjustmentIntentDialog } from './components/AdjustmentIntentDialog'
+import { BulkMoveCenterDialog } from './components/BulkMoveCenterDialog'
+import { GoalDeadlineDialog } from './components/GoalDeadlineDialog'
 import { TaskGroupDialog } from './components/TaskGroupDialog'
 import { SingleTaskDialog } from './components/SingleTaskDialog'
+import { AddTaskDialog, type TaskCreationKind, type TaskCreationMode } from './components/AddTaskDialog'
 import { AssignmentGroupChangeDialog } from './components/AssignmentGroupChangeDialog'
 import { ProposalDialog } from './components/ProposalDialog'
 import { GoalsPage } from './components/GoalsPage'
@@ -30,7 +33,6 @@ import { HistoryDiffDialog } from './components/HistoryDiffDialog'
 import { FocusTimerPage, getTimerElapsedSeconds } from './components/FocusTimerPage'
 import { GuidePage, GITHUB_REPO_URL } from './components/GuidePage'
 import { IntakePage } from './components/IntakePage'
-import { QuickCapture } from './components/QuickCapture'
 import { ExportPage } from './components/ExportPage'
 import { NumericInput } from './components/NumericInput'
 import { adjustmentPolicyForEvent, eventWithPreferences } from './lib/adjustment'
@@ -73,15 +75,18 @@ export default function App() {
   const {
     state, namespace, ready, updateSettings, prepareSingleAssignment, prepareTaskGroup,
     generateProposals, applySchedulingProposal, applyPreparedWithoutScheduling, replaceState, loadDataSpace, setDataSpace, clearDataSpace, sequenceRenumberSuggestion,
-    dismissSequenceRenumberSuggestion, applySequenceRenumber, completeReview, undo, canUndo, updateIntakeBatch
+    dismissSequenceRenumberSuggestion, applySequenceRenumber, completeReview, undo, canUndo, updateIntakeBatch, prepareDurationChange
   } = useApp()
   const [page, setPage] = useState<Page>('today')
   const initialRouteHandled = useRef(false)
   const mainAreaRef = useRef<HTMLElement>(null)
   const [singleTaskOpen, setSingleTaskOpen] = useState(false)
   const [singleTaskDate, setSingleTaskDate] = useState<string>()
-  const [singleTaskIntent, setSingleTaskIntent] = useState<'system'|'prefer-date'|'lock-date'>('system')
+  const [singleTaskIntent, setSingleTaskIntent] = useState<SchedulingIntent>('system')
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
+  const [addTaskOpen, setAddTaskOpen] = useState(false)
+  const [addTaskContext, setAddTaskContext] = useState<{ date?: string; intent: SchedulingIntent; intakeBatchId?: string }>({ intent: 'system' })
+  const [intakeAddRequest, setIntakeAddRequest] = useState<{ id: string; kind: TaskCreationKind; batchId?: string }>()
   const [reviewDate, setReviewDate] = useState<string>()
   const [proposalSession, setProposalSession] = useState<{ baseline: AppState; prepared: AppState; event: PlanChangeEvent; policy: PlanAdjustmentPolicy; proposals: SchedulingProposal[]; expansionLevel: number; calculationRevision: number; acceptedExceptions?: ConstraintException[]; decisionSummary?: string; moreExhausted?: boolean }>()
   const [proposalGeneration, setProposalGeneration] = useState<{ baseline: AppState; prepared: AppState; event: PlanChangeEvent; policy: PlanAdjustmentPolicy; seedProposals: SchedulingProposal[]; worker?: Worker; error?: string }>()
@@ -89,6 +94,8 @@ export default function App() {
   const [adjustmentOpen, setAdjustmentOpen] = useState(false)
   const [adjustmentDate, setAdjustmentDate] = useState<string>()
   const [adjustmentReason, setAdjustmentReason] = useState<'current-conflicts' | 'too-tiring' | 'future-replan' | 'execution-difference'>('current-conflicts')
+  const [deadlineDialogOpen, setDeadlineDialogOpen] = useState(false)
+  const [bulkMoveCenterOpen, setBulkMoveCenterOpen] = useState(false)
   const [sessionUser, setSessionUser] = useState<{ id: string; email?: string }>()
   const [cloudReady, setCloudReady] = useState(false)
   const [syncStatus, setSyncStatus] = useState<CloudSyncStatus>('local')
@@ -544,10 +551,25 @@ export default function App() {
     openPrepared(prepared, event, { forceAlternatives: true })
   }
 
-  const openSingleTask = (date?: string, intent: 'system'|'prefer-date'|'lock-date' = date ? 'prefer-date' : 'system') => {
-    setSingleTaskDate(date)
-    setSingleTaskIntent(intent)
-    setSingleTaskOpen(true)
+  const openAddTask = (date?: string, intent: SchedulingIntent = date ? 'prefer-date' : 'system', intakeBatchId?: string) => {
+    setAddTaskContext({ date, intent, intakeBatchId })
+    setAddTaskOpen(true)
+  }
+
+  const selectTaskCreation = (mode: TaskCreationMode, kind: TaskCreationKind) => {
+    setAddTaskOpen(false)
+    if (mode === 'intake') {
+      setIntakeAddRequest({ id: uid('intake-add'), kind, batchId: addTaskContext.intakeBatchId })
+      setPage('intake')
+      return
+    }
+    if (kind === 'single') {
+      setSingleTaskDate(addTaskContext.date)
+      setSingleTaskIntent(addTaskContext.intent)
+      setSingleTaskOpen(true)
+    } else {
+      setGroupDialogOpen(true)
+    }
   }
 
   const pendingIntakeCount = state.intakeBatches.reduce((sum, batch) => sum + (batch.status === 'archived' ? 0 : batch.taskGroups.filter(item => !item.appliedAt).length), 0)
@@ -564,7 +586,7 @@ export default function App() {
         <nav>
           {navItems.map(item => {
             const Icon = item.icon
-            const intakeLabel = item.id === 'intake' && pendingIntakeCount ? `${item.label}，${pendingIntakeCount} 个待安排任务组` : item.label
+            const intakeLabel = item.id === 'intake' && pendingIntakeCount ? `${item.label}，${pendingIntakeCount} 项待安排内容` : item.label
             return <button key={item.id} aria-label={intakeLabel} title={state.settings.sidebarCollapsed ? intakeLabel : undefined} className={page === item.id ? 'nav-active' : ''} onClick={() => { setPage(item.id); setMobileNav(false) }}><Icon size={19}/><span>{item.label}</span>{item.id === 'intake' && pendingIntakeCount > 0 && <em className="intake-nav-badge">{pendingIntakeCount > 99 ? '99+' : pendingIntakeCount}</em>}</button>
           })}
         </nav>
@@ -582,10 +604,10 @@ export default function App() {
           <div className="topbar-actions"><ActiveTimerReturnButton onOpen={() => setPage('timer')}/><button className="secondary-button" aria-label={currentIssueCount ? `计划有 ${currentIssueCount} 个问题，打开处理` : '打开计划变化入口'} onClick={() => openAdjustment()}><RefreshCw size={16}/><span>{currentIssueCount ? `${currentIssueCount} 个问题需处理` : '计划有变化'}</span></button></div>
         </header>
         <div className="page-content">
-          {page === 'today' && <TodayPage onNavigate={setPage} onPrepared={openPrepared} onAddTask={date => openSingleTask(date, 'prefer-date')} onReview={setReviewDate}/>} 
-          {page === 'calendar' && <CalendarPage onPrepared={openPrepared} onOpenAdjustment={date => openAdjustment(date, 'current-conflicts')} onAddTask={date => openSingleTask(date, 'prefer-date')}/>} 
-          {page === 'tasks' && <TasksPage onAddSingle={() => openSingleTask()} onCreateGroup={() => setGroupDialogOpen(true)} onOpenIntake={() => setPage('intake')} onPrepared={openPrepared}/>}
-          {page === 'intake' && <IntakePage onPrepared={openPrepared} onNavigate={target => setPage(target)}/>}
+          {page === 'today' && <TodayPage onNavigate={setPage} onPrepared={openPrepared} onAddTask={date => openAddTask(date, 'prefer-date')} onReview={setReviewDate}/>}
+          {page === 'calendar' && <CalendarPage onPrepared={openPrepared} onOpenAdjustment={date => openAdjustment(date, 'current-conflicts')} onAddTask={date => openAddTask(date, 'prefer-date')}/>}
+          {page === 'tasks' && <TasksPage onOpenIntake={() => setPage('intake')} onPrepared={openPrepared}/>}
+          {page === 'intake' && <IntakePage onPrepared={openPrepared} onNavigate={target => setPage(target)} onAddTask={batchId => openAddTask(undefined, 'system', batchId)} addRequest={intakeAddRequest} onAddRequestHandled={() => setIntakeAddRequest(undefined)}/>}
           {page === 'goals' && <GoalsPage onPrepared={openPrepared}/>} 
           {page === 'stats' && <Suspense fallback={<div className="page-loading"><div className="spinner"/><p>正在载入统计图表……</p></div>}><StatsPage onOpenReplan={date => openAdjustment(date, 'current-conflicts')}/></Suspense>}
           {page === 'export' && <ExportPage onNavigate={target => setPage(target)}/>}
@@ -593,17 +615,16 @@ export default function App() {
           {page === 'settings' && <SettingsPage sessionUserId={sessionUser?.id} sessionEmail={sessionUser?.email} cloudMessage={cloudMessage} onCloudUpload={uploadCloudNow} onPrepared={openPrepared}/>} 
         </div>
       </main>
-      <SingleTaskDialog open={singleTaskOpen} state={state} defaultDate={singleTaskDate} defaultIntent={singleTaskIntent} onClose={() => setSingleTaskOpen(false)} onSubmit={(draft, schedule) => {
+      <AddTaskDialog open={addTaskOpen} onClose={() => setAddTaskOpen(false)} onSelect={selectTaskCreation}/>
+      <SingleTaskDialog open={singleTaskOpen} state={state} defaultDate={singleTaskDate} defaultIntent={singleTaskIntent} creationMode="schedule" onClose={() => setSingleTaskOpen(false)} onSubmit={draft => {
         const prepared = prepareSingleAssignment(draft)
         setSingleTaskOpen(false)
-        if (schedule) openPrepared(prepared.state, prepared.event)
-        else applyPreparedWithoutScheduling(prepared.state, prepared.event, '仅保存为待安排任务')
+        openPrepared(prepared.state, prepared.event)
       }}/>
-      <TaskGroupDialog open={groupDialogOpen} state={state} onClose={() => setGroupDialogOpen(false)} onCreate={(draft, schedule) => {
+      <TaskGroupDialog open={groupDialogOpen} state={state} defaultDate={addTaskContext.date} onClose={() => setGroupDialogOpen(false)} onCreate={draft => {
         const prepared = prepareTaskGroup(draft)
         setGroupDialogOpen(false)
-        if (schedule) openPrepared(prepared.state, prepared.event)
-        else applyPreparedWithoutScheduling(prepared.state, prepared.event, '创建为未安排任务')
+        openPrepared(prepared.state, prepared.event)
       }}/>
       {proposalGeneration && <Modal open title="正在生成计划调整方案" onClose={cancelProposalGeneration}>
         <div className="proposal-generation-state"><div className={proposalGeneration.error ? 'proposal-generation-error' : 'spinner'}/><h3>{proposalGeneration.error ? '方案计算未完成' : proposalGeneration.event.title}</h3><p>{proposalGeneration.error ?? '正在独立线程中核对容量、上限、目标期限、手动安排和日期保护。取消不会修改当前计划。'}</p></div>
@@ -712,7 +733,23 @@ export default function App() {
         initialReason={adjustmentReason}
         onClose={() => setAdjustmentOpen(false)}
         onPrepared={(prepared, event) => { setAdjustmentOpen(false); openPrepared(prepared, event) }}
-        onNavigate={target => { setAdjustmentOpen(false); setPage(target) }}
+        onOpenIntake={() => openAddTask()}
+        onOpenDeadline={() => setDeadlineDialogOpen(true)}
+        onOpenBulkMove={() => setBulkMoveCenterOpen(true)}
+        onDurationSuggestion={suggestion => { const prepared = prepareDurationChange(suggestion); openPrepared(prepared.state, prepared.event) }}
+      />
+      <GoalDeadlineDialog
+        open={deadlineDialogOpen}
+        state={state}
+        onClose={() => setDeadlineDialogOpen(false)}
+        onPrepared={openPrepared}
+        onOpenGoals={() => setPage('goals')}
+      />
+      <BulkMoveCenterDialog
+        open={bulkMoveCenterOpen}
+        state={state}
+        onClose={() => setBulkMoveCenterOpen(false)}
+        onPrepared={openPrepared}
       />
       {actionNotice && <div className="action-result-toast"><div><strong>{actionNotice}</strong><span>当前操作已保存；需要时可以立即撤销。</span></div><div><button className="secondary-button" disabled={!canUndo} onClick={() => { undo(); setActionNotice('已恢复上一步') }}>撤销</button><button className="text-button" onClick={() => setActionNotice(undefined)}>关闭</button></div></div>}
       <Modal open={firstLoginOpen} title="欢迎使用 · 选择个人计划起点" onClose={() => {}}>
@@ -982,8 +1019,7 @@ function TodayPage({ onNavigate, onPrepared, onAddTask, onReview }: { onNavigate
       </div>
       <div className="button-wrap today-hero-actions"><button className="primary-button subtle-action" onClick={() => onAddTask(date)}><Plus size={16}/>添加任务</button><button className="secondary-button" onClick={() => onNavigate('calendar')}><CalendarDays size={16}/>打开月历</button><button className="secondary-button" onClick={()=>setShiftOpen(true)}>批量顺延</button>{!(!isToday && !isPast) && <button className="secondary-button today-review-button" onClick={() => onReview(date)}>{isToday ? '结束今天并复盘' : '复盘此日'}</button>}</div>
     </section>
-    {resumableBatch && <div className="intake-resume-banner"><div><Inbox size={19}/><span><strong>“{resumableBatch.name}”还在录入中</strong><small>{resumableBatchCount} 个任务组尚未安排，正式计划没有被改动。</small></span></div><button className="primary-button" onClick={() => onNavigate('intake')}>继续录入</button></div>}
-    {isToday && <QuickCapture onOpenIntake={() => onNavigate('intake')}/>}
+    {resumableBatch && <div className="intake-resume-banner"><div><Inbox size={19}/><span><strong>“{resumableBatch.name}”还在录入中</strong><small>{resumableBatchCount} 项内容尚未安排，正式计划没有被改动。</small></span></div><button className="primary-button" onClick={() => onNavigate('intake')}>继续录入</button></div>}
     {reviewReminderDate && <div className="review-reminder-banner"><div><strong>{fmtDate(reviewReminderDate)} 还有未完成的复盘</strong><span>这是轻量提醒，不会自动弹窗或反复打断。</span></div><div><button className="secondary-button" onClick={() => setReviewReminderDate(undefined)}>稍后</button><button className="primary-button" onClick={() => { setDate(reviewReminderDate); onReview(reviewReminderDate); setReviewReminderDate(undefined) }}>打开复盘</button></div></div>}
     {pendingPastTasks.length > 0 && <div className="review-reminder-banner pending-task-banner"><div><strong>{pendingPastTasks.length} 项过去未完成任务仍待处理</strong><span>包括复盘后暂不顺延和逾期任务，可到“任务 → 待处理”集中查看。</span></div><div><button className="primary-button" onClick={() => onNavigate('tasks')}>查看待处理任务</button></div></div>}
     <section className="compact-metrics today-load-metrics">
@@ -1611,7 +1647,7 @@ function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask }: { onPrepared:
   </>
 }
 
-function TasksPage({ onAddSingle, onCreateGroup, onOpenIntake, onPrepared }: { onAddSingle: () => void; onCreateGroup: () => void; onOpenIntake: () => void; onPrepared: (state: AppState, event: PlanChangeEvent) => void }) {
+function TasksPage({ onOpenIntake, onPrepared }: { onOpenIntake: () => void; onPrepared: (state: AppState, event: PlanChangeEvent) => void }) {
   const { state, editTaskGroup, updateAssignment, prepareAssignmentDelete, prepareTaskGroupEdit, prepareTaskGroupDelete, prepareDurationChange } = useApp()
   const [mode, setMode] = useState<'tasks' | 'groups'>('tasks')
   const [search, setSearch] = useState('')
@@ -1710,11 +1746,10 @@ function TasksPage({ onAddSingle, onCreateGroup, onOpenIntake, onPrepared }: { o
       <select value={priority} onChange={event => setPriority(event.target.value === 'all' ? 'all' : Number(event.target.value) as Priority)}><option value="all">全部优先级</option>{[5,3,2,1,0].map(item => <option key={item} value={item}>{priorityLabel(item as Priority)}</option>)}</select>
       <select value={subject} onChange={event => setSubject(event.target.value as 'all'|Subject)}><option value="all">全部科目／类别</option>{subjects.map(item => <option key={item}>{item}</option>)}</select>
       {mode === 'groups' && <label className="toggle-label"><input type="checkbox" checked={showHidden} onChange={event => setShowHidden(event.target.checked)}/><span>显示隐藏任务组</span></label>}
-      <div className="task-create-actions"><button className="secondary-button" onClick={onAddSingle}><Plus size={17}/>添加单项任务</button><button className="secondary-button" onClick={onCreateGroup}><Plus size={17}/>创建并安排</button><button className="primary-button" onClick={onOpenIntake}><Inbox size={17}/>批量录入</button></div>
+      <div className="tasks-toolbar-note"><Inbox size={17}/><span>添加新任务请前往“录入”</span><button className="text-button" onClick={onOpenIntake}>打开录入</button></div>
     </section>
 
     {mode === 'tasks' ? <>
-      <QuickCapture className="quick-capture-in-tasks" onOpenIntake={onOpenIntake}/>
       <div className="task-inbox-summary"><div><strong>任务收件箱</strong><span>未安排和过去未完成任务会一直留在这里，直到你明确处理。</span></div><div><b>{taskCounts.attention}</b><small>项待处理</small></div></div>
       <div className="task-filter-tabs">{filterOptions.map(item => <button key={item.id} className={taskFilter === item.id ? 'active' : ''} onClick={() => setTaskFilter(item.id)}><span>{item.label}</span><em>{item.count}</em></button>)}</div>
       <section className="assignment-list">{tasks.map(item => {
@@ -1728,7 +1763,7 @@ function TasksPage({ onAddSingle, onCreateGroup, onOpenIntake, onPrepared }: { o
       })}{!tasks.length && <div className="empty-state"><CheckCircle2 size={30}/><h3>{taskFilter === 'attention' ? '没有待处理任务' : '没有符合条件的任务'}</h3><p>{taskFilter === 'attention' ? '所有任务都有明确去向。' : '尝试切换筛选或搜索条件。'}</p></div>}</section>
     </> : <>
       <section className="group-list">{groups.map(group => { const items = assignmentsByGroup.get(group.id) ?? []; const done = items.filter(item => item.status === 'done').length; const actual = items.reduce((sum,item) => sum + item.actualMinutes,0); const planned = items.reduce((sum,item) => sum + item.estimatedMinutes,0); const durationSuggestion = allDurationSuggestions(state).find(item => item.groupId === group.id); const linkedGoals = state.goals.filter(goal => goal.linkedTaskGroupIds.includes(group.id) || goal.completionConditions.some(condition => condition.groupId === group.id)); return <article className="group-card" key={group.id}><div className="group-card-head"><div><span className={`subject-pill subject-${group.subject}`}>{group.subject}</span><span className={`priority-badge priority-${group.priority}`}>{priorityLabel(group.priority)}</span><span className="status-pill">{group.status === 'completed' ? '已完成' : group.status === 'archived' ? '已归档' : '进行中'}</span><h3>{group.title}</h3></div><div className="group-actions"><button className="text-button" onClick={() => { setMoveDate(today); setMovingGroup(group) }}>移动未完成</button><button className="text-button" onClick={() => setEditing(group)}>编辑</button><button className="icon-button danger-icon" aria-label={`删除任务组${group.title}`} onClick={() => { const prepared = prepareTaskGroupDelete(group.id); onPrepared(prepared.state, prepared.event) }}><Trash2 size={17}/></button></div></div><div className="group-stats"><span>{done}/{items.length} 已完成</span><span>预计 {minutesText(planned)}</span><span>实际 {minutesText(actual)}</span><span>关联目标 {linkedGoals.length}</span>{group.dailyMax && <span>每天最多 {group.dailyMax} 个</span>}</div><div className="progress-track"><i style={{width:`${items.length ? done/items.length*100 : 0}%`}}/></div>{(group.notes || group.sourceLabel) && <p className="group-note">{group.notes || group.sourceLabel}</p>}{durationSuggestion && <div className="duration-suggestion"><div><strong>发现用时校准机会</strong><span>当前 {durationSuggestion.currentEstimate} 分钟；最近 {durationSuggestion.sampleCount} 个有效样本平均 {Math.round(durationSuggestion.recentAverage)} 分钟，建议 {durationSuggestion.suggestedEstimate} 分钟。只会生成预览，不直接覆盖。</span></div><button className="secondary-button" onClick={() => { const prepared = prepareDurationChange(durationSuggestion); onPrepared(prepared.state, prepared.event) }}>查看时长调整方案</button></div>}</article> })}
-        {!groups.length && <div className="empty-state"><CheckCircle2 size={30}/><h3>{state.taskGroups.filter(group => !group.hiddenStandalone).length ? '没有符合条件的任务组' : '计划还是空的'}</h3><p>{state.taskGroups.length ? '调整筛选条件。' : '如果手里已有一份任务清单，建议先批量录入，全部确认后再统一排期。'}</p><div className="button-wrap"><button className="secondary-button" onClick={onAddSingle}>添加一个任务</button><button className="secondary-button" onClick={onCreateGroup}>创建并安排</button><button className="primary-button" onClick={onOpenIntake}>批量录入任务</button></div></div>}
+        {!groups.length && <div className="empty-state"><CheckCircle2 size={30}/><h3>{state.taskGroups.filter(group => !group.hiddenStandalone).length ? '没有符合条件的任务组' : '计划还是空的'}</h3><p>{state.taskGroups.length ? '调整筛选条件。' : '新任务统一从“录入”添加，确认安排后会在这里管理。'}</p><button className="primary-button" onClick={onOpenIntake}>打开录入</button></div>}
       </section>
     </>}
 

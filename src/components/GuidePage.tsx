@@ -45,11 +45,11 @@ export function GuidePage({ onNavigate }: { onNavigate: (page: GuidePageId) => v
       <div className="guide-story guide-story-image-right">
         <div className="guide-story-copy">
           <GuideSteps steps={[
-            ['进入录入', '连续新增任务组，也可以粘贴清单、导入 CSV 或 XLSX。中途退出后，下次仍能继续这个批次。'],
+            ['进入录入', '添加独立任务或任务组，也可以使用自然语言、粘贴清单、导入 CSV 或 XLSX。中途退出后，下次仍能继续这个批次。'],
             ['补充约束', '设置任务数量、单项时长、目标期限、日期偏好和每天最多安排几项。'],
             ['统一排期', '点击生成第一份计划，比较候选方案的移动、超载和目标风险，确认后才写入正式计划。'],
           ]} />
-          <button type="button" className="guide-card-action" onClick={() => onNavigate('intake')}>打开录入工作区<ArrowUpRight size={14}/></button>
+          <button type="button" className="guide-card-action" onClick={() => onNavigate('intake')}>打开录入<ArrowUpRight size={14}/></button>
         </div>
         <GuideFigure src={calendarImage} alt="月历页面，展示任务在计划周期内的日期分布" label="排期完成后" caption="在月历中检查每天的任务和容量" />
       </div>

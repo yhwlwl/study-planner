@@ -1,9 +1,24 @@
 import { describe, expect, it } from 'vitest'
 import { buildIntakeCsvTemplate, parseTableRows, remapIntakeTable, splitSessionCount } from '../src/lib/intake'
+import { appendIntakeDraft, createIntakeBatchRecord } from '../src/lib/intake-batches'
 import { createAssignmentsForGroup } from '../src/lib/seed'
 import type { TaskGroup } from '../src/types'
 
 describe('intake import last mile', () => {
+  it('keeps independent tasks distinguishable inside an intake batch', () => {
+    const now = '2026-08-10T08:00:00.000Z'
+    const batch = createIntakeBatchRecord('本周新增', now, 'batch-1')
+    const item = appendIntakeDraft(batch, {
+      title: '今晚看完第三章', subject: '语文', priority: 3, unitMinutes: 45,
+      activityType: 'normal', highIntensity: false, countInStats: true, quantity: 1, goalIds: [],
+      recurring: false, allowSplit: false, prerequisiteGroupIds: [],
+    }, 'manual', now, 'item-1', 'single')
+
+    expect(item.kind).toBe('single')
+    expect(item.quantity).toBe(1)
+    expect(batch.taskGroups).toEqual([item])
+  })
+
   it('keeps invalid rows in place and exposes editable mappings', () => {
     const result = parseTableRows([
       ['任务组名称', '科目', '数量', '单项分钟', '偏好排期日'],
