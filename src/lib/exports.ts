@@ -446,7 +446,363 @@ function subjectSummaryForExport(state: AppState, range: ExportRange) {
   const ensureGroup = (summary: ExportSubjectSummary, group: TaskGroup) => {
     const current = summary.groups.find(item => item.id === group.id)
     if (current) return current
-    const created = { id: group.id, title: group.title, planned: 0, actual: 0…7745 tokens truncated…ms}</ul></article>`
+    const created = { id: group.id, title: group.title, planned: 0, actual: 0, total: 0, done: 0, sampleSize: 0 }
+    summary.groups.push(created)
+    return created
+  }
+
+  // 任务数和完成数沿用统计页口径：展示当前科目下的全部任务，
+  // 但计划分钟和实际分钟仍只统计被纳入统计的任务组。
+  for (const assignment of state.assignments) {
+    const group = groups.get(assignment.groupId)
+    if (!group) continue
+    const summary = ensure(group.subject)
+    const groupSummary = ensureGroup(summary, group)
+    summary.total += 1
+    summary.done += assignment.status === 'done' ? 1 : 0
+    summary.completedEquivalent += progressForExport(assignment)
+    groupSummary.total += 1
+    groupSummary.done += assignment.status === 'done' ? 1 : 0
+  }
+
+  const plannedItems: Array<{ assignment?: Assignment; groupId: string; date: string; minutes: number }> = []
+  for (const baseline of state.dailyPlanBaselines) {
+    if (!capturedDates.has(baseline.date)) continue
+    for (const item of baseline.assignments) plannedItems.push({ assignment: assignmentById.get(item.assignmentId), groupId: item.groupId, date: baseline.date, minutes: item.estimatedMinutes })
+  }
+  for (const assignment of state.assignments) {
+    if (!assignment.scheduledDate || assignment.scheduledDate < range.start || assignment.scheduledDate > range.end || capturedDates.has(assignment.scheduledDate)) continue
+    plannedItems.push({ assignment, groupId: assignment.groupId, date: assignment.scheduledDate, minutes: assignment.estimatedMinutes })
+  }
+  for (const item of plannedItems) {
+    const group = groups.get(item.groupId)
+    if (!isCountedForExport(group, state.settings.countWordsTime)) continue
+    const summary = ensure(group!.subject)
+    const groupSummary = ensureGroup(summary, group!)
+    summary.planned += Math.max(0, item.minutes)
+    groupSummary.planned += Math.max(0, item.minutes)
+  }
+  for (const assignment of state.assignments) {
+    const group = groups.get(assignment.groupId)
+    if (!isCountedForExport(group, state.settings.countWordsTime)) continue
+    let recorded = 0
+    for (const entry of assignment.timeEntries ?? []) {
+      const date = entryDate(entry.createdAt)
+      const minutes = Math.max(0, Number(entry.minutes) || 0)
+      recorded += minutes
+      if (date && date >= range.start && date <= range.end) {
+        ensure(group!.subject).actual += minutes
+        ensureGroup(ensure(group!.subject), group!).actual += minutes
+      }
+    }
+    const residual = Math.max(0, assignment.actualMinutes - recorded)
+    const residualDate = entryDate(assignment.completedAt) ?? assignment.scheduledDate
+    if (residual > 0 && residualDate && residualDate >= range.start && residualDate <= range.end) {
+      ensure(group!.subject).actual += residual
+      ensureGroup(ensure(group!.subject), group!).actual += residual
+    }
+  }
+
+  for (const summary of bySubject.values()) {
+    const subjectItems = state.assignments.filter(assignment => groups.get(assignment.groupId)?.subject === summary.subject)
+    const completed = subjectItems.filter(assignment => {
+      const group = groups.get(assignment.groupId)
+      return Boolean(group && isCountedForExport(group, state.settings.countWordsTime) && assignment.status === 'done' && assignment.actualMinutes > 0)
+    })
+    const estimated = completed.reduce((sum, assignment) => sum + Math.max(0, assignment.estimatedMinutes), 0)
+    const actual = completed.reduce((sum, assignment) => sum + Math.max(0, assignment.actualMinutes), 0)
+    summary.sampleSize = completed.length
+    summary.accuracy = completed.length >= 3 && estimated > 0 ? (actual - estimated) / estimated * 100 : undefined
+    for (const groupSummary of summary.groups) {
+      const groupItems = subjectItems.filter(assignment => assignment.groupId === groupSummary.id)
+      const groupCompleted = groupItems.filter(assignment => assignment.status === 'done' && assignment.actualMinutes > 0)
+      const groupEstimated = groupCompleted.reduce((sum, assignment) => sum + Math.max(0, assignment.estimatedMinutes), 0)
+      const groupActual = groupCompleted.reduce((sum, assignment) => sum + Math.max(0, assignment.actualMinutes), 0)
+      groupSummary.sampleSize = groupCompleted.length
+      groupSummary.accuracy = groupCompleted.length >= 3 && groupEstimated > 0 ? (groupActual - groupEstimated) / groupEstimated * 100 : undefined
+    }
+    summary.groups.sort((a, b) => b.actual - a.actual || b.planned - a.planned || a.title.localeCompare(b.title))
+  }
+  return [...bySubject.values()].filter(item => item.total > 0 || item.planned > 0 || item.actual > 0).sort((a, b) => b.actual - a.actual || b.planned - a.planned || a.subject.localeCompare(b.subject))
+}
+
+function dailyChartSvg(rows: ReturnType<typeof aggregateDaily>) {
+  const width = 1000
+  const height = 310
+  const left = 58
+  const right = 20
+  const top = 28
+  const bottom = 54
+  const chartWidth = width - left - right
+  const chartHeight = height - top - bottom
+  const max = Math.max(60, ...rows.flatMap(row => [row.planned, row.actual, row.movingAverage]))
+  const slot = chartWidth / Math.max(rows.length, 1)
+  const barWidth = Math.max(2, Math.min(18, slot * .58))
+  const y = (value: number) => top + chartHeight - (value / max) * chartHeight
+  const bars = rows.map((row, index) => {
+    const x = left + index * slot + (slot - barWidth) / 2
+    const actualY = y(row.actual)
+    return `<rect x="${x.toFixed(1)}" y="${actualY.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${Math.max(0, top + chartHeight - actualY).toFixed(1)}" rx="3" fill="#2563eb"/><line x1="${(x - 2).toFixed(1)}" x2="${(x + barWidth + 2).toFixed(1)}" y1="${y(row.planned).toFixed(1)}" y2="${y(row.planned).toFixed(1)}" stroke="#94a3b8" stroke-width="2"/>`
+  }).join('')
+  const movingPoints = rows.map((row, index) => `${(left + index * slot + slot / 2).toFixed(1)},${y(row.movingAverage).toFixed(1)}`).join(' ')
+  const labels = rows.map((row, index) => {
+    const step = Math.max(1, Math.ceil(rows.length / 10))
+    if (index % step !== 0 && index !== rows.length - 1) return ''
+    return `<text x="${(left + index * slot + slot / 2).toFixed(1)}" y="${height - 24}" text-anchor="middle" font-size="10" fill="#718096">${xml(row.shortLabel)}</text>`
+  }).join('')
+  const guides = [0, .5, 1].map(ratio => {
+    const value = Math.round(max * ratio)
+    const yy = y(value)
+    return `<line x1="${left}" x2="${width - right}" y1="${yy}" y2="${yy}" stroke="#e7edf4"/><text x="${left - 9}" y="${yy + 4}" text-anchor="end" font-size="10" fill="#8a97aa">${value}分</text>`
+  }).join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="每日计划与实际学习趋势">${guides}${bars}<polyline points="${movingPoints}" fill="none" stroke="#8b5cf6" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>${labels}<g transform="translate(${left},10)"><rect width="10" height="10" rx="2" fill="#2563eb"/><text x="16" y="9" font-size="10" fill="#68758a">实际</text><line x1="66" x2="78" y1="5" y2="5" stroke="#94a3b8" stroke-width="2"/><text x="84" y="9" font-size="10" fill="#68758a">计划</text><line x1="137" x2="149" y1="5" y2="5" stroke="#8b5cf6" stroke-width="2.5"/><text x="155" y="9" font-size="10" fill="#68758a">7日均值</text></g></svg>`
+}
+
+function subjectChartSvg(rows: ExportSubjectSummary[]) {
+  const width = 1000
+  const rowHeight = 38
+  const height = Math.max(120, rows.length * rowHeight + 42)
+  const left = 90
+  const right = 90
+  const chartWidth = width - left - right
+  const max = Math.max(60, ...rows.flatMap(row => [row.planned, row.actual]))
+  const bars = rows.map((row, index) => {
+    const y = 27 + index * rowHeight
+    const color = subjectSvgColors[row.subject] ?? subjectSvgColors.其他
+    const plannedWidth = chartWidth * row.planned / max
+    const actualWidth = chartWidth * row.actual / max
+    return `<text x="${left - 12}" y="${y + 14}" text-anchor="end" font-size="12" fill="#26344b">${xml(row.subject)}</text><rect x="${left}" y="${y}" width="${plannedWidth.toFixed(1)}" height="10" rx="5" fill="#dbe3ee"/><rect x="${left}" y="${y + 14}" width="${actualWidth.toFixed(1)}" height="10" rx="5" fill="${color}"/><text x="${width - right + 10}" y="${y + 23}" font-size="10" fill="#68758a">${xml(minutesText(row.actual))}</text>`
+  }).join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="各科计划与实际投入">${bars}<g transform="translate(${left},${height - 16})"><rect width="10" height="10" rx="3" fill="#dbe3ee"/><text x="16" y="9" font-size="10" fill="#68758a">计划</text><rect x="62" width="10" height="10" rx="3" fill="#2563eb"/><text x="78" y="9" font-size="10" fill="#68758a">实际</text></g></svg>`
+}
+
+function buildLegacyStatisticsReportHtml(state: AppState, range: ExportRange) {
+  const groups = activeGroupMap(state)
+  const daily = aggregateDaily(state.assignments, groups, state.settings.countWordsTime, range.start, range.end, state.dailyPlanBaselines)
+  const subjects = subjectSummaryForExport(state, range)
+  const assignments = assignmentsInRange(state, range)
+  const planned = daily.reduce((sum, row) => sum + row.planned, 0)
+  const actual = daily.reduce((sum, row) => sum + row.actual, 0)
+  const extra = daily.reduce((sum, row) => sum + row.extraActual, 0)
+  const focusSessions = daily.reduce((sum, row) => sum + row.focusSessions, 0)
+  const activeDays = daily.filter(row => row.actual > 0).length
+  const average = activeDays ? Math.round(actual / activeDays) : 0
+  const taskCount = daily.reduce((sum, row) => sum + row.plannedTasks, 0)
+  const completion = taskCount ? Math.round(daily.reduce((sum, row) => sum + row.completedEquivalent, 0) / taskCount * 100) : 0
+  const generatedAt = new Date().toLocaleString('zh-CN')
+  const dailyRows = daily.map(row => `<tr><td>${html(row.date)}</td><td>${html(fmtWeekday(row.date))}</td><td>${row.planned}</td><td>${row.actual}</td><td>${row.extraActual}</td><td>${Math.round(row.taskCompletion)}%</td><td>${row.lateTasks}</td><td>${row.focusSessions}</td></tr>`).join('')
+  const subjectRows = subjects.map(row => `<tr><td>${html(row.subject)}</td><td>${row.planned}</td><td>${row.actual}</td><td>${row.total}</td><td>${row.done}</td><td>${row.total ? Math.round(row.completedEquivalent / row.total * 100) : 0}%</td></tr>`).join('')
+  const taskRows = assignments.map(item => {
+    const group = groups.get(item.groupId)
+    return `<tr><td>${html(item.scheduledDate)}</td><td>${html(item.title)}</td><td>${html(group?.subject ?? '其他')}</td><td>${item.estimatedMinutes}</td><td>${item.actualMinutes}</td><td>${html(taskStatusLabel[item.status])}</td></tr>`
+  }).join('')
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${html(state.settings.planName)} 学习统计报告</title><style>
+  :root{font-family:"Segoe UI","Microsoft YaHei",sans-serif;color:#172033;background:#fff}*{box-sizing:border-box}body{margin:0 auto;max-width:1080px;padding:34px}header{border-bottom:2px solid #2563eb;padding-bottom:18px;margin-bottom:24px}h1{font-size:28px;margin:0 0 8px;letter-spacing:-.03em}h2{font-size:18px;margin:28px 0 11px}h3{font-size:14px;margin:0 0 8px}p{color:#667085;margin:4px 0;line-height:1.6}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:24px 0}.summary div{border:1px solid #dfe5ee;border-radius:13px;padding:14px;background:#fbfcfe}.summary span{display:block;color:#667085;font-size:11px}.summary strong{display:block;font-size:21px;margin-top:6px}.chart{border:1px solid #e1e8f1;border-radius:14px;padding:12px 14px;background:#fff}.chart svg{width:100%;height:auto;display:block}.two-column{display:grid;grid-template-columns:1fr 1fr;gap:14px}.table-wrap{overflow:hidden;border:1px solid #e1e8f1;border-radius:12px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border-bottom:1px solid #e6ebf1;padding:8px 7px;text-align:left}th{background:#f5f8fc;color:#526176;font-weight:700}tbody tr:last-child td{border-bottom:0}.privacy{margin-top:24px;padding:12px;border-radius:10px;background:#f4f7fb;font-size:10px}.muted{color:#7a8799;font-size:11px}@media print{body{padding:0;max-width:none}thead{display:table-header-group}.summary div,.chart,.two-column>section{break-inside:avoid}h2{break-after:avoid}}@media(max-width:700px){body{padding:20px}.summary{grid-template-columns:1fr 1fr}.two-column{grid-template-columns:1fr}.table-wrap{overflow:auto}table{min-width:620px}}
+  </style></head><body><header><h1>${html(state.settings.planName)} 学习统计报告</h1><p>${html(range.start)} 至 ${html(range.end)} · 生成于 ${html(generatedAt)}</p><p class="muted">实际学习按实际发生日期归属；计划外学习单独标记，不会混入原计划完成率。</p></header><section class="summary"><div><span>已发生实际</span><strong>${minutesText(actual)}</strong></div><div><span>原计划</span><strong>${minutesText(planned)}</strong></div><div><span>实际学习天数 · 日均</span><strong>${activeDays} 天 · ${minutesText(average)}</strong></div><div><span>完成率 · 有效专注</span><strong>${completion}% · ${focusSessions} 次</strong></div></section><h2>每日学习趋势</h2><div class="chart">${dailyChartSvg(daily)}</div><section class="two-column"><section><h2>各科投入</h2><div class="chart">${subjects.length ? subjectChartSvg(subjects) : '<p class="muted">范围内还没有可统计的科目数据。</p>'}</div></section><section><h2>统计口径</h2><div class="chart"><p>已发生实际：${minutesText(actual)}；其中计划外 ${minutesText(extra)}。</p><p>任务完成率同时参考任务数量与当前进度，工作量完成率按预计分钟加权。</p><p>有效专注：计时器产生且不少于 1 分钟的记录。</p></div></section></section><h2>每日明细</h2><div class="table-wrap"><table><thead><tr><th>日期</th><th>星期</th><th>原计划</th><th>实际</th><th>计划外</th><th>任务完成</th><th>逾期</th><th>专注次数</th></tr></thead><tbody>${dailyRows}</tbody></table></div><h2>科目明细</h2><div class="table-wrap"><table><thead><tr><th>科目</th><th>计划分钟</th><th>实际分钟</th><th>任务数</th><th>已完成</th><th>完成率</th></tr></thead><tbody>${subjectRows || '<tr><td colspan="6">没有可统计的科目数据。</td></tr>'}</tbody></table></div><h2>任务明细</h2><div class="table-wrap"><table><thead><tr><th>日期</th><th>任务</th><th>科目</th><th>预计</th><th>实际累计</th><th>状态</th></tr></thead><tbody>${taskRows || '<tr><td colspan="6">这个范围没有已排期任务。</td></tr>'}</tbody></table></div><p class="privacy">报告可能包含个人任务、目标和学习时间。分享前请先检查内容。你可以在打印窗口选择“另存为 PDF”。</p></body></html>`
+}
+
+function completionChartSvg(rows: ReturnType<typeof aggregateDaily>) {
+  const width = 1000
+  const height = 300
+  const left = 58
+  const right = 20
+  const top = 30
+  const bottom = 48
+  const chartWidth = width - left - right
+  const chartHeight = height - top - bottom
+  const slot = chartWidth / Math.max(rows.length - 1, 1)
+  const x = (index: number) => left + (rows.length <= 1 ? chartWidth / 2 : index * slot)
+  const y = (value: number) => top + chartHeight - Math.max(0, Math.min(100, value)) / 100 * chartHeight
+  const line = (key: 'taskCompletion' | 'workloadCompletion') => rows.map((row, index) => `${x(index).toFixed(1)},${y(row[key]).toFixed(1)}`).join(' ')
+  const guides = [0, 50, 100].map(value => `<line x1="${left}" x2="${width - right}" y1="${y(value)}" y2="${y(value)}" stroke="#e7edf4"/><text x="${left - 9}" y="${y(value) + 4}" text-anchor="end" font-size="10" fill="#8a97aa">${value}%</text>`).join('')
+  const labels = rows.map((row, index) => {
+    const step = Math.max(1, Math.ceil(rows.length / 10))
+    if (index % step !== 0 && index !== rows.length - 1) return ''
+    return `<text x="${x(index)}" y="${height - 18}" text-anchor="middle" font-size="10" fill="#718096">${xml(row.shortLabel)}</text>`
+  }).join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="每日任务完成率与工作量完成率">${guides}<polyline points="${line('taskCompletion')}" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/><polyline points="${line('workloadCompletion')}" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>${labels}<g transform="translate(${left},10)"><line x1="0" x2="14" y1="5" y2="5" stroke="#2563eb" stroke-width="2.5"/><text x="20" y="9" font-size="10" fill="#68758a">任务数完成率</text><line x1="105" x2="119" y1="5" y2="5" stroke="#16a34a" stroke-width="2.5"/><text x="125" y="9" font-size="10" fill="#68758a">工作量完成率</text></g></svg>`
+}
+
+function focusChartSvg(rows: ReturnType<typeof aggregateDaily>) {
+  const width = 1000
+  const height = 300
+  const left = 58
+  const right = 42
+  const top = 30
+  const bottom = 48
+  const chartWidth = width - left - right
+  const chartHeight = height - top - bottom
+  const max = Math.max(30, ...rows.flatMap(row => [row.timerActual, row.focusSessions]))
+  const slot = chartWidth / Math.max(rows.length, 1)
+  const barWidth = Math.max(2, Math.min(18, slot * .55))
+  const y = (value: number) => top + chartHeight - value / max * chartHeight
+  const bars = rows.map((row, index) => {
+    const x = left + index * slot + (slot - barWidth) / 2
+    const topY = y(row.timerActual)
+    return `<rect x="${x.toFixed(1)}" y="${topY.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${Math.max(0, top + chartHeight - topY).toFixed(1)}" rx="3" fill="#8b5cf6"/>`
+  }).join('')
+  const points = rows.map((row, index) => `${(left + index * slot + slot / 2).toFixed(1)},${y(row.focusSessions).toFixed(1)}`).join(' ')
+  const labels = rows.map((row, index) => {
+    const step = Math.max(1, Math.ceil(rows.length / 10))
+    if (index % step !== 0 && index !== rows.length - 1) return ''
+    return `<text x="${(left + index * slot + slot / 2).toFixed(1)}" y="${height - 18}" text-anchor="middle" font-size="10" fill="#718096">${xml(row.shortLabel)}</text>`
+  }).join('')
+  const guides = [0, .5, 1].map(ratio => {
+    const value = Math.round(max * ratio)
+    const yy = y(value)
+    return `<line x1="${left}" x2="${width - right}" y1="${yy}" y2="${yy}" stroke="#e7edf4"/><text x="${left - 9}" y="${yy + 4}" text-anchor="end" font-size="10" fill="#8a97aa">${value}</text>`
+  }).join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="每日有效专注分钟与次数">${guides}${bars}<polyline points="${points}" fill="none" stroke="#f59e0b" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>${labels}<g transform="translate(${left},10)"><rect width="10" height="10" rx="2" fill="#8b5cf6"/><text x="16" y="9" font-size="10" fill="#68758a">专注分钟</text><line x1="88" x2="102" y1="5" y2="5" stroke="#f59e0b" stroke-width="2.5"/><text x="108" y="9" font-size="10" fill="#68758a">有效次数</text></g></svg>`
+}
+
+function heatmapSvg(rows: ReturnType<typeof aggregateDaily>) {
+  const cell = 14
+  const gap = 3
+  const left = 32
+  const top = 26
+  const offset = rows.length ? (new Date(`${rows[0].date}T00:00:00Z`).getUTCDay() + 6) % 7 : 0
+  const weekCount = Math.max(1, Math.ceil((offset + rows.length) / 7))
+  const width = left + weekCount * (cell + gap) + 18
+  const height = top + 7 * (cell + gap) + 16
+  const max = Math.max(1, ...rows.map(row => row.actual))
+  const color = (value: number) => value <= 0 ? '#eef2f6' : value / max < .25 ? '#cfe0ff' : value / max < .5 ? '#9fc1ff' : value / max < .75 ? '#5f92f2' : '#2563eb'
+  const cells = rows.map((row, index) => {
+    const position = offset + index
+    const column = Math.floor(position / 7)
+    const weekday = position % 7
+    const x = left + column * (cell + gap)
+    const y = top + weekday * (cell + gap)
+    return `<rect x="${x}" y="${y}" width="${cell}" height="${cell}" rx="5" fill="${color(row.actual)}"><title>${xml(row.label)} · ${xml(minutesText(row.actual))}</title></rect>`
+  }).join('')
+  const weekdays = ['一', '三', '五', '日'].map((label, index) => `<text x="${left - 8}" y="${top + [0, 2, 4, 6][index] * (cell + gap) + 10}" text-anchor="end" font-size="9" fill="#718096">${label}</text>`).join('')
+  const months = rows.map((row, index) => {
+    if (index > 0 && !row.date.endsWith('-01')) return ''
+    const position = offset + index
+    const column = Math.floor(position / 7)
+    return `<text x="${left + column * (cell + gap)}" y="${top - 8}" font-size="9" fill="#718096">${Number(row.date.slice(5, 7))}月</text>`
+  }).join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="实际学习时间热力图">${weekdays}${months}${cells}</svg>`
+}
+
+interface ExportLedgerRow {
+  date: string
+  title: string
+  group: string
+  subject: string
+  minutes: number
+  source: string
+  createdAt: string
+}
+
+function ledgerRowsForExport(state: AppState, range: ExportRange): ExportLedgerRow[] {
+  const groups = activeGroupMap(state)
+  const rows: ExportLedgerRow[] = []
+  for (const assignment of state.assignments) {
+    const group = groups.get(assignment.groupId)
+    if (!group) continue
+    let recorded = 0
+    for (const entry of assignment.timeEntries ?? []) {
+      const date = entryDate(entry.createdAt)
+      const minutes = Math.max(0, Number(entry.minutes) || 0)
+      recorded += minutes
+      if (!date || date < range.start || date > range.end || minutes <= 0) continue
+      rows.push({ date, title: assignment.title, group: group.title, subject: group.subject, minutes, source: sourceLabel(entry.source), createdAt: entry.originalCreatedAt ?? entry.createdAt })
+    }
+    const residual = Math.max(0, assignment.actualMinutes - recorded)
+    const residualDate = entryDate(assignment.completedAt) ?? assignment.scheduledDate
+    if (residual > 0 && residualDate && residualDate >= range.start && residualDate <= range.end) {
+      rows.push({ date: residualDate, title: assignment.title, group: group.title, subject: group.subject, minutes: residual, source: sourceLabel(), createdAt: assignment.completedAt ?? residualDate })
+    }
+  }
+  return rows.sort((a, b) => a.date.localeCompare(b.date) || a.title.localeCompare(b.title) || a.createdAt.localeCompare(b.createdAt))
+}
+
+function accuracyLabel(value?: number) {
+  if (value === undefined) return '样本不足'
+  if (value > 0) return `低估 ${Math.round(value)}%`
+  if (value < 0) return `高估 ${Math.abs(Math.round(value))}%`
+  return '预计准确'
+}
+
+function reportSection(enabled: boolean, title: string, content: string) {
+  return enabled ? `<section class="report-section"><h2>${html(title)}</h2>${content}</section>` : ''
+}
+
+export function buildStatisticsReportHtml(state: AppState, range: ExportRange, requestedSections: Partial<StatisticsReportSections> = {}) {
+  const sections = { ...defaultStatisticsReportSections, ...requestedSections }
+  const groups = activeGroupMap(state)
+  const daily = aggregateDaily(state.assignments, groups, state.settings.countWordsTime, range.start, range.end, state.dailyPlanBaselines)
+  const subjects = subjectSummaryForExport(state, range)
+  const assignments = assignmentsInRange(state, range)
+  const goalRows = allGoalProgress(state)
+  const durationSuggestions = allDurationSuggestions(state).filter(item => groups.has(item.groupId))
+  const ledgerRows = ledgerRowsForExport(state, range)
+  const planned = daily.reduce((sum, row) => sum + row.planned, 0)
+  const actual = daily.reduce((sum, row) => sum + row.actual, 0)
+  const extra = daily.reduce((sum, row) => sum + row.extraActual, 0)
+  const timer = daily.reduce((sum, row) => sum + row.timerActual, 0)
+  const manual = daily.reduce((sum, row) => sum + row.manualActual, 0)
+  const legacy = daily.reduce((sum, row) => sum + row.legacyActual, 0)
+  const taskCount = daily.reduce((sum, row) => sum + row.plannedTasks, 0)
+  const completedEquivalent = daily.reduce((sum, row) => sum + row.completedEquivalent, 0)
+  const taskCompletion = taskCount ? completedEquivalent / taskCount * 100 : 0
+  const workloadCompletion = planned ? daily.reduce((sum, row) => sum + row.planned * row.workloadCompletion / 100, 0) / planned * 100 : 0
+  const activeDays = daily.filter(row => row.actual > 0).length
+  const average = activeDays ? Math.round(actual / activeDays) : 0
+  const focusSessions = daily.reduce((sum, row) => sum + row.focusSessions, 0)
+  const focusDurations = ledgerRows.filter(row => row.source === '计时器').map(row => row.minutes)
+  const averageFocus = focusDurations.length ? Math.round(focusDurations.reduce((sum, value) => sum + value, 0) / focusDurations.length) : 0
+  const longestFocus = focusDurations.length ? Math.max(...focusDurations) : 0
+  const today = todayISO()
+  const completedCounted = state.assignments.filter(item => {
+    const group = groups.get(item.groupId)
+    return isCountedForExport(group, state.settings.countWordsTime) && item.status === 'done' && item.completedAt && item.scheduledDate
+  })
+  const onTime = completedCounted.filter(item => entryDate(item.completedAt)! <= item.scheduledDate!).length
+  const onTimeRate = completedCounted.length ? onTime / completedCounted.length * 100 : 0
+  const currentLate = state.assignments.filter(item => {
+    const group = groups.get(item.groupId)
+    return Boolean(group && item.scheduledDate && item.scheduledDate < today && item.status !== 'done')
+  }).length
+  const changedTasks = state.assignments.filter(item => item.previousDate && groups.has(item.groupId)).length
+  const activeTasks = state.assignments.filter(item => groups.has(item.groupId)).length
+  const carryovers = state.assignments.filter(item => item.scheduleSource === 'carryover' && groups.has(item.groupId)).length
+  const priorityRows = [5, 3, 2, 1, 0].map(priority => {
+    const ids = new Set(state.taskGroups.filter(group => group.priority === priority && !group.hidden).map(group => group.id))
+    const items = state.assignments.filter(item => ids.has(item.groupId))
+    const completed = items.reduce((sum, item) => sum + progressForExport(item), 0)
+    return { label: priority === 5 ? '核心' : priority === 3 ? '高' : priority === 2 ? '中' : priority === 1 ? '低' : '可选', total: items.length, completion: items.length ? completed / items.length * 100 : 0 }
+  }).filter(row => row.total > 0)
+  const dominantSubject = subjects.filter(item => actual > 0 && item.actual > 0).sort((a, b) => b.actual - a.actual)[0]
+  const insightItems = [
+    planned > 0 ? { tone: actual >= planned ? 'positive' : 'warning', title: actual >= planned ? '实际学习达到或超过原计划' : '实际学习低于原计划', detail: `范围内实际 ${minutesText(actual)}，原计划 ${minutesText(planned)}，完成 ${Math.round(workloadCompletion)}%。` } : undefined,
+    dominantSubject ? { tone: 'neutral', title: `${dominantSubject.subject}是投入最多的科目`, detail: `实际 ${minutesText(dominantSubject.actual)}，占有效学习 ${Math.round(dominantSubject.actual / Math.max(actual, 1) * 100)}%。` } : undefined,
+    currentLate > 0 ? { tone: 'warning', title: `当前有 ${currentLate} 项任务超过原定日期`, detail: '延期统计按当前任务日期计算，不会把已经归档的任务混入。' } : undefined,
+    durationSuggestions.length ? { tone: 'neutral', title: `有 ${durationSuggestions.length} 个任务组出现稳定时长偏差`, detail: '报告只展示建议，不会在导出时修改预计时长或计划。' } : undefined,
+  ].filter(Boolean) as Array<{ tone: string; title: string; detail: string }>
+  const dailyRows = daily.map(row => `<tr><td>${html(row.date)}</td><td>${html(fmtWeekday(row.date))}</td><td>${row.planned}</td><td>${row.actual}</td><td>${row.extraActual}</td><td>${row.timerActual}</td><td>${row.manualActual}</td><td>${row.plannedTasks}</td><td>${row.doneTasks}</td><td>${row.partialTasks}</td><td>${Math.round(row.taskCompletion)}%</td><td>${Math.round(row.workloadCompletion)}%</td><td>${row.lateTasks}</td><td>${row.focusSessions}</td></tr>`).join('')
+  const subjectRows = subjects.map(row => `<tr><td>${html(row.subject)}</td><td>${row.planned}</td><td>${row.actual}</td><td>${row.total}</td><td>${row.done}</td><td>${Math.round(row.completedEquivalent / Math.max(row.total, 1) * 100)}%</td><td>${html(accuracyLabel(row.accuracy))}</td><td>${row.sampleSize || '—'}</td></tr>`).join('')
+  const subjectGroupRows = subjects.flatMap(subject => subject.groups.filter(group => group.total > 0 || group.planned > 0 || group.actual > 0).map(group => `<tr><td>${html(subject.subject)}</td><td>${html(group.title)}</td><td>${group.planned}</td><td>${group.actual}</td><td>${group.done}/${group.total}</td><td>${html(accuracyLabel(group.accuracy))}</td></tr>`)).join('')
+  const taskRows = assignments.map(item => {
+    const group = groups.get(item.groupId)
+    return `<tr><td>${html(item.scheduledDate)}</td><td>${html(item.title)}</td><td>${html(group?.subject ?? '其他')}</td><td>${item.estimatedMinutes}</td><td>${item.actualMinutes}</td><td>${Math.round(item.progress)}%</td><td>${html(taskStatusLabel[item.status])}</td></tr>`
+  }).join('')
+  const tasksByDate = new Map<string, Assignment[]>()
+  for (const assignment of assignments) {
+    const date = assignment.scheduledDate!
+    tasksByDate.set(date, [...(tasksByDate.get(date) ?? []), assignment])
+  }
+  const taskDates = dateRange(range.start, range.end).filter(date => (tasksByDate.get(date)?.length ?? 0) > 0)
+  const dailyTaskCards = taskDates.map(date => {
+    const dayAssignments = tasksByDate.get(date) ?? []
+    const doneCount = dayAssignments.filter(item => item.status === 'done').length
+    const taskItems = dayAssignments.length ? dayAssignments.map(item => {
+      const group = groups.get(item.groupId)
+      const stateClass = item.status === 'done' ? 'done' : item.status === 'partial' ? 'partial' : 'todo'
+      const stateText = item.status === 'done' ? '已完成' : item.status === 'partial' ? `部分完成 ${Math.round(item.progress)}%` : '未完成'
+      return `<li><span class="day-task-title"><i class="subject-dot" style="background:${subjectSvgColors[group?.subject ?? '其他'] ?? subjectSvgColors.其他}"></i><strong>${html(item.title)}</strong><small>${html(group?.subject ?? '其他')} · ${item.estimatedMinutes} 分钟</small></span><span class="task-state ${stateClass}">${stateText}</span></li>`
+    }).join('') : '<li class="day-task-empty">当天没有已排任务</li>'
+    return `<article class="day-task-card"><header><div><strong>${html(fmtDate(date))}</strong><span>${html(fmtWeekday(date))}</span></div><em>${doneCount}/${dayAssignments.length} 已完成</em></header><ul>${taskItems}</ul></article>`
   }).join('')
   const ledgerSummary = [
     ['计时器', timer],
