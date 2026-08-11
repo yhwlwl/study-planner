@@ -1101,7 +1101,6 @@ function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask }: { onPrepared:
   const [calendarExportNotice, setCalendarExportNotice] = useState('')
   const [moveModeTaskId, setMoveModeTaskId] = useState<string>()
   const longPressActivated = useRef(false)
-  const touchStartX = useRef<number>()
   const [calendarTaskLimit, setCalendarTaskLimit] = useState(() => window.innerWidth >= 1400 ? 4 : window.innerWidth >= 900 ? 3 : 2)
   const longPressTimer = useRef<number>()
   const groups = useMemo(() => new Map(state.taskGroups.map(group => [group.id, group])), [state.taskGroups])
@@ -1325,15 +1324,6 @@ function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask }: { onPrepared:
       .then(() => setCalendarExportNotice('月历 PNG 已开始下载。'))
       .catch(error => setCalendarExportNotice(error instanceof Error ? error.message : '月历图片生成失败，请稍后重试。'))
   }
-  const handleCalendarTouchStart = (event: React.TouchEvent) => { touchStartX.current = event.touches[0]?.clientX }
-  const handleCalendarTouchEnd = (event: React.TouchEvent) => {
-    if (moveModeTaskId || touchStartX.current === undefined) return
-    const delta = event.changedTouches[0]?.clientX - touchStartX.current
-    touchStartX.current = undefined
-    if (Math.abs(delta) < 55) return
-    moveCalendarWindow(delta < 0 ? 1 : -1)
-  }
-
   const openOverflow = (date: string, event: React.MouseEvent) => {
     event.stopPropagation()
     if (window.innerWidth <= 760) { chooseCalendarDate(date); return }
@@ -1495,7 +1485,7 @@ function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask }: { onPrepared:
      {calendarExportNotice && <div className="export-notice calendar-export-notice" role="status"><CheckCircle2 size={17}/><span>{calendarExportNotice}</span></div>}
     {moveNotice && <div className="manual-move-notice"><div><strong>已记录你的手动安排</strong><span>「{moveNotice.title}」已移到 {moveNotice.date}，后续自动调整会优先保留，也不会近期拉回原日期。</span></div><div className="button-wrap"><button className="secondary-button" onClick={() => { updateAssignment(moveNotice.id, { locked: true }); setMoveNotice(undefined) }}><Lock size={15}/>同时锁定</button><button className="text-button" onClick={() => setMoveNotice(undefined)}>知道了</button></div></div>}
     {moveModeTaskId && <div className="calendar-move-mode"><div><strong>正在移动：{state.assignments.find(item => item.id === moveModeTaskId)?.title}</strong><span>点击月历或周视图中的目标日期。再次长按其他任务可更换对象。</span></div><button className="secondary-button" onClick={() => setMoveModeTaskId(undefined)}>取消移动</button></div>}
-    <section className={`calendar-card ${viewMode === 'week' ? 'calendar-week-view' : 'calendar-month-view'}`} onTouchStart={handleCalendarTouchStart} onTouchEnd={handleCalendarTouchEnd}>
+    <section className={`calendar-card ${viewMode === 'week' ? 'calendar-week-view' : 'calendar-month-view'}`}>
       {viewMode === 'month' ? <>
         <div className="weekday-row">{['日', '一', '二', '三', '四', '五', '六'].map(label => <div key={label}>周{label}</div>)}</div>
         <div className="calendar-grid">

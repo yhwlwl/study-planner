@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { BarChart3, CalendarDays, CheckCircle2, Clock3, Database, Download, FileSpreadsheet, FileText, Printer, ShieldCheck } from 'lucide-react'
+import { BarChart3, CalendarDays, CheckCircle2, Clock3, Database, Download, FileSpreadsheet, FileText, ImageDown, Printer, ShieldCheck } from 'lucide-react'
 import { useApp } from '../AppContext'
 import { clampDate, minutesText, shiftDate, todayISO } from '../lib/date'
 import {
@@ -7,6 +7,7 @@ import {
   buildCalendarIcs,
   buildCalendarPrintHtml,
   buildCalendarSvg,
+  buildTaskTableSvg,
   buildStatisticsReportHtml,
   buildStatisticsCsv,
   buildTimeLedgerCsv,
@@ -16,7 +17,10 @@ import {
   monthExportRange,
   safeExportName,
   defaultStatisticsReportSections,
+  defaultTaskTableImageColumns,
+  taskTableImageColumnOptions,
   type StatisticsReportSections,
+  type TaskTableImageColumn,
   type ExportRange,
 } from '../lib/exports'
 
@@ -58,6 +62,7 @@ export function ExportPage({ onNavigate }: { onNavigate: (page: ExportPageId) =>
   const [end, setEnd] = useState(initialEnd)
   const [calendarMonth, setCalendarMonth] = useState(initialEnd.slice(0, 7))
   const [reportSections, setReportSections] = useState<StatisticsReportSections>(() => ({ ...defaultStatisticsReportSections }))
+  const [taskImageColumns, setTaskImageColumns] = useState<TaskTableImageColumn[]>(() => [...defaultTaskTableImageColumns])
   const [notice, setNotice] = useState('')
   const valid = Boolean(start && end && start <= end)
   const range: ExportRange = { start, end }
@@ -118,6 +123,22 @@ export function ExportPage({ onNavigate }: { onNavigate: (page: ExportPageId) =>
       .catch(error => setNotice(error instanceof Error ? error.message : '月历图片生成失败，请稍后重试。'))
   }
 
+  const toggleTaskImageColumn = (column: TaskTableImageColumn) => {
+    setTaskImageColumns(current => {
+      if (current.includes(column)) return current.length === 1 ? current : current.filter(item => item !== column)
+      return taskTableImageColumnOptions.filter(option => current.includes(option.key) || option.key === column).map(option => option.key)
+    })
+    setNotice('')
+  }
+
+  const downloadTaskTableImage = () => {
+    if (!valid) return
+    setNotice('正在生成任务清单长图……')
+    void downloadSvgAsPng(`${filenameBase}-tasks.png`, buildTaskTableSvg(state, range, taskImageColumns))
+      .then(() => setNotice('任务清单长图已开始下载。文件包含所选范围内的全部已排任务。'))
+      .catch(error => setNotice(error instanceof Error ? error.message : '任务清单长图生成失败，请缩短日期范围后重试。'))
+  }
+
   return <div className="export-page">
     <section className="export-hero">
       <div>
@@ -130,7 +151,7 @@ export function ExportPage({ onNavigate }: { onNavigate: (page: ExportPageId) =>
     </section>
 
     <section className="export-range-panel">
-      <div className="export-range-copy"><h3>统计与流水范围</h3><p>这个范围用于统计报告、统计 CSV 和时间流水；月历导出单独选择月份。</p></div>
+      <div className="export-range-copy"><h3>导出日期范围</h3><p>这个范围用于学习报告、任务清单长图、统计 CSV 和时间流水；月历导出单独选择月份。</p></div>
       <div className="export-presets" aria-label="日期范围快捷选项">
         <button type="button" onClick={() => setPreset('recent')}>近 7 天</button>
         <button type="button" onClick={() => setPreset('30d')}>近 30 天</button>
@@ -150,6 +171,23 @@ export function ExportPage({ onNavigate }: { onNavigate: (page: ExportPageId) =>
         <span><strong>{minutesText(summary.plannedMinutes)}</strong> 原计划</span>
         <span><strong>{minutesText(summary.actualMinutes)}</strong> 已发生实际</span>
       </div>}
+    </section>
+
+    <section className="export-task-image" aria-labelledby="export-task-image-title">
+      <div className="export-task-image-header">
+        <div className="export-task-image-title">
+          <span aria-hidden="true"><ImageDown size={22}/></span>
+          <div><h3 id="export-task-image-title">任务清单长图</h3><p>按日期连续列出所选范围内的全部任务，完成、部分完成和未完成状态都会保留；内容较多时会自动生成纵向长图。</p></div>
+        </div>
+        <div className="export-task-image-actions"><span>已选 {taskImageColumns.length} 列</span><button type="button" className="text-button" onClick={() => setTaskImageColumns([...defaultTaskTableImageColumns])}>恢复默认</button></div>
+      </div>
+      <div className="export-column-grid" aria-label="选择长图列">
+        {taskTableImageColumnOptions.map(option => <label key={option.key} className="export-column-choice"><input type="checkbox" checked={taskImageColumns.includes(option.key)} onChange={() => toggleTaskImageColumn(option.key)}/><span>{option.label}</span></label>)}
+      </div>
+      <div className="export-task-image-footer">
+        <span>{summary ? `${summary.assignments} 项任务将写入长图` : '请先选择有效日期范围'}</span>
+        <button type="button" className="primary-button" disabled={!valid || !summary?.assignments} onClick={downloadTaskTableImage}><ImageDown size={16}/>下载长图 PNG</button>
+      </div>
     </section>
 
     <section className="export-section-picker" aria-labelledby="export-report-sections-title">

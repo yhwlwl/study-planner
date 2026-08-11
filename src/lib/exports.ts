@@ -9,6 +9,21 @@ export interface ExportRange {
   end: string
 }
 
+export type TaskTableImageColumn = 'date' | 'task' | 'subject' | 'group' | 'estimated' | 'actual' | 'progress' | 'status'
+
+export const taskTableImageColumnOptions: Array<{ key: TaskTableImageColumn; label: string }> = [
+  { key: 'date', label: '日期' },
+  { key: 'task', label: '任务' },
+  { key: 'subject', label: '科目' },
+  { key: 'group', label: '任务组' },
+  { key: 'estimated', label: '预计分钟' },
+  { key: 'actual', label: '实际分钟' },
+  { key: 'progress', label: '进度' },
+  { key: 'status', label: '状态' },
+]
+
+export const defaultTaskTableImageColumns: TaskTableImageColumn[] = ['date', 'task', 'subject', 'estimated', 'status']
+
 export interface StatisticsReportSections {
   overview: boolean
   daily: boolean
@@ -179,6 +194,80 @@ export function buildCalendarSvg(state: AppState, month: string, options: { show
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${xml(year)}年${monthNumber}月学习月历"><rect width="100%" height="100%" fill="#ffffff"/><text x="${margin}" y="${margin + 34}" font-size="30" font-weight="800" fill="#172033">${year}年${monthNumber}月学习月历</text><text x="${margin}" y="${margin + 62}" font-size="13" fill="#68758a">${xml(state.settings.planName)} · 计划安排与每日容量</text>${legend}<rect x="${margin}" y="${margin + headerHeight}" width="${gridWidth}" height="${weekdayHeight}" fill="#f8fafc" stroke="#dfe6ef"/>${weekdays}${cells}</svg>`
 }
 
+/** Build a compact, shareable task-list image for an arbitrary date range. */
+export function buildTaskTableSvg(state: AppState, range: ExportRange, columns: TaskTableImageColumn[] = defaultTaskTableImageColumns) {
+  const allowed = new Set(taskTableImageColumnOptions.map(option => option.key))
+  const selectedColumns = Array.from(new Set(columns.filter(column => allowed.has(column))))
+  const safeColumns = selectedColumns.length ? selectedColumns : [...defaultTaskTableImageColumns]
+  const assignments = assignmentsInRange(state, range)
+  const groups = activeGroupMap(state)
+  const width = 1440
+  const margin = 40
+  const contentWidth = width - margin * 2
+  const titleHeight = 126
+  const headerHeight = 48
+  const rowHeight = 40
+  const emptyHeight = assignments.length ? 0 : 116
+  const footerHeight = 54
+  const tableHeight = headerHeight + assignments.length * rowHeight + emptyHeight
+  const height = margin + titleHeight + tableHeight + footerHeight + margin
+  const baseWidths: Record<TaskTableImageColumn, number> = {
+    date: 150,
+    task: 430,
+    subject: 130,
+    group: 250,
+    estimated: 130,
+    actual: 130,
+    progress: 110,
+    status: 120,
+  }
+  const baseTotal = safeColumns.reduce((sum, column) => sum + baseWidths[column], 0)
+  const columnWidths = safeColumns.map(column => contentWidth * baseWidths[column] / baseTotal)
+  const completed = assignments.filter(item => item.status === 'done').length
+  const partial = assignments.filter(item => item.status === 'partial').length
+  const tableTop = margin + titleHeight
+  const rowValue = (assignment: Assignment, column: TaskTableImageColumn, availableWidth: number) => {
+    const group = groups.get(assignment.groupId)
+    const maxCharacters = Math.max(4, Math.floor((availableWidth - 24) / 15))
+    if (column === 'date') return assignment.scheduledDate ?? ''
+    if (column === 'task') return shortText(assignment.title, maxCharacters)
+    if (column === 'subject') return group?.subject ?? '其他'
+    if (column === 'group') return shortText(group?.title ?? '', maxCharacters)
+    if (column === 'estimated') return `${assignment.estimatedMinutes} 分`
+    if (column === 'actual') return `${assignment.actualMinutes} 分`
+    if (column === 'progress') return `${Math.round(assignment.progress)}%`
+    return taskStatusLabel[assignment.status]
+  }
+  const headerCells: string[] = []
+  const bodyCells: string[] = []
+  let offset = margin
+  safeColumns.forEach((column, index) => {
+    const columnWidth = columnWidths[index]
+    const label = taskTableImageColumnOptions.find(option => option.key === column)?.label ?? column
+    headerCells.push(`<text x="${offset + 14}" y="${tableTop + 30}" font-size="13" font-weight="750" fill="#526176">${xml(label)}</text>`)
+    if (index > 0) headerCells.push(`<line x1="${offset}" y1="${tableTop}" x2="${offset}" y2="${tableTop + tableHeight}" stroke="#e6ebf2"/>`)
+    offset += columnWidth
+  })
+  assignments.forEach((assignment, rowIndex) => {
+    const y = tableTop + headerHeight + rowIndex * rowHeight
+    const rowFill = rowIndex % 2 ? '#fbfcfe' : '#ffffff'
+    bodyCells.push(`<rect x="${margin}" y="${y}" width="${contentWidth}" height="${rowHeight}" fill="${rowFill}"/><line x1="${margin}" y1="${y + rowHeight}" x2="${margin + contentWidth}" y2="${y + rowHeight}" stroke="#e6ebf2"/>`)
+    let cellX = margin
+    safeColumns.forEach((column, columnIndex) => {
+      const columnWidth = columnWidths[columnIndex]
+      const color = column === 'status'
+        ? assignment.status === 'done' ? '#16815c' : assignment.status === 'partial' ? '#a96709' : '#64748b'
+        : '#26344b'
+      const weight = column === 'task' || column === 'status' ? 650 : 450
+      bodyCells.push(`<text x="${cellX + 14}" y="${y + 26}" font-size="13" font-weight="${weight}" fill="${color}">${xml(rowValue(assignment, column, columnWidth))}</text>`)
+      cellX += columnWidth
+    })
+  })
+  const emptyState = assignments.length ? '' : `<text x="${width / 2}" y="${tableTop + headerHeight + 66}" text-anchor="middle" font-size="16" fill="#7a879a">所选日期范围内没有已排任务</text>`
+  const footerY = tableTop + tableHeight + 34
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${xml(range.start)} 至 ${xml(range.end)} 任务清单"><rect width="100%" height="100%" fill="#f5f7fb"/><rect x="${margin}" y="${margin}" width="${contentWidth}" height="${height - margin * 2}" rx="22" fill="#ffffff" stroke="#dfe6ef"/><text x="${margin + 24}" y="${margin + 40}" font-size="28" font-weight="800" fill="#172033">任务清单</text><text x="${margin + 24}" y="${margin + 70}" font-size="13" fill="#68758a">${xml(state.settings.planName)} · ${xml(range.start)} 至 ${xml(range.end)}</text><text x="${margin + contentWidth - 24}" y="${margin + 40}" text-anchor="end" font-size="15" font-weight="750" fill="#2563eb">共 ${assignments.length} 项</text><text x="${margin + contentWidth - 24}" y="${margin + 69}" text-anchor="end" font-size="12" fill="#68758a">已完成 ${completed} · 部分完成 ${partial} · 未完成 ${Math.max(0, assignments.length - completed - partial)}</text><rect x="${margin}" y="${tableTop}" width="${contentWidth}" height="${headerHeight}" fill="#f1f5fa"/>${headerCells.join('')}${bodyCells.join('')}${emptyState}<text x="${margin + 24}" y="${footerY}" font-size="11" fill="#8a97aa">生成于 ${xml(new Date().toLocaleString('zh-CN'))} · 数据仅在本机处理</text></svg>`
+}
+
 function downloadBlobFile(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
@@ -195,15 +284,17 @@ export function downloadSvgAsPng(filename: string, svg: string) {
     const match = /viewBox="0 0 (\d+(?:\.\d+)?) (\d+(?:\.\d+)?)"/.exec(svg)
     const width = Number(match?.[1] ?? 1600)
     const height = Number(match?.[2] ?? 1200)
-    const scale = 2
+    const maximumCanvasSide = 16384
+    const maximumCanvasPixels = 64_000_000
+    const scale = Math.min(2, maximumCanvasSide / width, maximumCanvasSide / height, Math.sqrt(maximumCanvasPixels / (width * height)))
     const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
     const url = URL.createObjectURL(svgBlob)
     const image = new Image()
     image.onload = () => {
       try {
         const canvas = document.createElement('canvas')
-        canvas.width = width * scale
-        canvas.height = height * scale
+        canvas.width = Math.max(1, Math.floor(width * scale))
+        canvas.height = Math.max(1, Math.floor(height * scale))
         const context = canvas.getContext('2d')
         if (!context) throw new Error('当前浏览器不支持图片导出。')
         context.fillStyle = '#ffffff'
