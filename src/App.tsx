@@ -986,7 +986,7 @@ export default function App() {
       'review-carry': { target: 'review-carry', text: '没做完的不用重新录入；系统已经选好可行日期，确认顺延。' },
       'review-preview': { target: 'proposal-primary', text: '先预览未完成任务会移到哪里，再确认。' },
       'future-entry': { target: 'replan-center', text: '当前问题处理完了。再看看没有出问题时怎么主动重新安排未来。' },
-      'future-action': { target: 'future-submit|future-replan', text: '选择“重新安排剩余计划”，用均衡方式重新规划未来。' },
+      'future-action': { target: 'future-submit|future-replan', text: '选择“重新安排剩余计划”，优先保障最近目标，看看未来会怎么变化。' },
       'future-preview': { target: 'proposal-primary', text: '这次是主动规划未来，不是修复故障。确认看看结果。' },
       complete: { text: '你已经走完一次完整计划循环：目标 → 排期 → 执行 → 复盘 → 调整。', actionLabel: '开始我的计划', onAction: () => { void exitTutorial(true) }, secondaryLabel: '继续看看', onSecondary: () => { const updated = advanceTutorialOnly('complete', 'free'); if (updated) setPage('today') } },
     }

@@ -136,10 +136,10 @@ export function AdjustmentIntentDialog({
     setReplanStart(defaultDate)
     setIncludeToday(false)
     setReplanSubject('all')
-    setReplanOutcome('balanced')
+    setReplanOutcome(tutorialMode === 'future' ? 'goal' : 'balanced')
     setTodayMode('none')
     setCustomMinutes(30)
-  }, [open, initialAction, defaultDate, state])
+  }, [open, initialAction, defaultDate, state, tutorialMode])
 
   const backToCenter = () => setActiveAction('center')
   const todayExtraMinutes = todayMode === '30' ? 30 : todayMode === '60' ? 60 : todayMode === 'custom' ? Math.max(0, customMinutes) : 0
@@ -322,7 +322,7 @@ export function AdjustmentIntentDialog({
         <label className="adjustment-check-row"><input type="checkbox" checked={includeToday && canIncludeToday} onChange={event => setIncludeToday(event.target.checked)} disabled={!canIncludeToday || tutorialMode === 'future'} /><span><strong>包含今天</strong><small>把今天尚未完成的任务也纳入重排；未来任务是否进入今天，仍需在下面明确开放额外分钟。</small></span></label>
         {includeToday && canIncludeToday && <div className="adjustment-today-control compact">{(['none', '30', '60', 'custom'] as const).map(item => <button type="button" key={item} className={todayMode === item ? 'active' : ''} onClick={() => setTodayMode(item)}><strong>{item === 'none' ? '不再新增' : item === 'custom' ? '自定义' : `${item} 分钟`}</strong><span>{item === 'none' ? '今天保持现状' : '额外接收未来任务'}</span></button>)}</div>}
         {includeToday && todayMode === 'custom' && <label className="field compact-field"><span>今天额外可用分钟</span><NumericInput min={0} max={720} value={customMinutes} onValueChange={setCustomMinutes} /></label>}
-        <fieldset className="adjustment-choice-fieldset"><legend>这次重排采用什么取舍？</legend><div className="adjustment-preference-options">{(['preserve', 'balanced', 'goal', 'rest'] as ReplanOutcome[]).map(item => <button type="button" key={item} className={replanOutcome === item ? 'selected' : ''} disabled={tutorialMode === 'future' && item !== 'balanced'} onClick={() => setReplanOutcome(item)}><strong>{preferenceCopy[item].title}</strong><span>{preferenceCopy[item].description}</span></button>)}</div></fieldset>
+        <fieldset className="adjustment-choice-fieldset"><legend>这次重排采用什么取舍？</legend><div className="adjustment-preference-options">{(['preserve', 'balanced', 'goal', 'rest'] as ReplanOutcome[]).map(item => <button type="button" key={item} className={replanOutcome === item ? 'selected' : ''} disabled={tutorialMode === 'future' && item !== 'goal'} onClick={() => setReplanOutcome(item)}><strong>{preferenceCopy[item].title}</strong><span>{preferenceCopy[item].description}</span></button>)}</div></fieldset>
         <div className="adjustment-form-note"><ListChecks size={17} /><span>已完成、部分执行记录、锁定和过去日期都会被保护；只会重新计算你选择范围内仍未完成的任务。</span></div>
       </section>
     </>
