@@ -66,6 +66,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
   const [deletedBatchName, setDeletedBatchName] = useState<string>()
   const fileRef = useRef<HTMLInputElement>(null)
   const handledAddRequestId = useRef<string>()
+  const [showFirstScheduleCue, setShowFirstScheduleCue] = useState(false)
 
   useEffect(() => {
     if (activeId && activeBatches.some(batch => batch.id === activeId)) return
@@ -95,6 +96,18 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
   const duplicateCount = pendingItems.filter(item => duplicateSignatures.has(intakeDraftSignature(item))).length
   const deadlineCount = pendingItems.filter(item => item.desiredDate || item.latestDate || item.recurring).length
   const linkedGoalCount = pendingItems.filter(item => item.goalIds.length || item.goalTitle || item.desiredDate || item.latestDate).length
+
+  useEffect(() => {
+    if (state.assignments.length || !pendingItems.length || issueCount || dialogOpen || singleDialogOpen || pasteOpen) return
+    try {
+      const key = 'study-planner:seen-first-schedule-cue-v1'
+      if (localStorage.getItem(key)) return
+      localStorage.setItem(key, '1')
+      setShowFirstScheduleCue(true)
+    } catch {
+      setShowFirstScheduleCue(true)
+    }
+  }, [state.assignments.length, pendingItems.length, issueCount, dialogOpen, singleDialogOpen, pasteOpen])
 
   useEffect(() => {
     if (!active?.lastEditedItemId) return
@@ -143,6 +156,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
 
   const schedule = () => {
     if (!active) return
+    setShowFirstScheduleCue(false)
     const ids = selectedIds.length ? selectedIds : pendingItems.map(item => item.id)
     const invalid = pendingItems.filter(item => ids.includes(item.id) && intakeDraftIssues(item, state).length)
     if (invalid.length) {
@@ -190,9 +204,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
       <div>
         <span className="intake-kicker"><Inbox size={16}/>录入</span>
         <h2>{state.assignments.length ? '先把新增任务收齐，再决定如何调整计划' : '先录入任务，完成后统一生成第一份计划'}</h2>
-        <p>{state.assignments.length
-          ? '录入中的内容不会改变今天和未来的正式安排。你可以分几次完成，再统一安排全部或所选任务。'
-          : '这里会自动保存录入进度。中途退出没有关系，下次可以从原位置继续。'}</p>
+        <p>录入后需确认排期，任务才会进入今日和月历。</p>
       </div>
       <button className="primary-button" onClick={createBatch}><FolderPlus size={17}/>新建录入批次</button>
     </section>
@@ -258,9 +270,13 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
               <input ref={fileRef} hidden type="file" accept=".txt,.csv,.tsv,.xlsx,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => event.target.files?.[0] && void handleFile(event.target.files[0])}/>
             </div>
             <div className="intake-readiness">
-              {issueCount ? <span className="danger-text">{issueCount} 个字段问题</span> : <span className="success-text"><Check size={15}/>可以生成预览</span>}
+              {issueCount
+                ? <span className="danger-text">{issueCount} 个字段问题</span>
+                : showFirstScheduleCue
+                  ? <span className="success-text">任务已录入，下一步 ↘</span>
+                  : <span className="success-text"><Check size={15}/>可以生成预览</span>}
               <button className="primary-button" disabled={!pendingItems.length || Boolean(issueCount)} onClick={schedule}>
-                {selectedIds.length ? `安排所选 ${selectedIds.length} 项` : state.assignments.length ? '安排本批任务' : '生成第一份计划'}
+                {selectedIds.length ? `预览所选 ${selectedIds.length} 项排期` : '生成排期预览'}
               </button>
             </div>
           </div>
@@ -287,7 +303,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
           {active.taskGroups.some(item => item.appliedAt) && <details className="intake-applied"><summary>已从本批次加入计划的内容（{active.taskGroups.filter(item => item.appliedAt).length}）</summary><ul>{active.taskGroups.filter(item => item.appliedAt).map(item => <li key={item.id}>{item.title}</li>)}</ul></details>}
 
           <div className="intake-next-step">
-            <div><strong>{state.assignments.length ? '当前正式计划不会被录入内容改动' : '还可以先完善目标和可用时间'}</strong><p>{state.assignments.length ? '需要时再安排本批任务，系统会先展示它对原计划的影响。' : '目标和容量设置完成后，第一次排期会更接近真实情况。'}</p></div>
+            <div><strong>{state.assignments.length ? '录入内容尚未进入正式计划' : '还可以先完善目标和可用时间'}</strong><p>{state.assignments.length ? '确认排期后才会加入今日和月历。' : '设置好后，再生成第一份排期预览。'}</p></div>
             <div>{!state.assignments.length && <><button className="secondary-button" onClick={() => onNavigate('goals')}>设置目标</button><button className="secondary-button" onClick={() => onNavigate('settings')}>设置可用时间</button></>}<button className="text-button" onClick={() => updateIntakeBatch(active.id, { status: 'archived' })}><Archive size={15}/>归档批次</button></div>
           </div>
         </>}
