@@ -1,6 +1,7 @@
 import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js'
 import type { AppState } from '../types'
 import { portableState } from './state'
+import { recordAnalyticsEvent, recordSignupConfirmedIfPending, rememberPendingSignup } from './analytics'
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const anon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
@@ -16,15 +17,29 @@ export async function getSession(): Promise<Session | null> {
 export async function signIn(email: string, password: string) {
   if (!supabase) throw new Error('Supabase 尚未配置')
   const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-  if (error) throw error
+  if (error) {
+    if (/confirm|verified|验证|确认/i.test(error.message)) rememberPendingSignup(email)
+    throw error
+  }
   return data.session
 }
 
 export async function signUp(email: string, password: string) {
   if (!supabase) throw new Error('Supabase 尚未配置')
+  void recordAnalyticsEvent('signup_started', { metadata: { emailDomain: email.trim().toLowerCase().split('@')[1] } })
   const { data, error } = await supabase.auth.signUp({ email, password })
   if (error) throw error
+  if (data.user) {
+    rememberPendingSignup(email, data.user.id)
+    if (data.session) void recordSignupConfirmedIfPending(data.user.id, data.user.email)
+  }
   return data.session
+}
+
+export async function resendSignupConfirmation(email: string) {
+  if (!supabase) throw new Error('Supabase 尚未配置')
+  const { error } = await supabase.auth.resend({ type: 'signup', email })
+  if (error) throw error
 }
 
 export async function signOut() {
