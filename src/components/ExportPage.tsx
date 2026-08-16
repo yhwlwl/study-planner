@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { BarChart3, CalendarDays, CheckCircle2, Clock3, Database, Download, FileSpreadsheet, FileText, ImageDown, Printer, ShieldCheck } from 'lucide-react'
+import { BarChart3, CalendarDays, CheckCircle2, Clock3, Database, Download, FileSpreadsheet, FileText, Printer, ShieldCheck } from 'lucide-react'
 import { useApp } from '../AppContext'
 import { clampDate, minutesText, shiftDate, todayISO } from '../lib/date'
 import {
@@ -176,7 +176,7 @@ export function ExportPage({ onNavigate }: { onNavigate: (page: ExportPageId) =>
     <section className="export-task-image" aria-labelledby="export-task-image-title">
       <div className="export-task-image-header">
         <div className="export-task-image-title">
-          <span aria-hidden="true"><ImageDown size={22}/></span>
+          <span aria-hidden="true"><Download size={22}/></span>
           <div><h3 id="export-task-image-title">任务清单长图</h3><p>按日期连续列出所选范围内的全部任务，完成、部分完成和未完成状态都会保留；内容较多时会自动生成纵向长图。</p></div>
         </div>
         <div className="export-task-image-actions"><span>已选 {taskImageColumns.length} 列</span><button type="button" className="text-button" onClick={() => setTaskImageColumns([...defaultTaskTableImageColumns])}>恢复默认</button></div>
@@ -186,7 +186,7 @@ export function ExportPage({ onNavigate }: { onNavigate: (page: ExportPageId) =>
       </div>
       <div className="export-task-image-footer">
         <span>{summary ? `${summary.assignments} 项任务将写入长图` : '请先选择有效日期范围'}</span>
-        <button type="button" className="primary-button" disabled={!valid || !summary?.assignments} onClick={downloadTaskTableImage}><ImageDown size={16}/>下载长图 PNG</button>
+        <button type="button" className="primary-button" disabled={!valid || !summary?.assignments} onClick={downloadTaskTableImage}><Download size={16}/>下载长图 PNG</button>
       </div>
     </section>
 
