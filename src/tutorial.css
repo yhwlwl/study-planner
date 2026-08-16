@@ -1,0 +1,46 @@
+.tutorial-coachmark {
+  position: fixed;
+  z-index: 2600;
+  width: min(320px, calc(100vw - 24px));
+  padding: 12px 13px;
+  border: 1px solid color-mix(in srgb, var(--primary, #4f6ef7) 35%, var(--line, #e7ebf1));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface, #fff) 96%, transparent);
+  box-shadow: 0 12px 32px rgba(20, 28, 45, .16);
+  backdrop-filter: blur(12px);
+  max-height: min(320px, calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.tutorial-coachmark::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  background: inherit;
+  border: inherit;
+  transform: translateX(-50%) rotate(45deg);
+}
+.tutorial-coachmark-above::after { bottom: -6px; border-left: 0; border-top: 0; }
+.tutorial-coachmark-below::after { top: -6px; border-right: 0; border-bottom: 0; }
+.tutorial-coachmark-fallback::after { display: none; }
+.tutorial-coachmark-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tutorial-coachmark-head > span { font-size: 12px; font-weight: 700; color: var(--muted, #667085); }
+.tutorial-coachmark-head > div { display: flex; gap: 2px; }
+.tutorial-icon-button { border: 0; background: transparent; color: var(--muted, #667085); width: 27px; height: 27px; border-radius: 8px; display: grid; place-items: center; cursor: pointer; }
+.tutorial-icon-button:hover { background: var(--surface-2, rgba(127,127,127,.08)); }
+.tutorial-coachmark p { margin: 5px 0 0; font-size: 14px; line-height: 1.5; font-weight: 650; color: var(--text, inherit); }
+.tutorial-coachmark-actions { margin-top: 10px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.tutorial-coachmark-actions .primary-button { min-height: 34px; padding: 7px 12px; }
+.tutorial-highlight { position: relative; z-index: 2501 !important; outline: 3px solid color-mix(in srgb, var(--primary, #4f6ef7) 32%, transparent) !important; outline-offset: 4px; border-radius: 10px; animation: tutorial-pulse 1.8s ease-in-out infinite; }
+@keyframes tutorial-pulse { 0%,100% { outline-color: color-mix(in srgb, var(--primary, #4f6ef7) 24%, transparent); } 50% { outline-color: color-mix(in srgb, var(--primary, #4f6ef7) 52%, transparent); } }
+.tutorial-mode-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 700; background: var(--surface-2, rgba(127,127,127,.08)); color: var(--muted, #667085); }
+.tutorial-blocked-notice { position: fixed; z-index: 2700; left: 50%; bottom: calc(22px + env(safe-area-inset-bottom)); transform: translateX(-50%); padding: 9px 12px; border-radius: 999px; background: var(--text, #1d2939); color: var(--surface, #fff); font-size: 13px; box-shadow: 0 8px 24px rgba(0,0,0,.16); }
+.tutorial-finish-card { display: grid; gap: 14px; }
+.tutorial-finish-flow { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; color: var(--muted, #667085); }
+.tutorial-finish-flow strong { color: var(--text, inherit); }
+@media (max-width: 640px) {
+  .tutorial-coachmark { padding: 11px 12px; width: min(320px, calc(100vw - 24px - env(safe-area-inset-left) - env(safe-area-inset-right))); }
+  .tutorial-coachmark p { font-size: 13px; }
+}

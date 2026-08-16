@@ -4,7 +4,7 @@ import type { Assignment, TaskGroup } from '../types'
 import { minutesText } from '../lib/date'
 import { useApp } from '../AppContext'
 
-export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact = false }: { assignment: Assignment; group: TaskGroup; onComplete: (assignment: Assignment) => void; onOpenTimer: (assignment: Assignment) => void; compact?: boolean }) {
+export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact = false, tutorialTarget = false, tutorialLocked = false, tutorialDisabled = false }: { assignment: Assignment; group: TaskGroup; onComplete: (assignment: Assignment) => void; onOpenTimer: (assignment: Assignment) => void; compact?: boolean; tutorialTarget?: boolean; tutorialLocked?: boolean; tutorialDisabled?: boolean }) {
   const { state, updateAssignment, startTimer } = useApp()
   const [tick, setTick] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -47,8 +47,8 @@ export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact =
 
 
   return (
-    <article className={`task-card ${assignment.status === 'done' ? 'task-done' : ''} ${compact ? 'task-compact' : ''}`} draggable={!assignment.locked && assignment.status !== 'done'} onDragStart={event => event.dataTransfer.setData('text/assignment-id', assignment.id)}>
-      <button className="check-button" onClick={complete} disabled={assignment.status === 'done'} aria-label={assignment.status === 'done' ? '任务已完成' : '完成任务'} title={assignment.status === 'done' ? '任务已完成；重新打开请使用更多菜单' : '完成任务'}>
+    <article data-assignment-id={assignment.id} className={`task-card ${assignment.status === 'done' ? 'task-done' : ''} ${compact ? 'task-compact' : ''}`} draggable={!tutorialLocked && !assignment.locked && assignment.status !== 'done'} onDragStart={event => event.dataTransfer.setData('text/assignment-id', assignment.id)}>
+      <button className="check-button" data-tutorial-target={tutorialTarget ? 'tutorial-execute' : undefined} data-tutorial-action={tutorialTarget ? 'complete-tutorial-task' : undefined} onClick={complete} disabled={assignment.status === 'done' || tutorialDisabled} aria-label={assignment.status === 'done' ? '任务已完成' : '完成任务'} title={assignment.status === 'done' ? '任务已完成；重新打开请使用更多菜单' : '完成任务'}>
         {assignment.status === 'done' ? <Check size={18} /> : null}
       </button>
       <div className="task-main">
@@ -62,7 +62,7 @@ export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact =
         </div>
         {active && <div className="timer-strip"><Clock3 size={15}/><span>{String(Math.floor(elapsed / 3600)).padStart(2,'0')}:{String(Math.floor(elapsed % 3600 / 60)).padStart(2,'0')}:{String(elapsed % 60).padStart(2,'0')}</span></div>}
       </div>
-      {!compact && <div className="task-actions">
+      {!compact && !tutorialLocked && <div className="task-actions">
         {assignment.status !== 'done' && (active
           ? <button className="text-button timer-start-button" onClick={() => onOpenTimer(assignment)}><Clock3 size={15}/>返回计时</button>
           : anotherTimerActive

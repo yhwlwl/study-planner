@@ -2,16 +2,17 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { AppState, DurationSuggestion, PlanChangeEvent } from '../types'
 import { useApp } from '../AppContext'
 import { actualMinutesForAssignmentOnDate, allDurationSuggestions, effectiveMinutes, reviewDaySnapshot, suggestMoveDates } from '../lib/planner'
-import { fmtDate, getCapacity, minutesText, todayISO } from '../lib/date'
+import { fmtDate, getCapacity, minutesText, shiftDate, todayISO } from '../lib/date'
 import { Modal } from './Modal'
 
-export function ReviewDialog({ open, date, onClose, onPreparedDuration, onApplyCurrentPlan, onRequestMorePlans }: {
+export function ReviewDialog({ open, date, onClose, onPreparedDuration, onApplyCurrentPlan, onRequestMorePlans, tutorialMode = false }: {
   open: boolean
   date: string
   onClose: () => void
   onPreparedDuration: (state: AppState, event: PlanChangeEvent) => void
   onApplyCurrentPlan: (state: AppState, event: PlanChangeEvent) => void
   onRequestMorePlans: (state: AppState, event: PlanChangeEvent) => void
+  tutorialMode?: boolean
 }) {
   const { state, completeReview, prepareDurationChange, prepareReviewCompletion } = useApp()
   const snapshot = useMemo(() => reviewDaySnapshot(state, date), [state, date])
@@ -109,13 +110,13 @@ export function ReviewDialog({ open, date, onClose, onPreparedDuration, onApplyC
       return
     }
     const prepared = prepareReviewCompletion(date, carryDates)
-    onClose()
     onApplyCurrentPlan(prepared.state, prepared.event)
+    onClose()
   }
   const requestMoreReviewPlans = () => {
     const prepared = prepareReviewCompletion(date, carryDates)
-    onClose()
     onRequestMorePlans(prepared.state, prepared.event)
+    onClose()
   }
   const closeAndRecord = () => {
     completeReview(date)
@@ -123,8 +124,8 @@ export function ReviewDialog({ open, date, onClose, onPreparedDuration, onApplyC
   }
   const acceptSuggestion = (suggestion: DurationSuggestion) => {
     const prepared = prepareDurationChange(suggestion, suggestion.suggestedEstimate, date)
-    onClose()
     onPreparedDuration(prepared.state, prepared.event)
+    onClose()
   }
   const openReviewSection = (id: string, expand?: 'completed' | 'charts') => {
     if (expand === 'completed') setCompletedOpen(true)
@@ -159,28 +160,30 @@ export function ReviewDialog({ open, date, onClose, onPreparedDuration, onApplyC
       <header><div><span className="review-section-index">01</span><div><h3>处理未完成任务</h3><p>原“结束今天”的顺延、保留逾期和完整方案入口已合并到这里。</p></div></div><strong>{unfinished.length} 项</strong></header>
       {unfinished.length === 0 ? <div className="review-empty-success"><strong>无需顺延普通任务</strong><span>可继续查看时长建议或统计图表。</span></div> : <div className="review-task-decision-list">{unfinished.map(item => {
         const group = groups.get(item.groupId)
-        const options = suggestMoveDates(state, item.id, 8).filter(candidate => candidate > date).slice(0, 5)
+        const legalOptions = suggestMoveDates(state, item.id, 8).filter(candidate => candidate > date)
+        const tutorialTarget = shiftDate(date, 1)
+        const options = tutorialMode ? legalOptions.filter(candidate => candidate === tutorialTarget).slice(0, 1) : legalOptions.slice(0, 5)
         const movable = !item.locked && state.timer.assignmentId !== item.id
         return <article key={item.id} className="review-task-decision">
           <div className="review-task-decision-main">
             <div className="review-task-title"><span className={`subject-pill subject-${group?.subject ?? '其他'}`}>{group?.subject ?? '其他'}</span><strong>{item.title}</strong>{item.locked && <em>已锁定</em>}{state.timer.assignmentId === item.id && <em>正在计时</em>}</div>
             <div className="review-task-progress"><div><i style={{ width: `${Math.max(0, Math.min(100, item.progress))}%` }}/></div><span>{item.progress}% · 剩余约 {minutesText(item.remainingMinutes ?? Math.max(0, item.estimatedMinutes - item.actualMinutes))}</span></div>
           </div>
-          <label className="review-carry-choice"><span>接下来怎么安排</span><select disabled={!movable} value={carryDates[item.id] ?? ''} onChange={event => setCarryDates(current => ({ ...current, [item.id]: event.target.value }))}><option value="">保留在 {fmtDate(date)}，之后显示为逾期</option>{options.map(target => <option key={target} value={target}>{projectedLabel(item.id, target)}</option>)}</select>{!movable && <small>锁定或正在计时的任务不能在这里移动。</small>}</label>
+          <label className="review-carry-choice"><span>接下来怎么安排</span><select data-tutorial-target={tutorialMode ? 'review-carry-date' : undefined} data-tutorial-action="review-carry-date" disabled={!movable} value={carryDates[item.id] ?? ''} onChange={event => setCarryDates(current => ({ ...current, [item.id]: event.target.value }))}>{!tutorialMode && <option value="">保留在 {fmtDate(date)}，之后显示为逾期</option>}{options.map(target => <option key={target} value={target}>{projectedLabel(item.id, target)}</option>)}</select>{!movable && <small>锁定或正在计时的任务不能在这里移动。</small>}</label>
         </article>
       })}</div>}
     </section>
 
-    <section id="review-completed" className="review-section">
+    {!tutorialMode && <section id="review-completed" className="review-section">
       <button className="review-section-toggle" onClick={() => setCompletedOpen(value => !value)}><div><span className="review-section-index">02</span><div><h3>已完成任务</h3><p>展开查看每项任务的预计与实际用时。</p></div></div><strong>{completedDetails.length} 项 · {completedOpen ? '收起' : '展开'}</strong></button>
       {completedOpen && <div className="review-completed-grid">{completedDetails.map(item => {
         const taskActual = actualByTask.get(item.id) ?? 0
         const delta = taskActual - item.estimatedMinutes
         return <article key={item.id}><div><strong>{item.title}</strong><span>{groups.get(item.groupId)?.subject ?? '其他'}</span></div><div className="review-completed-times"><span>计划 {minutesText(item.estimatedMinutes)}</span><span>实际 {minutesText(taskActual)}</span><em className={delta > 0 ? 'over' : delta < 0 ? 'under' : 'exact'}>{delta === 0 ? '一致' : `${delta > 0 ? '+' : '−'}${minutesText(Math.abs(delta))}`}</em></div></article>
       })}{completedDetails.length === 0 && <p className="muted-text">当天还没有完成任务。</p>}</div>}
-    </section>
+    </section>}
 
-    <section id="review-duration" className="review-section review-duration-section">
+    {!tutorialMode && <section id="review-duration" className="review-section review-duration-section">
       <header><div><span className="review-section-index">03</span><div><h3>自适应时长建议</h3><p>历史只提出新预计；先验证现有日期，只有新增冲突才建议最小修复。</p></div></div><strong>{suggestions.length} 项</strong></header>
       {suggestions.length === 0 ? <div className="review-empty-neutral"><strong>暂时没有稳定偏差</strong><span>达到有效样本数和偏差阈值后才会主动建议。</span></div> : <div className="duration-suggestion-list">{suggestions.map(item => {
         const title = groups.get(item.groupId)?.title ?? item.groupId
@@ -192,9 +195,9 @@ export function ReviewDialog({ open, date, onClose, onPreparedDuration, onApplyC
         </article>
       })}</div>}
       <p className="review-rule-note">系统不评价正确率、掌握程度或学习质量，也不会自动改变每日上限。</p>
-    </section>
+    </section>}
 
-    <section id="review-charts" className="review-section review-chart-section">
+    {!tutorialMode && <section id="review-charts" className="review-section review-chart-section">
       <button className="review-section-toggle" onClick={() => setChartsOpen(value => !value)}><div><span className="review-section-index">04</span><div><h3>统计图表</h3><p>默认保持简洁，展开后查看任务、任务组和最近趋势。</p></div></div><strong>{chartsOpen ? '收起图表' : '展开图表'}</strong></button>
       {chartsOpen && <div className="review-charts">
         <SimpleBars title="今日各任务：计划与实际" rows={tasks.map(item => ({ label: item.title, first: plannedSet.has(item.id) ? item.estimatedMinutes : 0, second: actualByTask.get(item.id) ?? 0 }))} firstLabel="计划" secondLabel="实际"/>
@@ -204,14 +207,14 @@ export function ReviewDialog({ open, date, onClose, onPreparedDuration, onApplyC
         <SimpleBars title="最近预计误差趋势" rows={recentRecords.map(record => ({ label: record.date.slice(5), first: 0, second: Math.abs(record.actualMinutes - record.plannedMinutes) }))} firstLabel="基准" secondLabel="绝对误差"/>
         <SimpleBars title="任务组默认预计与近期平均" rows={groupAverageRows} firstLabel="默认预计" secondLabel="近期实际平均"/>
       </div>}
-    </section>
+    </section>}
 
     <section className="review-finish-plan">
       <div className="review-finish-plan-summary"><span>当前顺延方案</span><strong>{selectedCarryCount > 0 ? `移动 ${selectedCarryCount} 项任务` : '不移动任务'}</strong><p>{selectedCarryCount > 0 ? `安排到 ${selectedCarryDates.length} 个目标日期；这里只执行你在上方逐项选定的结果，不重新决定其他任务。` : '未选择顺延日期；完成后只保存本次复盘。'}</p></div>
       <div className="review-finish-options">
-        <button className="review-finish-option primary-option" onClick={applyCurrentReviewPlan}><strong>{selectedCarryCount > 0 ? `完成复盘，并按当前方案顺延 ${selectedCarryCount} 项` : '完成复盘'}</strong><span>{selectedCarryCount > 0 ? '快速校验通过后直接提交；若发现真正新增的冲突，只处理冲突项。' : '保存今日完成状态、实际时间和复盘记录。'}</span></button>
-        <button className="review-finish-option" onClick={requestMoreReviewPlans} disabled={unfinished.length === 0}><strong>获取更多方案</strong><span>把当前逐项选择作为方案 A，再生成可比较的其他顺延方案。</span></button>
-        <button className="review-finish-option quiet-option" onClick={closeAndRecord}><strong>仅保存复盘，暂不顺延</strong><span>保留未完成任务当前日期，并集中显示在“任务 → 待处理”中，稍后再决定。</span></button>
+        <button className="review-finish-option primary-option" data-tutorial-target="review-carry" data-tutorial-action="review-carry" disabled={tutorialMode && selectedCarryCount <= 0} onClick={applyCurrentReviewPlan}><strong>{selectedCarryCount > 0 ? `完成复盘，并按当前方案顺延 ${selectedCarryCount} 项` : '完成复盘'}</strong><span>{selectedCarryCount > 0 ? '快速校验通过后直接提交；若发现真正新增的冲突，只处理冲突项。' : '保存今日完成状态、实际时间和复盘记录。'}</span></button>
+        {!tutorialMode && <><button className="review-finish-option" data-tutorial-action="review-more" onClick={requestMoreReviewPlans} disabled={unfinished.length === 0}><strong>获取更多方案</strong><span>把当前逐项选择作为方案 A，再生成可比较的其他顺延方案。</span></button>
+        <button className="review-finish-option quiet-option" data-tutorial-action="review-save-only" onClick={closeAndRecord}><strong>仅保存复盘，暂不顺延</strong><span>保留未完成任务当前日期，并集中显示在“任务 → 待处理”中，稍后再决定。</span></button></>}
       </div>
     </section>
     </div>

@@ -691,7 +691,7 @@ export interface AppStatePortable {
   dailyPlanBaselines: DailyPlanBaseline[]
   guestModified: boolean
   lastCloudSyncAt?: string
-  templateKind?: 'summer' | 'demo' | 'blank'
+  templateKind?: 'summer' | 'demo' | 'blank' | 'tutorial'
 }
 
 export interface ReplanAuditDecision {
