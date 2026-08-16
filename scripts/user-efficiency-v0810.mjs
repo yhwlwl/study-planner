@@ -34,7 +34,7 @@ add('导入和恢复先预览差异', /replacementPreview/.test(settings) && /�
 add('算法和维护设置默认折叠', /settings-advanced/.test(settings) && /高级排期设置|恢复与维护/.test(settings), '普通用户不先面对内部参数')
 add('模态草稿不会因误点背景消失', !/onMouseDown=\{onClose\}/.test(modal + drawer), '长表单只通过明确关闭或取消退出')
 add('统计页使用独立纯函数', /from '..\/lib\/stats'/.test(statsPage) && /export function aggregateDaily/.test(statsLib), '统计口径可独立运行验证')
-add('今日容量只在相关场景询问', /showTodayCapacity/.test(read('src/components/AdjustmentIntentDialog.tsx')), '减负和复盘差异不重复询问无关条件')
+add('今日容量只在相关场景询问', /canIncludeToday/.test(read('src/components/AdjustmentIntentDialog.tsx')) && /todayMode/.test(read('src/components/AdjustmentIntentDialog.tsx')) && /今天额外可用分钟/.test(read('src/components/AdjustmentIntentDialog.tsx')), '只有重新安排范围包含今天时，才显示今天额外接收分钟；减负操作不重复询问')
 add('计划调整入口显示当前问题数量', /currentIssueCount/.test(app) && /个问题需处理/.test(app), '无问题时保持“计划有变化”入口，有问题时直接显示数量')
 add('编号整理不再自动打断主流程', /sequence-renumber-toast/.test(app) && /查看编号建议/.test(app) && /detailsOpen/.test(app), '先以非阻断结果条提示，用户主动展开后再决定')
 add('手机关键图标具有可见文字', /mobile-action-label/.test(read('src/components/GoalsPage.tsx')) && /task-lock-action/.test(taskCard), '目标编辑归档删除和任务锁定在窄屏可读')
@@ -47,11 +47,14 @@ let runtimeStatsEvidence = ''
 // repository's installed date-fns dependency from the generated date.js.
 const temp = fs.mkdtempSync(path.join(root, '.study-planner-stats-test-'))
 try {
-  const compile = spawnSync(process.execPath, [tscBin, 'src/lib/stats.ts', 'src/lib/date.ts', 'src/types.ts', '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'bundler', '--outDir', temp, '--skipLibCheck', '--strict', '--noEmitOnError'], { cwd: root, encoding: 'utf8' })
+  const compile = spawnSync(process.execPath, [tscBin, 'src/lib/stats.ts', 'src/lib/date.ts', 'src/lib/execution.ts', 'src/lib/id.ts', 'src/types.ts', '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'bundler', '--outDir', temp, '--skipLibCheck', '--strict', '--noEmitOnError'], { cwd: root, encoding: 'utf8' })
   if (compile.status !== 0) throw new Error((compile.stdout + compile.stderr).trim())
   fs.writeFileSync(path.join(temp, 'package.json'), '{"type":"module"}')
-  const generatedStats = path.join(temp, 'lib', 'stats.js')
-  fs.writeFileSync(generatedStats, fs.readFileSync(generatedStats, 'utf8').replace("from './date'", "from './date.js'"))
+  for (const file of ['stats.js', 'date.js', 'execution.js', 'id.js']) {
+    const generated = path.join(temp, 'lib', file)
+    if (!fs.existsSync(generated)) continue
+    fs.writeFileSync(generated, fs.readFileSync(generated, 'utf8').replace(/from '(\.\/[^']+)'/g, "from '$1.js'"))
+  }
   const mod = await import(`${pathToFileURL(path.join(temp, 'lib/stats.js')).href}?v=${Date.now()}`)
   const date = '2026-08-01'
   const group = { id: 'g', title: '测试组', subject: '数学', priority: 3, quantity: 2, unitMinutes: 60, dailyMax: 3, activityType: 'normal', highIntensity: false, countInStats: true, status: 'active', createdAt: '', updatedAt: '' }

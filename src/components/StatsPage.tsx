@@ -17,6 +17,7 @@ import { aggregateDaily, type DailyRow } from '../lib/stats'
 import { buildStatisticsReportHtml } from '../lib/exports'
 import { Modal } from './Modal'
 import { NumericInput } from './NumericInput'
+import { assignmentStateAtDate, isInferredTimeEntry, timeEntryDate } from '../lib/execution'
 
 type StatsTab = 'overview' | 'trend' | 'subjects' | 'quality'
 type RangePreset = 'today' | '7d' | 'week' | 'all' | 'custom'
@@ -150,8 +151,9 @@ function aggregateSubjects(assignments: Assignment[], groupList: TaskGroup[], ba
       let recorded = 0
       for (const entry of item.timeEntries ?? []) {
         const minutes = Math.max(0, Number(entry.minutes) || 0)
+        if (isInferredTimeEntry(entry)) continue
         recorded += minutes
-        if (within(safeDate(entry.createdAt), start, end)) total += minutes
+        if (within(timeEntryDate(entry), start, end)) total += minutes
       }
       const residual = Math.max(0, item.actualMinutes - recorded)
       const fallbackDate = safeDate(item.completedAt) ?? item.scheduledDate
@@ -205,7 +207,7 @@ function ChartPanel({ title, subtitle, children, onExpand, actions }: { title: s
 }
 
 function DailyTable({ rows, onSelect }: { rows: DailyRow[]; onSelect: (date: string) => void }) {
-  return <div className="stats-table-wrap"><table className="stats-table"><thead><tr><th>日期</th><th>计划</th><th>实际</th><th>任务完成</th><th>工作量完成</th><th>延期</th></tr></thead><tbody>{rows.map(row => <tr key={row.date} onClick={() => onSelect(row.date)}><td>{row.shortLabel}</td><td>{minutesText(row.planned)}</td><td>{minutesText(row.actual)}</td><td>{percent(row.taskCompletion)}</td><td>{percent(row.workloadCompletion)}</td><td>{row.lateTasks}</td></tr>)}</tbody></table></div>
+  return <div className="stats-table-wrap"><table className="stats-table"><thead><tr><th>日期</th><th>计划</th><th>真实实际</th><th>推断时间</th><th>任务完成</th><th>工作量完成</th><th>延期</th><th>状态估算</th></tr></thead><tbody>{rows.map(row => <tr key={row.date} onClick={() => onSelect(row.date)}><td>{row.shortLabel}</td><td>{minutesText(row.planned)}</td><td>{minutesText(row.actual)}</td><td>{row.inferred > 0 ? minutesText(row.inferred) : '—'}</td><td>{percent(row.taskCompletion)}</td><td>{percent(row.workloadCompletion)}</td><td>{row.lateTasks}</td><td>{row.estimatedStatusTasks || '—'}</td></tr>)}</tbody></table></div>
 }
 
 function actualMinutesForDate(assignments: Assignment[], date: string) {
@@ -215,8 +217,9 @@ function actualMinutesForDate(assignments: Assignment[], date: string) {
     let onDate = 0
     for (const entry of assignment.timeEntries ?? []) {
       const minutes = Math.max(0, Number(entry.minutes) || 0)
+      if (isInferredTimeEntry(entry)) continue
       recorded += minutes
-      if (safeDate(entry.createdAt) === date) onDate += minutes
+      if (timeEntryDate(entry) === date) onDate += minutes
     }
     const residual = Math.max(0, assignment.actualMinutes - recorded)
     const fallbackDate = safeDate(assignment.completedAt) ?? assignment.scheduledDate
@@ -252,7 +255,7 @@ function DayDetail({ date, assignments, groups, baselines, countWordsTime, onClo
   const actualOnly = assignments.filter(item => (actualByAssignment.get(item.id) ?? 0) > 0 && !plannedIds.has(item.id) && isActiveGroup(groups.get(item.groupId)))
   const planned = plannedItems.reduce((sum, item) => sum + (isCountedGroup(groups.get(item.groupId), countWordsTime) ? item.estimatedMinutes : 0), 0)
   const actual = assignments.reduce((sum, item) => sum + (isCountedGroup(groups.get(item.groupId), countWordsTime) ? actualByAssignment.get(item.id) ?? 0 : 0), 0)
-  return <div className="stats-detail-backdrop" onMouseDown={onClose}><section ref={dialogRef} tabIndex={-1} className="stats-day-detail" role="dialog" aria-modal="true" aria-label={`${fmtDate(date)}执行详情`} onMouseDown={event => event.stopPropagation()}><header><div><span>{fmtWeekday(date)}</span><h2>{fmtDate(date, 'M月d日')}</h2><p>原计划 {minutesText(planned)} · 当日实际 {minutesText(actual)}</p></div><button className="icon-button" aria-label="关闭日期详情" onClick={onClose}><X size={18}/></button></header>{baseline && <p className="stats-baseline-note">原计划来自 {new Date(baseline.capturedAt).toLocaleString()} 保存的不可变快照。</p>}<div className="stats-day-task-list">{plannedItems.length ? plannedItems.map(plannedItem => { const task = assignmentMap.get(plannedItem.assignmentId); const group = groups.get(plannedItem.groupId); const actualMinutes = actualByAssignment.get(plannedItem.assignmentId) ?? 0; return <article key={plannedItem.assignmentId}><div><span className={`subject-pill subject-${group?.subject ?? '其他'}`}>{group?.subject ?? '其他'}</span><strong>{plannedItem.title}</strong></div><div className="stats-day-task-numbers"><span>原计划 {minutesText(plannedItem.estimatedMinutes)}</span><span>当日实际 {minutesText(actualMinutes)}</span><span>{task?.status === 'done' ? '当前已完成' : task?.status === 'partial' ? `当前进度 ${task.progress}%` : task ? '当前未完成' : '任务已移除'}</span></div></article> }) : <p className="muted-text">当天没有原计划任务。</p>}</div>{actualOnly.length > 0 && <div className="stats-day-extra"><h3>计划外执行</h3><p>这些任务当天有学习流水，但不在当天原计划中。</p>{actualOnly.map(task => { const group = groups.get(task.groupId); return <article key={task.id}><div><span className={`subject-pill subject-${group?.subject ?? '其他'}`}>{group?.subject ?? '其他'}</span><strong>{task.title}</strong></div><span>当日实际 {minutesText(actualByAssignment.get(task.id) ?? 0)}</span></article> })}</div>}</section></div>
+  return <div className="stats-detail-backdrop" onMouseDown={onClose}><section ref={dialogRef} tabIndex={-1} className="stats-day-detail" role="dialog" aria-modal="true" aria-label={`${fmtDate(date)}执行详情`} onMouseDown={event => event.stopPropagation()}><header><div><span>{fmtWeekday(date)}</span><h2>{fmtDate(date, 'M月d日')}</h2><p>原计划 {minutesText(planned)} · 当日真实实际 {minutesText(actual)}</p></div><button className="icon-button" aria-label="关闭日期详情" onClick={onClose}><X size={18}/></button></header>{baseline && <p className="stats-baseline-note">原计划来自 {new Date(baseline.capturedAt).toLocaleString()} 保存的不可变快照；状态按当天口径展示。</p>}<div className="stats-day-task-list">{plannedItems.length ? plannedItems.map(plannedItem => { const task = assignmentMap.get(plannedItem.assignmentId); const group = groups.get(plannedItem.groupId); const actualMinutes = actualByAssignment.get(plannedItem.assignmentId) ?? 0; const historical = task ? assignmentStateAtDate(task, date, plannedItem) : undefined; const historicalLabel = !task ? '任务已移除' : historical?.status === 'done' ? `截至当日已完成${historical.exact ? '' : '（估算）'}` : historical?.status === 'partial' ? `截至当日部分完成 ${historical.progress}%${historical.exact ? '' : '（估算）'}` : `截至当日未完成${historical?.exact ? '' : '（估算）'}`; return <article key={plannedItem.assignmentId}><div><span className={`subject-pill subject-${group?.subject ?? '其他'}`}>{group?.subject ?? '其他'}</span><strong>{plannedItem.title}</strong></div><div className="stats-day-task-numbers"><span>原计划 {minutesText(plannedItem.estimatedMinutes)}</span><span>当日真实实际 {minutesText(actualMinutes)}</span><span>{historicalLabel}</span></div></article> }) : <p className="muted-text">当天没有原计划任务。</p>}</div>{actualOnly.length > 0 && <div className="stats-day-extra"><h3>计划外执行</h3><p>这些任务当天有学习流水，但不在当天原计划中。</p>{actualOnly.map(task => { const group = groups.get(task.groupId); return <article key={task.id}><div><span className={`subject-pill subject-${group?.subject ?? '其他'}`}>{group?.subject ?? '其他'}</span><strong>{task.title}</strong></div><span>当日真实实际 {minutesText(actualByAssignment.get(task.id) ?? 0)}</span></article> })}</div>}</section></div>
 }
 
 function FullscreenChart({ title, rows, onClose, onSelect }: { title: string; rows: DailyRow[]; onClose: () => void; onSelect: (date: string) => void }) {
@@ -295,7 +298,7 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
     const group = groupMap.get(assignment.groupId)
     if (!group) return []
     return (assignment.timeEntries ?? []).map(entry => ({ assignmentId: assignment.id, assignmentTitle: assignment.title, groupTitle: group.title, subject: group.subject, entry }))
-  }).filter(item => within(safeDate(item.entry.createdAt), ledgerStart, ledgerEnd)).sort((a, b) => b.entry.createdAt.localeCompare(a.entry.createdAt)), [state.assignments, groupMap, ledgerStart, ledgerEnd])
+  }).filter(item => within(timeEntryDate(item.entry) ?? safeDate(item.entry.createdAt), ledgerStart, ledgerEnd)).sort((a, b) => (timeEntryDate(b.entry) ?? b.entry.createdAt).localeCompare(timeEntryDate(a.entry) ?? a.entry.createdAt)), [state.assignments, groupMap, ledgerStart, ledgerEnd])
 
   const totals = useMemo(() => {
     const planned = daily.reduce((sum, row) => sum + row.planned, 0)
@@ -304,12 +307,14 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
     const timer = daily.reduce((sum, row) => sum + row.timerActual, 0)
     const manual = daily.reduce((sum, row) => sum + row.manualActual, 0)
     const legacy = daily.reduce((sum, row) => sum + row.legacyActual, 0)
+    const inferred = daily.reduce((sum, row) => sum + row.inferred, 0)
+    const estimatedStatusTasks = daily.reduce((sum, row) => sum + row.estimatedStatusTasks, 0)
     const tasks = daily.reduce((sum, row) => sum + row.plannedTasks, 0)
     const completed = daily.reduce((sum, row) => sum + row.completedEquivalent, 0)
     const plannedWork = daily.reduce((sum, row) => sum + row.planned, 0)
     const completedWork = daily.reduce((sum, row) => sum + row.planned * row.workloadCompletion / 100, 0)
     return {
-      planned, actual, extra, timer, manual, legacy,
+      planned, actual, extra, timer, manual, legacy, inferred, estimatedStatusTasks,
       taskCompletion: tasks ? completed / tasks * 100 : 0,
       workloadCompletion: plannedWork ? completedWork / plannedWork * 100 : 0,
       late: daily.reduce((sum, row) => sum + row.lateTasks, 0),
@@ -420,9 +425,9 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
 
     {tab === 'overview' && <>
       <section className="stats-kpi-grid">
-        <MetricCard icon={Clock3} label="今日有效学习" value={minutesText(todayRow?.actual ?? 0)} detail={`计划 ${minutesText(todayRow?.planned ?? 0)} · 额外 ${minutesText(todayRow?.extraActual ?? 0)}`} tone={(todayRow?.actual ?? 0) >= (todayRow?.planned ?? Infinity) ? 'success' : 'default'}/>
+        <MetricCard icon={Clock3} label="今日真实学习" value={minutesText(todayRow?.actual ?? 0)} detail={`计划 ${minutesText(todayRow?.planned ?? 0)} · 推断 ${minutesText(todayRow?.inferred ?? 0)} · 额外 ${minutesText(todayRow?.extraActual ?? 0)}`} tone={(todayRow?.actual ?? 0) >= (todayRow?.planned ?? Infinity) ? 'success' : 'default'}/>
         <MetricCard icon={CheckCircle2} label={`${rangeLabel}完成率`} value={`${Math.round(totals.taskCompletion)}% / ${Math.round(totals.workloadCompletion)}%`} detail="任务数 / 时间加权" tone={totals.workloadCompletion >= 80 ? 'success' : totals.workloadCompletion < 50 ? 'warning' : 'default'}/>
-        <MetricCard icon={Activity} label="累计有效学习" value={minutesText(allDaily.reduce((sum, row) => sum + row.actual, 0))} detail={`当前范围 ${minutesText(totals.actual)} · 不计入统计 ${minutesText(totals.extra)}`}/>
+        <MetricCard icon={Activity} label="累计真实学习" value={minutesText(allDaily.reduce((sum, row) => sum + row.actual, 0))} detail={`当前范围 ${minutesText(totals.actual)} · 推断 ${minutesText(totals.inferred)} · 不计入统计 ${minutesText(totals.extra)}`}/>
         <MetricCard icon={Target} label="预计完成" value={overallPrediction === '已完成' ? '全部完成' : overallPrediction ? fmtDate(overallPrediction, 'M月d日') : '存在未排期'} detail={`优先级5：${corePrediction === '已完成' ? '已完成' : corePrediction ? fmtDate(corePrediction, 'M月d日') : '待排期'}`} tone={goalRows.some(row => row.latestRisk) ? 'warning' : 'success'}/>
       </section>
 
@@ -443,7 +448,7 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
     </>}
 
     {tab === 'trend' && <>
-      <section className="stats-kpi-grid stats-kpi-grid-three"><MetricCard icon={Clock3} label="范围内实际" value={minutesText(totals.actual)} detail={`计划 ${minutesText(totals.planned)}`}/><MetricCard icon={Focus} label="计时与补录" value={`${minutesText(totals.timer)} / ${minutesText(totals.manual)}`} detail={`旧记录未标来源 ${minutesText(totals.legacy)}`}/><MetricCard icon={Activity} label="不计入统计的学习" value={minutesText(totals.extra)} detail="例如默认不计时的单词打卡"/></section>
+      <section className="stats-kpi-grid stats-kpi-grid-three"><MetricCard icon={Clock3} label="范围内真实学习" value={minutesText(totals.actual)} detail={`计划 ${minutesText(totals.planned)} · 推断 ${minutesText(totals.inferred)}`}/><MetricCard icon={Focus} label="计时与补录" value={`${minutesText(totals.timer)} / ${minutesText(totals.manual)}`} detail={`旧记录未标来源 ${minutesText(totals.legacy)}`}/><MetricCard icon={Activity} label="不计入统计的学习" value={minutesText(totals.extra)} detail="例如默认不计时的单词打卡"/></section>
       <ChartPanel title="学习时间趋势" subtitle="点击数据点查看当天任务" onExpand={() => setExpanded(true)} actions={<ViewToggle value={trendView} onChange={setTrendView}/>}>
         {trendView === 'table' ? <DailyTable rows={daily} onSelect={setSelectedDate}/> : <div className="stats-chart-xl"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={daily} onClick={(event: any) => event?.activePayload?.[0] && setSelectedDate(event.activePayload[0].payload.date)}><CartesianGrid strokeDasharray="3 3" vertical={false}/><XAxis dataKey="shortLabel" minTickGap={18}/><YAxis/><Tooltip content={<ChartTooltip/>}/><Legend/><Bar dataKey="actual" name="实际" fill="#2563eb" radius={[6,6,0,0]}/><Bar dataKey="extraActual" name="额外学习" fill="#cbd5e1" radius={[6,6,0,0]}/><Line type="monotone" dataKey="planned" name="计划" stroke="#64748b" strokeWidth={2} dot={false}/><Line type="monotone" dataKey="movingAverage" name="7日均值" stroke="#8b5cf6" strokeWidth={2.4} dot={false}/></ComposedChart></ResponsiveContainer></div>}
       </ChartPanel>
@@ -459,15 +464,15 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
     {tab === 'quality' && <>
       <section className="stats-kpi-grid"><MetricCard icon={CheckCircle2} label="按期完成率" value={percent(onTimeRate)} detail={`${onTime}/${completedCounted.length} 个可判断任务`} tone={onTimeRate >= 80 ? 'success' : 'warning'}/><MetricCard icon={AlertTriangle} label="当前延期" value={`${state.assignments.filter(item => item.scheduledDate && item.scheduledDate < todayISO() && item.status !== 'done' && isActiveGroup(groupMap.get(item.groupId))).length} 项`} detail={`当前范围可见 ${totals.late} 项`} tone={totals.late > 0 ? 'warning' : 'success'}/><MetricCard icon={CalendarDays} label="顺延任务" value={`${carryovers} 项`} detail="由每日复盘顺延等操作产生"/><MetricCard icon={Activity} label="计划变更率" value={percent(changeRate)} detail={`${changedTasks}/${activeTasks} 项保留了最近一次原日期`}/></section>
       <section className="stats-two-column"><ChartPanel title="优先级完成进度" subtitle="部分完成按当前进度折算"><div className="stats-chart"><ResponsiveContainer width="100%" height="100%"><BarChart data={priorityData} layout="vertical"><CartesianGrid strokeDasharray="3 3" horizontal={false}/><XAxis type="number" domain={[0,100]} tickFormatter={(value: number) => `${value}%`}/><YAxis type="category" dataKey="priority"/><Tooltip formatter={(value: number) => `${Math.round(value)}%`}/><Bar dataKey="completion" name="完成率" fill="#2563eb" radius={[0,6,6,0]}/></BarChart></ResponsiveContainer></div></ChartPanel><ChartPanel title="专注统计" subtitle="计时与手动补录分开显示"><div className="focus-stat-grid"><div><strong>{minutesText(timerEntries.reduce((sum,value)=>sum+value,0))}</strong><span>专注总时长</span></div><div><strong>{timerEntries.length}</strong><span>有效专注次数</span></div><div><strong>{minutesText(averageFocus)}</strong><span>平均每次</span></div><div><strong>{minutesText(longestFocus)}</strong><span>最长一次</span></div></div></ChartPanel></section>
-      <ChartPanel title="每日执行轨迹" subtitle="原计划、部分完成、延期和临时实际投入放在同一张表中"><DailyTable rows={daily} onSelect={setSelectedDate}/></ChartPanel>
-      <div className="stats-data-note"><AlertTriangle size={17}/><p><strong>旧数据说明：</strong>旧版本没有记录每次改期历史和时间来源，因此计划变更率只依据当前任务保留的最近一次原日期；计时与手动补录从 v0.5.0 起可以精确区分。</p></div>
+      <ChartPanel title="每日执行轨迹" subtitle="真实时间、推断时间、原计划、历史状态和延期放在同一张表中"><DailyTable rows={daily} onSelect={setSelectedDate}/></ChartPanel>
+      <div className="stats-data-note"><AlertTriangle size={17}/><p><strong>数据口径：</strong>真实实际只来自明确归属日期的非推断时间流水；推断时间只用于说明“已完成但没有填写分钟”等情况，不计入真实学习。历史状态无法精确恢复时会标为估算（当前范围 {totals.estimatedStatusTasks} 项）。</p></div>
     </>}
 
     <DayDetail date={selectedDate} assignments={state.assignments} groups={groupMap} baselines={state.dailyPlanBaselines} countWordsTime={state.settings.countWordsTime} onClose={() => setSelectedDate(undefined)}/>
     {expanded && <FullscreenChart title="每日计划与实际" rows={daily} onClose={() => setExpanded(false)} onSelect={date => { setExpanded(false); setSelectedDate(date) }}/>} 
     <Modal open={ledgerOpen} title="执行时间账本" onClose={() => { setLedgerOpen(false); setLedgerEdit(undefined) }} wide mobileFullscreen>
       <div className="ledger-toolbar"><div><strong>按实际发生日期归属</strong><span>改期不会重写流水；历史补录会进入你选择的历史日期。</span></div><div><label><span>开始</span><input type="date" value={ledgerStart} onChange={event => setLedgerStart(event.target.value)}/></label><label><span>结束</span><input type="date" value={ledgerEnd} max={todayISO()} onChange={event => setLedgerEnd(event.target.value)}/></label></div></div>
-      <div className="ledger-list">{ledgerRows.length ? ledgerRows.map(row => { const editing = ledgerEdit?.entryId === row.entry.id; return <article key={`${row.assignmentId}-${row.entry.id}`} className={editing ? 'editing' : ''}><div className="ledger-main"><span className={`subject-pill subject-${row.subject}`}>{row.subject}</span><div><strong>{row.assignmentTitle}</strong><small>{row.groupTitle}</small></div></div>{editing ? <div className="ledger-edit-grid"><label><span>归属日期</span><input type="date" max={todayISO()} value={ledgerEdit.date} onChange={event => setLedgerEdit({ ...ledgerEdit, date: event.target.value })}/></label><label><span>分钟</span><NumericInput min={0} max={1440} value={ledgerEdit.minutes} onValueChange={minutes => setLedgerEdit({ ...ledgerEdit, minutes })}/></label></div> : <div className="ledger-facts"><strong>{minutesText(row.entry.minutes)}</strong><span>{fmtDate(row.entry.createdAt.slice(0, 10))}</span><small>{row.entry.source === 'timer' ? '计时器' : row.entry.source === 'finish' ? '完成时记录' : row.entry.source === 'inferred' ? '推断记录' : '手动补录'}</small><small>创建于 {new Date(row.entry.originalCreatedAt ?? row.entry.createdAt).toLocaleString()}</small>{row.entry.updatedAt && <small>修改于 {new Date(row.entry.updatedAt).toLocaleString()}</small>}</div>}<div className="ledger-actions">{editing ? <><button className="secondary-button" onClick={() => setLedgerEdit(undefined)}>取消</button><button className="primary-button" disabled={!ledgerEdit.date || ledgerEdit.minutes <= 0} onClick={() => { updateTimeEntry(row.assignmentId, row.entry.id, { date: ledgerEdit.date, minutes: ledgerEdit.minutes }); setLedgerEdit(undefined) }}>保存</button></> : <><button className="icon-button" aria-label={`编辑${row.assignmentTitle}的时间记录`} onClick={() => setLedgerEdit({ assignmentId: row.assignmentId, entryId: row.entry.id, minutes: row.entry.minutes, date: row.entry.createdAt.slice(0, 10) })}><Pencil size={16}/></button><button className="icon-button danger-icon" aria-label={`删除${row.assignmentTitle}的时间记录`} onClick={() => { if (window.confirm(`删除“${row.assignmentTitle}”在 ${fmtDate(row.entry.createdAt.slice(0, 10))} 的 ${row.entry.minutes} 分钟记录？\n\n任务累计实际和统计会同步扣减，审计事件会保留。`)) deleteTimeEntry(row.assignmentId, row.entry.id) }}><Trash2 size={16}/></button></>}</div></article> }) : <div className="empty-state"><Clock3 size={28}/><h3>这个范围还没有时间流水</h3><p>完成任务、手动补录或计时后会显示在这里。</p></div>}</div>
+      <div className="ledger-list">{ledgerRows.length ? ledgerRows.map(row => { const editing = ledgerEdit?.entryId === row.entry.id; const ownedDate = timeEntryDate(row.entry) ?? todayISO(); return <article key={`${row.assignmentId}-${row.entry.id}`} className={editing ? 'editing' : ''}><div className="ledger-main"><span className={`subject-pill subject-${row.subject}`}>{row.subject}</span><div><strong>{row.assignmentTitle}</strong><small>{row.groupTitle}</small></div></div>{editing ? <div className="ledger-edit-grid"><label><span>归属日期</span><input type="date" max={todayISO()} value={ledgerEdit.date} onChange={event => setLedgerEdit({ ...ledgerEdit, date: event.target.value })}/></label><label><span>分钟</span><NumericInput min={0} max={1440} value={ledgerEdit.minutes} onValueChange={minutes => setLedgerEdit({ ...ledgerEdit, minutes })}/></label></div> : <div className="ledger-facts"><strong>{minutesText(row.entry.minutes)}</strong><span>{fmtDate(ownedDate)}</span><small>{row.entry.source === 'timer' ? '计时器' : row.entry.source === 'finish' ? '完成时记录' : row.entry.source === 'inferred' ? '推断记录（不计入真实时间）' : '手动补录'}</small><small>创建于 {new Date(row.entry.originalCreatedAt ?? row.entry.createdAt).toLocaleString()}</small>{row.entry.updatedAt && <small>修改于 {new Date(row.entry.updatedAt).toLocaleString()}</small>}</div>}<div className="ledger-actions">{editing ? <><button className="secondary-button" onClick={() => setLedgerEdit(undefined)}>取消</button><button className="primary-button" disabled={!ledgerEdit.date || ledgerEdit.minutes <= 0} onClick={() => { updateTimeEntry(row.assignmentId, row.entry.id, { date: ledgerEdit.date, minutes: ledgerEdit.minutes }); setLedgerEdit(undefined) }}>保存</button></> : <><button className="icon-button" aria-label={`编辑${row.assignmentTitle}的时间记录`} onClick={() => setLedgerEdit({ assignmentId: row.assignmentId, entryId: row.entry.id, minutes: row.entry.minutes, date: ownedDate })}><Pencil size={16}/></button><button className="icon-button danger-icon" aria-label={`删除${row.assignmentTitle}的时间记录`} onClick={() => { if (window.confirm(`删除“${row.assignmentTitle}”在 ${fmtDate(ownedDate)} 的 ${row.entry.minutes} 分钟记录？\n\n任务累计实际和统计会同步扣减，审计事件会保留。`)) deleteTimeEntry(row.assignmentId, row.entry.id) }}><Trash2 size={16}/></button></>}</div></article> }) : <div className="empty-state"><Clock3 size={28}/><h3>这个范围还没有时间流水</h3><p>完成任务、手动补录或计时后会显示在这里。</p></div>}</div>
     </Modal>
   </div>
 }

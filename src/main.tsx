@@ -4,14 +4,17 @@ import { registerSW } from 'virtual:pwa-register'
 import App from './App'
 import { AppProvider } from './AppContext'
 import { installVisitLogRetry, recordPageVisit } from './lib/analytics'
+import { announcePwaUpdate, configurePwaUpdater } from './lib/pwa-update'
+import { AppErrorBoundary } from './components/AppErrorBoundary'
 
-registerSW({ immediate: true })
+const updateServiceWorker = registerSW({ immediate: true, onNeedRefresh: announcePwaUpdate })
+configurePwaUpdater(updateServiceWorker)
 installVisitLogRetry()
 
 createRoot(document.getElementById('root')!).render(
-  <StrictMode>
+  <StrictMode><AppErrorBoundary>
     <AppProvider><App /></AppProvider>
-  </StrictMode>
+  </AppErrorBoundary></StrictMode>
 )
 
 // Log shortly after the first paint. A deterministic timer is more reliable on

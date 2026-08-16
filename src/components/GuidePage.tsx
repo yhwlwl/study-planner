@@ -6,8 +6,7 @@ import todayImage from '../../docs/images/02-today-execution.png'
 import calendarImage from '../../docs/images/03-calendar-month-view.png'
 import loadImage from '../../docs/images/06-daily-workload-before-after.png'
 import reviewImage from '../../docs/images/16-review-summary-and-unfinished-tasks.png'
-
-export const GITHUB_REPO_URL = 'https://github.com/yhwlwl/study-planner'
+import { GITHUB_REPO_URL } from '../lib/constants'
 
 type GuidePageId = 'today' | 'calendar' | 'tasks' | 'intake' | 'goals' | 'stats' | 'export' | 'settings'
 

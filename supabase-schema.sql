@@ -1,9 +1,12 @@
 create table if not exists public.study_snapshots (
   user_id uuid primary key references auth.users(id) on delete cascade,
   data jsonb not null,
+  revision bigint not null default 1,
   client_updated_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.study_snapshots add column if not exists revision bigint not null default 1;
 
 alter table public.study_snapshots enable row level security;
 

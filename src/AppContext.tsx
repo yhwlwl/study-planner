@@ -18,6 +18,7 @@ import { dateRange, getCapacity, timestampForDate, todayISO } from './lib/date'
 import { appendIntakeDraft, createIntakeBatchRecord } from './lib/intake-batches'
 import { splitSessionCount } from './lib/intake'
 import { dependencyCycleLabels } from './lib/dependencies'
+import { addInferredCompletionEntry, appendStatusEvent, isInferredTimeEntry, timeEntryDate } from './lib/execution'
 
 type Recipe = (draft: AppState) => void
 
@@ -56,7 +57,7 @@ interface AppContextValue {
   prepareTaskGroup: (draft: TaskGroupDraft) => CreateResult
   createIntakeBatch: (name?: string) => string
   duplicateIntakeBatch: (batchId: string) => string
-  updateIntakeBatch: (id: string, patch: Partial<Pick<IntakeBatch, 'name' | 'status' | 'lastEditedItemId'>>) => void
+  updateIntakeBatch: (id: string, patch: Partial<Pick<IntakeBatch, 'name' | 'status' | 'lastEditedItemId' | 'formDraft'>>) => void
   addIntakeSingleTask: (batchId: string, draft: NewTaskDraft) => string
   addIntakeTaskGroup: (batchId: string, draft: TaskGroupDraft, source?: Exclude<IntakeBatchSource, 'mixed'>) => string
   updateIntakeSingleTask: (batchId: string, itemId: string, draft: NewTaskDraft) => void
@@ -285,6 +286,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setState(previous => {
       if (pushHistory) history.current = [...history.current.slice(-29), previous]
       const next = normalizeState(nextInput)
+      next.dataRevision = Math.max(previous.dataRevision ?? 1, next.dataRevision ?? 1) + 1
       next.updatedAt = nowISO()
       if (namespaceRef.current === 'guest') next.guestModified = true
       return next
@@ -296,6 +298,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (options?.history !== false) history.current = [...history.current.slice(-29), previous]
       let next = cloneForMutation(previous)
       recipe(next)
+      next.dataRevision = (previous.dataRevision ?? 1) + 1
       next.updatedAt = nowISO()
       if ((options?.markGuestModified ?? true) && namespaceRef.current === 'guest') next.guestModified = true
       next = updateGoalAndGroupLifecycle(next)
@@ -346,10 +349,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateAssignment = useCallback((id: string, patch: Partial<Assignment>) => commit(draft => {
     const item = draft.assignments.find(candidate => candidate.id === id)
     if (!item) return
+    const previousStatus = item.status
+    const previousProgress = item.progress
     const oldDate = item.scheduledDate
     const moving = Object.prototype.hasOwnProperty.call(patch, 'scheduledDate') && patch.scheduledDate !== oldDate
     Object.assign(item, patch)
     item.updatedAt = nowISO()
+    if (item.status !== previousStatus || item.progress !== previousProgress) {
+      const date = item.status === 'done' ? todayISO() : todayISO()
+      appendStatusEvent(item, item.status, item.progress, date, item.status === 'done' ? 'completion' : item.status === 'partial' ? 'partial' : 'reopen', item.updatedAt)
+      if (item.status === 'done' && item.actualMinutes <= 0) addInferredCompletionEntry(item, date, item.updatedAt)
+    }
     if (moving) {
       item.previousDate = oldDate
       item.lastManualMoveAt = nowISO()
@@ -381,7 +391,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const item = draft.assignments.find(candidate => candidate.id === id)
     if (!item || minutes <= 0) return
     item.actualMinutes += minutes
-    item.timeEntries.push({ id: uid('time'), minutes, createdAt: timestampForDate(todayISO()), source })
+    const date = todayISO()
+    item.timeEntries.push({ id: uid('time'), minutes, date, createdAt: nowISO(), source })
     item.updatedAt = nowISO()
   }), [commit])
 
@@ -390,20 +401,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const entry = assignment?.timeEntries.find(item => item.id === entryId)
     if (!assignment || !entry) return
     const previousMinutes = Math.max(0, Number(entry.minutes) || 0)
-    const previousDate = entry.createdAt.slice(0, 10)
+    const previousDate = timeEntryDate(entry) ?? todayISO()
+    const wasInferred = isInferredTimeEntry(entry)
     if (patch.minutes !== undefined) {
       const nextMinutes = Math.max(0, Math.round(patch.minutes))
       entry.minutes = nextMinutes
-      assignment.actualMinutes = Math.max(0, assignment.actualMinutes + nextMinutes - previousMinutes)
+      assignment.actualMinutes = Math.max(0, assignment.actualMinutes + nextMinutes - (wasInferred ? 0 : previousMinutes))
+      if (wasInferred) {
+        entry.source = 'manual'
+        entry.countInStatistics = true
+      }
     }
     if (patch.date) {
       entry.originalCreatedAt = entry.originalCreatedAt ?? entry.createdAt
-      entry.createdAt = timestampForDate(patch.date)
+      entry.date = patch.date
     }
     const changedAt = nowISO()
     entry.updatedAt = changedAt
     assignment.updatedAt = changedAt
-    const nextDate = entry.createdAt.slice(0, 10)
+    const nextDate = timeEntryDate(entry) ?? previousDate
     const auditEvent: PlanChangeEvent = {
       id: uid('event'), type: 'time-entry-change', action: 'repair', title: `修改“${assignment.title}”的时间记录`,
       description: `时间流水由 ${previousDate} 的 ${previousMinutes} 分钟修改为 ${nextDate} 的 ${entry.minutes} 分钟。`,
@@ -419,9 +435,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const entry = assignment?.timeEntries.find(item => item.id === entryId)
     if (!assignment || !entry) return
     const deletedAt = nowISO()
-    const entryDate = entry.createdAt.slice(0, 10)
+    const entryDate = timeEntryDate(entry) ?? todayISO()
     assignment.timeEntries = assignment.timeEntries.filter(item => item.id !== entryId)
-    assignment.actualMinutes = Math.max(0, assignment.actualMinutes - Math.max(0, Number(entry.minutes) || 0))
+    if (!isInferredTimeEntry(entry)) assignment.actualMinutes = Math.max(0, assignment.actualMinutes - Math.max(0, Number(entry.minutes) || 0))
     assignment.updatedAt = deletedAt
     const auditEvent: PlanChangeEvent = {
       id: uid('event'), type: 'time-entry-change', action: 'repair', title: `删除“${assignment.title}”的时间记录`,
@@ -437,22 +453,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (draft.dailyPlanBaselines.some(item => item.date === date)) return
     const assignments = draft.assignments
       .filter(item => item.scheduledDate === date)
-      .map(item => ({ assignmentId: item.id, groupId: item.groupId, title: item.title, estimatedMinutes: item.estimatedMinutes }))
+      .map(item => ({ assignmentId: item.id, groupId: item.groupId, title: item.title, estimatedMinutes: item.estimatedMinutes, statusAtCapture: item.status, progressAtCapture: item.progress }))
     draft.dailyPlanBaselines = [...draft.dailyPlanBaselines, { id: uid('baseline'), date, capturedAt: nowISO(), assignments }].slice(-400)
   }, { history: false, markGuestModified: false }), [commit])
 
   const finishAssignment = useCallback((id: string, actualMinutes?: number, source: 'timer' | 'manual' | 'finish' = 'finish') => commit(draft => {
     const item = draft.assignments.find(candidate => candidate.id === id)
     if (!item) return
+    const date = todayISO()
+    const changedAt = nowISO()
     if (actualMinutes && actualMinutes > 0) {
       item.actualMinutes += actualMinutes
-      item.timeEntries.push({ id: uid('time'), minutes: actualMinutes, createdAt: timestampForDate(todayISO()), source })
-    }
+      item.timeEntries.push({ id: uid('time'), minutes: actualMinutes, date, createdAt: changedAt, source })
+    } else if (item.actualMinutes <= 0) addInferredCompletionEntry(item, date, changedAt)
     item.progress = 100
     item.remainingMinutes = 0
     item.status = 'done'
-    item.completedAt = timestampForDate(todayISO())
-    item.updatedAt = nowISO()
+    item.completedAt = timestampForDate(date)
+    item.updatedAt = changedAt
+    appendStatusEvent(item, 'done', 100, date, 'completion', changedAt)
     if (draft.timer.assignmentId === id) draft.timer = { accumulatedSeconds: 0, running: false }
   }), [commit])
 
@@ -464,6 +483,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     item.completedAt = undefined
     item.remainingMinutes = Math.max(1, item.estimatedMinutes - item.actualMinutes)
     item.updatedAt = nowISO()
+    appendStatusEvent(item, item.status, item.progress, todayISO(), 'reopen', item.updatedAt)
   }), [commit])
 
   /** 旧调用兼容；新版界面改用 prepareTaskGroup + 方案预览。 */
@@ -761,6 +781,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const createIntakeBatch = useCallback((name?: string) => {
+    const resumableEmpty = stateRef.current.intakeBatches.find(item => item.status !== 'archived' && item.taskGroups.length === 0)
+    if (resumableEmpty) return resumableEmpty.id
     const id = uid('intake')
     const now = nowISO()
     commit(draft => {
@@ -798,7 +820,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return id
   }, [commit])
 
-  const updateIntakeBatch = useCallback((id: string, patch: Partial<Pick<IntakeBatch, 'name' | 'status' | 'lastEditedItemId'>>) => commit(draft => {
+  const updateIntakeBatch = useCallback((id: string, patch: Partial<Pick<IntakeBatch, 'name' | 'status' | 'lastEditedItemId' | 'formDraft'>>) => commit(draft => {
     const batch = draft.intakeBatches.find(item => item.id === id)
     if (!batch) return
     if (patch.name !== undefined) batch.name = patch.name.trim() || batch.name
@@ -807,6 +829,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       batch.archivedAt = patch.status === 'archived' ? nowISO() : undefined
     }
     if (patch.lastEditedItemId !== undefined) batch.lastEditedItemId = patch.lastEditedItemId
+    if ('formDraft' in patch) batch.formDraft = patch.formDraft ? structuredClone(patch.formDraft) : undefined
     batch.updatedAt = nowISO()
   }, { history: false }), [commit])
 

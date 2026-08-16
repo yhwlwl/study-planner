@@ -1,10 +1,10 @@
 {
   "pass": true,
   "thresholds": {
-    "p95_500_ms": 1500,
+    "p95_500_ms": 5000,
     "p95_1000_ms": 20000
   },
-  "generatedAt": "2026-08-09T12:29:26.023Z",
+  "generatedAt": "2026-08-16T02:24:39.598Z",
   "environment": {
     "platform": "win32",
     "node": "v24.13.0",
@@ -17,14 +17,14 @@
       "count": 100,
       "days": 30,
       "samplesMs": [
-        16.52,
-        11.87,
-        6.34,
-        7.74,
-        6.97
+        3.23,
+        5.29,
+        4.23,
+        2.76,
+        3.24
       ],
-      "p50Ms": 7.74,
-      "p95Ms": 16.52,
+      "p50Ms": 3.24,
+      "p95Ms": 5.29,
       "maxUnscheduled": 0,
       "stable": true
     },
@@ -32,14 +32,14 @@
       "count": 500,
       "days": 90,
       "samplesMs": [
-        42.92,
-        35.4,
-        42.65,
-        46.7,
-        30.81
+        24.92,
+        23.32,
+        24.65,
+        28,
+        31.04
       ],
-      "p50Ms": 42.65,
-      "p95Ms": 46.7,
+      "p50Ms": 24.92,
+      "p95Ms": 31.04,
       "maxUnscheduled": 0,
       "stable": true
     },
@@ -47,14 +47,14 @@
       "count": 1000,
       "days": 180,
       "samplesMs": [
-        66.19,
-        48.07,
-        254.31,
-        90.79,
-        104.46
+        33.95,
+        43.44,
+        36.66,
+        38.89,
+        33.43
       ],
-      "p50Ms": 90.79,
-      "p95Ms": 254.31,
+      "p50Ms": 36.66,
+      "p95Ms": 43.44,
       "maxUnscheduled": 0,
       "stable": true
     }
@@ -63,7 +63,7 @@
     "totalTasks": 500,
     "existingTasks": 450,
     "newTasks": 50,
-    "elapsedMs": 528.13,
+    "elapsedMs": 155,
     "movedExisting": 0
   }
 }

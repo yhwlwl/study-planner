@@ -7,6 +7,7 @@ import type {
 } from '../types'
 import { constraintsForDate, dateRange, getBaseCapacity, getCapacity, getDayConfig, isDateProtected, shiftDate, todayISO } from './date'
 import { uid } from './id'
+import { isInferredTimeEntry, timeEntryDate } from './execution'
 import { cloneActiveState, hydratePortableState, portableState, stableSignature } from './state'
 import { goalNamesForAssignment, goalProgress, nearestRelevantGoalDate, nearestRelevantLatestDate, relevantGoalPriority, relevantGoalsForAssignment } from './goals'
 import { mergeConstraintExceptions } from './conflicts'
@@ -241,11 +242,17 @@ function assignmentActualBreakdown(state: AppState) {
 
   for (const assignment of state.assignments) {
     let entryTotal = 0
+    let inferredEntryTotal = 0
     for (const entry of assignment.timeEntries ?? []) {
-      const date = dayOf(entry.createdAt)
+      const date = timeEntryDate(entry)
       if (!date) continue
-      entryTotal += entry.minutes
-      actualByDate.set(date, (actualByDate.get(date) ?? 0) + entry.minutes)
+      if (isInferredTimeEntry(entry)) {
+        inferredEntryTotal += entry.minutes
+        inferredByDate.set(date, (inferredByDate.get(date) ?? 0) + entry.minutes)
+      } else {
+        entryTotal += entry.minutes
+        actualByDate.set(date, (actualByDate.get(date) ?? 0) + entry.minutes)
+      }
       assignmentDates.set(assignment.id, date)
     }
     const residual = Math.max(0, assignment.actualMinutes - entryTotal)
@@ -254,7 +261,7 @@ function assignmentActualBreakdown(state: AppState) {
       actualByDate.set(fallbackDate, (actualByDate.get(fallbackDate) ?? 0) + residual)
       assignmentDates.set(assignment.id, fallbackDate)
     }
-    if (assignment.status === 'done' && assignment.actualMinutes <= 0 && entryTotal <= 0) {
+    if (assignment.status === 'done' && assignment.actualMinutes <= 0 && entryTotal <= 0 && inferredEntryTotal <= 0) {
       const date = dayOf(assignment.completedAt) ?? assignment.scheduledDate
       const group = groups.get(assignment.groupId)
       if (date && group) {
@@ -287,8 +294,9 @@ export function actualMinutesForAssignmentOnDate(state: AppState, assignment: As
   let minutes = 0
   let recordedTotal = 0
   for (const entry of assignment.timeEntries ?? []) {
+    if (isInferredTimeEntry(entry)) continue
     recordedTotal += Math.max(0, entry.minutes)
-    if (dayOf(entry.createdAt) === date) minutes += Math.max(0, entry.minutes)
+    if (timeEntryDate(entry) === date) minutes += Math.max(0, entry.minutes)
   }
   const residual = Math.max(0, assignment.actualMinutes - recordedTotal)
   const fallbackDate = dayOf(assignment.completedAt) ?? assignment.scheduledDate
@@ -950,6 +958,10 @@ function conflictFromRejections(
   const found = existing.find(item => `${item.date}:${item.key}` === key)
   if (found) {
     if (!found.affectedAssignmentIds.includes(assignment.id)) found.affectedAssignmentIds.push(assignment.id)
+    found.current = Math.max(found.current, chosen.violation.current)
+    found.suggestedLimit = Math.max(found.suggestedLimit, chosen.violation.current, chosen.violation.limit + 1)
+    found.deficit = Math.max(0, found.current - found.limit)
+    found.minimumFeasibleLimit = Math.max(found.minimumFeasibleLimit, found.suggestedLimit)
     return
   }
   existing.push({
@@ -959,6 +971,8 @@ function conflictFromRejections(
     current: chosen.violation.current,
     limit: chosen.violation.limit,
     suggestedLimit: Math.max(chosen.violation.current, chosen.violation.limit + 1),
+    deficit: Math.max(0, chosen.violation.current - chosen.violation.limit),
+    minimumFeasibleLimit: Math.max(chosen.violation.current, chosen.violation.limit + 1),
     affectedAssignmentIds: [assignment.id],
     options: [
       `仅本次把 ${chosen.date} 的上限放宽到 ${Math.max(chosen.violation.current, chosen.violation.limit + 1)}`,
@@ -1349,12 +1363,29 @@ function normalizeReplanRequest(input: AppState, request: ReplanRequest): Replan
 const replanBundleCache = new Map<string, ReplanBundle>()
 
 function replanInputSignature(input: AppState, request: ReplanRequest, strategies: ReplanStrategy[]) {
-  return stableSignature({
-    day: todayISO(), request, strategies, settings: input.settings, dayConfigs: input.dayConfigs,
-    groups: input.taskGroups.map(group => ({ id: group.id, priority: group.priority, dailyMax: group.dailyMax, activityType: group.activityType, highIntensity: group.highIntensity, recurring: group.recurring, prerequisiteGroupIds: group.prerequisiteGroupIds })),
-    assignments: input.assignments.map(item => ({ id: item.id, groupId: item.groupId, scheduledDate: item.scheduledDate, estimatedMinutes: item.estimatedMinutes, remainingMinutes: item.remainingMinutes, actualMinutes: item.actualMinutes, progress: item.progress, status: item.status, locked: item.locked, intentStrength: item.intentStrength, previousDate: item.previousDate, lastManualMoveAt: item.lastManualMoveAt, completedAt: item.completedAt, timeEntries: item.timeEntries })),
-    goals: input.goals, constraints: input.calendarConstraints, exceptions: input.acceptedConstraintExceptions, timer: input.timer,
+  // AppContext increments dataRevision for every semantic mutation. Using that
+  // stable version avoids serializing every time-entry and nested rule on each
+  // preview while still invalidating the cache whenever the input changes.
+  // Legacy/demo fixtures may not have a revision yet; never let two such states
+  // share a preview just because they happen to have the same updatedAt value.
+  const revision = input.dataRevision ?? stableSignature({
+    settings: input.settings,
+    dayConfigs: input.dayConfigs,
+    taskGroups: input.taskGroups,
+    goals: input.goals,
+    calendarConstraints: input.calendarConstraints,
+    acceptedConstraintExceptions: input.acceptedConstraintExceptions,
+    assignments: input.assignments.map(item => ({
+      ...item,
+      timeEntries: item.timeEntries.map(entry => ({
+        date: timeEntryDate(entry),
+        minutes: entry.minutes,
+        source: entry.source,
+        countInStatistics: entry.countInStatistics,
+      })),
+    })),
   })
+  return stableSignature({ revision, updatedAt: input.updatedAt, day: todayISO(), request, strategies })
 }
 
 export function generateReplanScenario(input: AppState, request: ReplanRequest, strategy: ReplanStrategy): ReplanResult {

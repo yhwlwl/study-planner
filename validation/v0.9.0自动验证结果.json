@@ -1,6 +1,6 @@
 {
   "version": "0.9.0",
-  "generatedAt": "2026-08-09T12:29:58.376Z",
+  "generatedAt": "2026-08-16T02:24:51.513Z",
   "passed": 78,
   "total": 78,
   "failed": [],
@@ -13,9 +13,9 @@
     },
     {
       "group": "版本与迁移",
-      "name": "状态架构版本已提升（当前为 10）",
+      "name": "状态架构版本已提升（当前为 11）",
       "pass": true,
-      "evidence": "src/types.ts"
+      "evidence": "src/types.ts；执行账本与历史状态事件使用独立版本迁移"
     },
     {
       "group": "版本与迁移",
@@ -61,9 +61,9 @@
     },
     {
       "group": "创建系统",
-      "name": "单项任务与任务组入口分离",
+      "name": "统一添加任务入口支持独立任务与任务组",
       "pass": true,
-      "evidence": "App + dialogs"
+      "evidence": "AddTaskDialog + task dialogs"
     },
     {
       "group": "创建系统",

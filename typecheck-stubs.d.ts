@@ -1,6 +1,17 @@
 declare namespace JSX { interface IntrinsicAttributes { key?: any } interface IntrinsicElements { [elemName: string]: any } }
 declare namespace React { type ReactNode = any; interface DragEvent<T = any> { preventDefault(): void; stopPropagation(): void; dataTransfer: any; target: T; currentTarget: T } interface MouseEvent<T = any> { preventDefault(): void; stopPropagation(): void; target: T; currentTarget: T } interface TouchEvent<T = any> { touches: any; changedTouches: any; target: T; currentTarget: T } }
 declare module 'react' {
+  export interface ErrorInfo { componentStack?: string | null }
+  export class Component<P = {}, S = {}> {
+    constructor(props: P)
+    props: Readonly<P>
+    state: Readonly<S>
+    context: any
+    refs: Record<string, any>
+    setState(state: Partial<S> | ((previous: Readonly<S>) => Partial<S>)): void
+    forceUpdate(): void
+    render(): any
+  }
   export type ReactNode = any
   export type ReactElement<P = any> = { props: P; key?: any; type?: any }
   export const Children: { toArray(children: any): any[] }
@@ -30,7 +41,7 @@ declare module '@supabase/supabase-js' {
   export function createClient(url: string, key: string): any
 }
 declare module 'lucide-react' {
-  export const Activity:any; export const AlertTriangle:any; export const Archive:any; export const ArrowUpRight:any; export const BarChart3:any; export const BookOpen:any; export const ChevronDown:any; export const ChevronUp:any; export const Undo2:any; export const CalendarClock:any; export const CalendarDays:any; export const Check:any; export const CheckCircle2:any; export const ClipboardPaste:any; export const Copy:any; export const Database:any; export const Flame:any; export const Focus:any; export const ChevronLeft:any; export const ChevronRight:any; export const Clock3:any; export const Cloud:any; export const CloudOff:any; export const Download:any; export const Ellipsis:any; export const FileDown:any; export const FileSpreadsheet:any; export const FileText:any; export const Filter:any; export const FolderPlus:any; export const Github:any; export const Inbox:any; export const LayoutDashboard:any; export const ListChecks:any; export const ListTodo:any; export const Lock:any; export const Maximize2:any; export const Menu:any; export const Pause:any; export const Pencil:any; export const Play:any; export const Plus:any; export const Printer:any; export const RefreshCw:any; export const RotateCcw:any; export const Save:any; export const Search:any; export const Settings:any; export const ShieldCheck:any; export const SlidersHorizontal:any; export const Sparkles:any; export const Table2:any; export const Target:any; export const Timer:any; export const TrendingUp:any; export const Trash2:any; export const Unlock:any; export const Upload:any; export const X:any
+  export const Activity:any; export const AlertTriangle:any; export const Archive:any; export const ArrowUpRight:any; export const BarChart3:any; export const BookOpen:any; export const ChevronDown:any; export const ChevronUp:any; export const Undo2:any; export const CalendarClock:any; export const CalendarDays:any; export const Check:any; export const CheckCircle2:any; export const ClipboardPaste:any; export const Copy:any; export const Database:any; export const Flame:any; export const Focus:any; export const ChevronLeft:any; export const ChevronRight:any; export const Clock3:any; export const Cloud:any; export const CloudOff:any; export const Download:any; export const Ellipsis:any; export const FileDown:any; export const FileImage:any; export const FileSpreadsheet:any; export const FileText:any; export const Filter:any; export const FolderPlus:any; export const Github:any; export const Inbox:any; export const LayoutDashboard:any; export const ListChecks:any; export const ListTodo:any; export const Lock:any; export const Maximize2:any; export const Menu:any; export const Pause:any; export const Pencil:any; export const Play:any; export const Plus:any; export const Printer:any; export const RefreshCw:any; export const RotateCcw:any; export const Save:any; export const Search:any; export const Settings:any; export const ShieldCheck:any; export const SlidersHorizontal:any; export const Sparkles:any; export const Table2:any; export const Target:any; export const Timer:any; export const TrendingUp:any; export const Trash2:any; export const Unlock:any; export const Upload:any; export const X:any
 }
 declare module 'recharts' { export const Bar:any; export const BarChart:any; export const CartesianGrid:any; export const ComposedChart:any; export const Legend:any; export const Line:any; export const LineChart:any; export const Pie:any; export const PieChart:any; export const Cell:any; export const ResponsiveContainer:any; export const Tooltip:any; export const XAxis:any; export const YAxis:any }
 declare module 'date-fns' {

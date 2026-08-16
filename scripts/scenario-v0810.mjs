@@ -21,6 +21,7 @@ const app = read('src/App.tsx')
 const styles = read('src/styles.css')
 const taskCard = read('src/components/TaskCard.tsx')
 const conflicts = read('src/lib/conflicts.ts')
+const addTaskDialog = read('src/components/AddTaskDialog.tsx')
 
 const results = []
 const add = (scenario, pass, evidence) => results.push({ scenario, pass: Boolean(pass), evidence })
@@ -38,7 +39,7 @@ add('任务组发现缺少子任务',
   '只创建缺少的 Assignment，并以 Insert 事件进入预览。')
 
 add('觉得当前计划太累',
-  /type LoadOutcome/.test(adjustmentDialog) && /每天少安排一些/.test(adjustmentDialog) && /避免连续高负载/.test(adjustmentDialog) && /exploratory\('生成减负推荐'/.test(adjustmentPolicy),
+  /type LoadPreference/.test(adjustmentDialog) && /每天最多安排（分钟）/.test(adjustmentDialog) && /最多连续几个高负载日/.test(adjustmentDialog) && /exploratory\('生成减负推荐'/.test(adjustmentPolicy),
   '先询问用户希望得到的具体减负结果，再生成推荐与备选。')
 
 add('8/10–8/15 出去玩',
@@ -46,7 +47,7 @@ add('8/10–8/15 出去玩',
   '范围约束先列出影响，再推荐旅行前后平衡方案。')
 
 add('新增任务组',
-  /type:\s*'new-task-insertion'/.test(context) && /prepareTaskGroup/.test(context) && /创建为未安排任务/.test(app),
+  /type:\s*'new-task-insertion'/.test(context) && /prepareTaskGroup/.test(context) && /TaskCreationMode/.test(addTaskDialog) && /TaskCreationKind/.test(addTaskDialog) && /mode === 'intake'/.test(addTaskDialog),
   '新组生成草稿后必须预览，也可由用户明确保留为未安排。')
 
 add('老师 8/15 检查若干任务组',
@@ -102,7 +103,7 @@ add('日期负载增减使用红绿方向提示',
   '负载增加为红色向上，减少为绿色向下，无变化为中性。')
 
 add('选中态在手机和桌面都清晰',
-  /choice-indicator/.test(adjustmentDialog) && /\.adjustment-outcome-grid button\.selected/.test(styles) && /\.proposal-choice\.selected/.test(styles),
+  /choice-indicator/.test(adjustmentDialog) && /aria-pressed/.test(adjustmentDialog) && /\.adjustment-outcome-grid button\.selected/.test(styles) && /\.proposal-choice\.selected/.test(styles),
   '选择状态同时使用明显边框、背景、阴影和“已选择”标记。')
 
 add('移动端计划调整不产生大块空白',

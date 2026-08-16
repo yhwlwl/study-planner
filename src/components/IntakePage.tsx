@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Archive, Check, ChevronRight, ClipboardPaste, Copy, Download, FileSpreadsheet, FolderPlus, Inbox, Pencil, Plus,
   Save, Trash2, Upload, X,
@@ -38,13 +38,13 @@ function emptyDraft(state: AppState): TaskGroupDraft {
 
 export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAddRequestHandled }: {
   onPrepared: (state: AppState, event: PlanChangeEvent) => void
-  onNavigate: (page: 'today' | 'tasks' | 'goals' | 'settings') => void
+  onNavigate: (page: 'today' | 'tasks' | 'intake' | 'goals' | 'settings') => void
   onAddTask: (batchId?: string) => void
   addRequest?: { id: string; kind: TaskCreationKind; batchId?: string }
   onAddRequestHandled: () => void
 }) {
   const {
-    state, canUndo, undo, createIntakeBatch, duplicateIntakeBatch, updateIntakeBatch, addIntakeSingleTask, addIntakeTaskGroup, updateIntakeSingleTask, updateIntakeTaskGroup,
+    state, canUndo, undo, updateSettings, createIntakeBatch, duplicateIntakeBatch, updateIntakeBatch, addIntakeSingleTask, addIntakeTaskGroup, updateIntakeSingleTask, updateIntakeTaskGroup,
     removeIntakeTaskGroup, deleteIntakeBatch, prepareIntakeBatch, resetAll,
   } = useApp()
   const activeBatches = useMemo(() => state.intakeBatches.filter(batch => batch.status !== 'archived'), [state.intakeBatches])
@@ -95,6 +95,9 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
   const duplicateCount = pendingItems.filter(item => duplicateSignatures.has(intakeDraftSignature(item))).length
   const deadlineCount = pendingItems.filter(item => item.desiredDate || item.latestDate || item.recurring).length
   const linkedGoalCount = pendingItems.filter(item => item.goalIds.length || item.goalTitle || item.desiredDate || item.latestDate).length
+  const availabilityConfirmed = state.settings.setupProgress?.availabilityConfirmed ?? Boolean(state.assignments.length)
+  const setupStep = state.settings.setupProgress?.currentStep ?? 1
+  const setSetupStep = (currentStep: 1 | 2 | 3 | 4) => updateSettings({ setupProgress: { ...(state.settings.setupProgress ?? {}), currentStep } })
 
   useEffect(() => {
     if (!active?.lastEditedItemId) return
@@ -141,6 +144,11 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
     onAddTask(id)
   }
 
+  const persistTaskGroupDraft = useCallback((draft: Partial<TaskGroupDraft>) => {
+    const targetBatchId = dialogBatchId ?? active?.id
+    if (targetBatchId) updateIntakeBatch(targetBatchId, { formDraft: draft })
+  }, [active?.id, dialogBatchId, updateIntakeBatch])
+
   const schedule = () => {
     if (!active) return
     const ids = selectedIds.length ? selectedIds : pendingItems.map(item => item.id)
@@ -150,6 +158,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
       return
     }
     const prepared = prepareIntakeBatch(active.id, ids)
+    prepared.state.settings.setupProgress = { ...(prepared.state.settings.setupProgress ?? {}), currentStep: 4 }
     onPrepared(prepared.state, prepared.event)
   }
 
@@ -197,10 +206,10 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
       <button className="primary-button" onClick={createBatch}><FolderPlus size={17}/>新建录入批次</button>
     </section>
     {!state.assignments.length && <nav className="intake-setup-steps" aria-label="首次建档进度">
-      <button className={pendingItems.length ? 'complete active' : 'active'} onClick={() => undefined}><span>1</span><strong>任务清单</strong><small>{pendingItems.length ? `${pendingItems.length} 项已录入` : '正在进行'}</small></button>
-      <button className={state.goals.length ? 'complete' : ''} onClick={() => onNavigate('goals')}><span>2</span><strong>目标期限</strong><small>{state.goals.length ? `${state.goals.length} 个目标` : '可稍后补充'}</small></button>
-      <button className="complete" onClick={() => onNavigate('settings')}><span>3</span><strong>可用时间</strong><small>当前约 {minutesText(Math.round(capacity))}</small></button>
-      <button disabled={!pendingItems.length || Boolean(issueCount)} onClick={schedule}><span>4</span><strong>首次排期</strong><small>{issueCount ? `先修正 ${issueCount} 项` : pendingItems.length ? '已可生成预览' : '等待任务'}</small></button>
+      <button className={`${pendingItems.length ? 'complete ' : ''}${setupStep === 1 ? 'active' : ''}`} onClick={() => setSetupStep(1)}><span>1</span><strong>任务清单</strong><small>{pendingItems.length ? `${pendingItems.length} 项已录入` : '正在进行'}</small></button>
+      <button className={`${state.goals.length ? 'complete ' : ''}${setupStep === 2 ? 'active' : ''}`} onClick={() => { setSetupStep(2); onNavigate('goals') }}><span>2</span><strong>目标期限</strong><small>{state.goals.length ? `${state.goals.length} 个目标` : '可稍后补充'}</small></button>
+      <button className={`${availabilityConfirmed ? 'complete ' : ''}${setupStep === 3 ? 'active' : ''}`} onClick={() => { setSetupStep(3); onNavigate('settings') }}><span>3</span><strong>可用时间</strong><small>{availabilityConfirmed ? `已确认 · 约 ${minutesText(Math.round(capacity))}` : '请确认每天能学习多久'}</small></button>
+      <button className={setupStep === 4 ? 'active' : ''} disabled={!pendingItems.length || Boolean(issueCount) || !availabilityConfirmed} onClick={schedule}><span>4</span><strong>首次排期</strong><small>{issueCount ? `先修正 ${issueCount} 项` : !availabilityConfirmed ? '先确认可用时间' : pendingItems.length ? '已可生成预览' : '等待任务'}</small></button>
     </nav>}
 
     <div className="intake-layout">
@@ -234,7 +243,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
               <small>最近保存于 {new Date(active.updatedAt).toLocaleString('zh-CN')}</small>
             </div>
             <div className="intake-head-actions">
-              <button className="secondary-button" onClick={() => { updateIntakeBatch(active.id, { status: 'pending' }); onNavigate(state.assignments.length ? 'today' : 'tasks') }}><Save size={16}/>保存并退出</button>
+              <button className="secondary-button" onClick={() => { updateIntakeBatch(active.id, { status: 'pending' }); onNavigate(state.assignments.length ? 'today' : 'intake') }}><Save size={16}/>保存并退出</button>
               <button className="icon-button" aria-label={`复制录入批次 ${active.name}`} onClick={() => setActiveId(duplicateIntakeBatch(active.id))}><Copy size={17}/></button>
               <button className="icon-button danger-icon" aria-label={`删除录入批次 ${active.name}`} onClick={() => { if (!window.confirm('删除这个录入批次？已进入正式计划的任务不会被删除。删除后可立即撤销。')) return; setDeletedBatchName(active.name); deleteIntakeBatch(active.id) }}><Trash2 size={17}/></button>
             </div>
@@ -299,13 +308,15 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
       key={`${active?.id ?? 'none'}-${editingItem?.id ?? 'new'}`}
       open={dialogOpen}
       state={state}
-      initial={editingItem}
+      initial={editingItem ?? active?.formDraft as TaskGroupDraft | undefined}
+      onDraftChange={persistTaskGroupDraft}
       onClose={() => { setDialogOpen(false); setEditingItem(undefined); setDialogBatchId(undefined) }}
       onSave={(draft, keepOpen) => {
         const targetBatchId = dialogBatchId ?? active?.id
         if (!targetBatchId) return
         if (editingItem) updateIntakeTaskGroup(targetBatchId, editingItem.id, draft)
         else addIntakeTaskGroup(targetBatchId, draft)
+        updateIntakeBatch(targetBatchId, { formDraft: undefined })
         if (!keepOpen || editingItem) { setDialogOpen(false); setEditingItem(undefined); setDialogBatchId(undefined) }
       }}
     />
@@ -357,10 +368,12 @@ function ImportPreview({ result, onChange }: { result: IntakeImportResult; onCha
   const [bulkMinutes, setBulkMinutes] = useState<number>()
   const [bulkLatestDate, setBulkLatestDate] = useState('')
   const [bulkGoalTitle, setBulkGoalTitle] = useState('')
+  const [page, setPage] = useState(0)
+  const pageSize = 100
   const reviewRows = result.reviewRows ?? result.drafts.map((draft, index) => ({ sourceRow: index + 1, draft, issues: validateImportedDraft(draft, index + 1) }))
   const generatedTaskCount = result.drafts.reduce((sum, draft) => sum + (draft.recurring ? 0 : splitSessionCount(draft)), 0)
   const generatedMinutes = result.drafts.reduce((sum, draft) => sum + (draft.recurring ? draft.unitMinutes : draft.quantity * draft.unitMinutes), 0)
-  const updateRows = (rows: IntakeImportReviewRow[]) => onChange(rebuildImportResult(result, rows))
+  const updateRows = (rows: IntakeImportReviewRow[]) => { setPage(0); onChange(rebuildImportResult(result, rows)) }
   const updateDraft = (index: number, patch: Partial<TaskGroupDraft>) => updateRows(reviewRows.map((row, rowIndex) => {
     if (rowIndex !== index) return row
     const draft = { ...row.draft, ...patch }
@@ -395,19 +408,31 @@ function ImportPreview({ result, onChange }: { result: IntakeImportResult; onCha
     {result.table && <details className="intake-mapping" open={result.table.mapping.every(item => item === 'ignore')}><summary>检查表头映射</summary><p>如果自动识别不正确，请为每一列选择真实含义。修改后会立即重新解析全部行。</p><div className="intake-mapping-grid">{result.table.headers.map((header, index) => <label key={`${header}-${index}`}><span>{header}</span><select value={result.table?.mapping[index] ?? 'ignore'} onChange={event => result.table && onChange(remapIntakeTable(result.table, result.table.mapping.map((field, fieldIndex) => fieldIndex === index ? event.target.value as IntakeImportField | 'ignore' : field)))}>{intakeImportFields.map(field => <option key={field.value} value={field.value}>{field.label}</option>)}</select></label>)}</div></details>}
     <div className="intake-import-bulk"><label><span>统一科目</span><input value={bulkSubject} onChange={event => setBulkSubject(event.target.value)} placeholder="留空不修改"/></label><label><span>统一分钟</span><NumericInput min={1} max={1440} value={bulkMinutes} onValueChange={setBulkMinutes} onEmpty={() => setBulkMinutes(undefined)}/></label><label><span>统一最晚日期</span><input type="date" value={bulkLatestDate} onChange={event => setBulkLatestDate(event.target.value)}/></label><label><span>统一目标名称</span><input value={bulkGoalTitle} onChange={event => setBulkGoalTitle(event.target.value)} placeholder="留空不修改"/></label><button className="secondary-button" onClick={applyBulk}>应用到全部行</button><button className="text-button" onClick={mergeSimilar}>合并同名同规则行</button></div>
     <p className="intake-preview-tip">错误行不会丢失。可以直接修改红色单元格，或留空清除可选字段；确认后仍只进入录入批次。</p>
-    <div className="intake-preview-table-wrap"><table className="intake-table"><thead><tr><th>源行</th><th>任务组</th><th>科目</th><th>数量</th><th>单项预计</th><th>目标期限</th><th>排期日期</th><th>状态</th><th><span className="sr-only">移除</span></th></tr></thead><tbody>{reviewRows.map((row, index) => { const draft = row.draft; return <tr className={row.issues.length ? 'has-error' : ''} key={`${row.sourceRow}-${index}`}><td>{row.sourceRow}</td><td><input aria-label={`第 ${row.sourceRow} 行任务组`} value={draft.title} onChange={event => updateDraft(index, { title: event.target.value })}/></td><td><input aria-label={`第 ${row.sourceRow} 行科目`} value={draft.subject} onChange={event => updateDraft(index, { subject: event.target.value })}/></td><td>{draft.recurring ? '重复' : <NumericInput aria-label={`第 ${row.sourceRow} 行数量`} min={1} max={10000} value={draft.quantity} onValueChange={quantity => updateDraft(index, { quantity })}/>}</td><td><NumericInput aria-label={`第 ${row.sourceRow} 行预计分钟`} min={1} max={1440} value={draft.unitMinutes} onValueChange={unitMinutes => updateDraft(index, { unitMinutes })}/></td><td><input aria-label={`第 ${row.sourceRow} 行最晚完成日`} type="date" value={draft.latestDate ?? ''} onChange={event => updateDraft(index, { latestDate: event.target.value || undefined })}/></td><td><select aria-label={`第 ${row.sourceRow} 行排期日期类型`} value={draft.fixedDate ? 'fixed' : draft.preferredDate ? 'preferred' : 'system'} onChange={event => updateDraft(index, event.target.value === 'fixed' ? { fixedDate: draft.fixedDate ?? todayISO(), preferredDate: undefined } : event.target.value === 'preferred' ? { preferredDate: draft.preferredDate ?? todayISO(), fixedDate: undefined } : { preferredDate: undefined, fixedDate: undefined })}><option value="system">系统安排</option><option value="preferred">偏好日期</option><option value="fixed">固定日期</option></select>{(draft.preferredDate || draft.fixedDate) && <input aria-label={`第 ${row.sourceRow} 行排期日期`} type="date" value={draft.fixedDate ?? draft.preferredDate ?? ''} onChange={event => updateDraft(index, draft.fixedDate ? { fixedDate: event.target.value || undefined } : { preferredDate: event.target.value || undefined })}/>}</td><td>{row.issues.length ? <span className="danger-text">{row.issues.map(issue => `${issue.field ? `${issue.field}：` : ''}${issue.message}`).join('；')}</span> : <span className="success-text">可加入{draft.allowSplit ? `，将生成 ${splitSessionCount(draft)} 段` : ''}</span>}</td><td><button className="icon-button danger-icon" aria-label={`移除源文件第 ${row.sourceRow} 行`} onClick={() => updateRows(reviewRows.filter((_, rowIndex) => rowIndex !== index))}><X size={15}/></button></td></tr>})}</tbody></table></div>
+    <div className="intake-preview-table-wrap"><table className="intake-table"><thead><tr><th>源行</th><th>任务组</th><th>科目</th><th>数量</th><th>单项预计</th><th>目标期限</th><th>排期日期</th><th>状态</th><th><span className="sr-only">移除</span></th></tr></thead><tbody>{reviewRows.slice(page * pageSize, (page + 1) * pageSize).map((row, offset) => { const index = page * pageSize + offset; const draft = row.draft; return <tr className={row.issues.length ? 'has-error' : ''} key={`${row.sourceRow}-${index}`}><td>{row.sourceRow}</td><td><input aria-label={`第 ${row.sourceRow} 行任务组`} value={draft.title} onChange={event => updateDraft(index, { title: event.target.value })}/></td><td><input aria-label={`第 ${row.sourceRow} 行科目`} value={draft.subject} onChange={event => updateDraft(index, { subject: event.target.value })}/></td><td>{draft.recurring ? '重复' : <NumericInput aria-label={`第 ${row.sourceRow} 行数量`} min={1} max={10000} value={draft.quantity} onValueChange={quantity => updateDraft(index, { quantity })}/>}</td><td><NumericInput aria-label={`第 ${row.sourceRow} 行预计分钟`} min={1} max={1440} value={draft.unitMinutes} onValueChange={unitMinutes => updateDraft(index, { unitMinutes })}/></td><td><input aria-label={`第 ${row.sourceRow} 行最晚完成日`} type="date" value={draft.latestDate ?? ''} onChange={event => updateDraft(index, { latestDate: event.target.value || undefined })}/></td><td><select aria-label={`第 ${row.sourceRow} 行排期日期类型`} value={draft.fixedDate ? 'fixed' : draft.preferredDate ? 'preferred' : 'system'} onChange={event => updateDraft(index, event.target.value === 'fixed' ? { fixedDate: draft.fixedDate ?? todayISO(), preferredDate: undefined } : event.target.value === 'preferred' ? { preferredDate: draft.preferredDate ?? todayISO(), fixedDate: undefined } : { preferredDate: undefined, fixedDate: undefined })}><option value="system">系统安排</option><option value="preferred">偏好日期</option><option value="fixed">固定日期</option></select>{(draft.preferredDate || draft.fixedDate) && <input aria-label={`第 ${row.sourceRow} 行排期日期`} type="date" value={draft.fixedDate ?? draft.preferredDate ?? ''} onChange={event => updateDraft(index, draft.fixedDate ? { fixedDate: event.target.value || undefined } : { preferredDate: event.target.value || undefined })}/>}</td><td>{row.issues.length ? <span className="danger-text">{row.issues.map(issue => `${issue.field ? `${issue.field}：` : ''}${issue.message}`).join('；')}</span> : <span className="success-text">可加入{draft.allowSplit ? `，将生成 ${splitSessionCount(draft)} 段` : ''}</span>}</td><td><button className="icon-button danger-icon" aria-label={`移除源文件第 ${row.sourceRow} 行`} onClick={() => updateRows(reviewRows.filter((_, rowIndex) => rowIndex !== index))}><X size={15}/></button></td></tr>})}</tbody></table></div>
+    {reviewRows.length > pageSize && <div className="intake-import-pagination"><span>显示第 {page * pageSize + 1}–{Math.min((page + 1) * pageSize, reviewRows.length)} 行，共 {reviewRows.length} 行</span><div className="button-wrap"><button className="secondary-button" disabled={page === 0} onClick={() => setPage(value => Math.max(0, value - 1))}>上一页</button><button className="secondary-button" disabled={(page + 1) * pageSize >= reviewRows.length} onClick={() => setPage(value => value + 1)}>下一页</button></div></div>}
   </div>
 }
 
-function IntakeTaskDialog({ open, state, initial, onClose, onSave }: {
+function IntakeTaskDialog({ open, state, initial, onDraftChange, onClose, onSave }: {
   open: boolean
   state: AppState
-  initial?: IntakeTaskGroupDraft
+  initial?: IntakeTaskGroupDraft | Partial<TaskGroupDraft>
+  onDraftChange?: (draft: Partial<TaskGroupDraft>) => void
   onClose: () => void
   onSave: (draft: TaskGroupDraft, keepOpen: boolean) => void
 }) {
-  const [form, setForm] = useState<TaskGroupDraft>(() => initial ? structuredClone(initial) : emptyDraft(state))
+  const existingItem = Boolean(initial && 'id' in initial)
+  const [form, setForm] = useState<TaskGroupDraft>(() => ({ ...emptyDraft(state), ...(initial ? structuredClone(initial) : {}) }))
   const patch = <K extends keyof TaskGroupDraft>(key: K, value: TaskGroupDraft[K]) => setForm(current => ({ ...current, [key]: value }))
+  useEffect(() => {
+    if (!open || existingItem || !onDraftChange) return
+    const timer = window.setTimeout(() => onDraftChange(form), 300)
+    return () => window.clearTimeout(timer)
+  }, [existingItem, form, onDraftChange, open])
+  useEffect(() => {
+    if (!open) return
+    setForm({ ...emptyDraft(state), ...(initial ? structuredClone(initial) : {}) })
+  }, [open])
   const valid = Boolean(form.title.trim()) && form.quantity > 0 && form.unitMinutes > 0
     && (!form.desiredDate || !form.latestDate || form.desiredDate <= form.latestDate)
     && !(form.preferredDate && form.fixedDate)
@@ -415,10 +440,12 @@ function IntakeTaskDialog({ open, state, initial, onClose, onSave }: {
   const save = (keepOpen: boolean) => {
     if (!valid) return
     onSave({ ...form, title: form.title.trim() }, keepOpen)
-    if (keepOpen && !initial) setForm(emptyDraft(state))
+    if (keepOpen && !existingItem) {
+      setForm({ ...emptyDraft(state), subject: form.subject, priority: form.priority, unitMinutes: form.unitMinutes, activityType: form.activityType, highIntensity: form.highIntensity, countInStats: form.countInStats, recurring: form.recurring, allowSplit: form.allowSplit, splitSessionMinutes: form.splitSessionMinutes, prerequisiteGroupIds: form.prerequisiteGroupIds, goalIds: form.goalIds })
+    }
   }
 
-  return <Modal open={open} title={initial ? '编辑录入中的任务组' : '添加任务组到录入'} onClose={onClose} wide mobileFullscreen>
+  return <Modal open={open} title={existingItem ? '编辑录入中的任务组' : '添加任务组到录入'} onClose={onClose} wide mobileFullscreen>
     <div className="form-grid">
       <label className="field span-2"><span>任务组名称</span><input autoFocus value={form.title} onChange={event => patch('title', event.target.value)} placeholder="例如：化学预习"/></label>
       <label className="field"><span>科目／类别</span><input list="intake-subjects" value={form.subject} onChange={event => patch('subject', event.target.value)}/><datalist id="intake-subjects">{state.settings.customSubjects.map(subject => <option key={subject} value={subject}/>)}</datalist></label>
@@ -456,7 +483,7 @@ function IntakeTaskDialog({ open, state, initial, onClose, onSave }: {
     <div className="modal-actions">
       <button className="secondary-button" onClick={onClose}>取消</button>
       {!initial && <button className="secondary-button" disabled={!valid} onClick={() => save(true)}>保存并继续新增</button>}
-      <button className="primary-button" disabled={!valid} onClick={() => save(false)}>{initial ? '保存修改' : '保存并返回'}</button>
+      <button className="primary-button" disabled={!valid} onClick={() => save(false)}>{existingItem ? '保存修改' : '保存并返回'}</button>
     </div>
   </Modal>
 }

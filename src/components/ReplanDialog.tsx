@@ -176,6 +176,7 @@ export function ReplanDialog({
   const [detailDate, setDetailDate] = useState<string>()
   const [debouncedIssues, setDebouncedIssues] = useState<ReturnType<typeof analyzePlan>>([])
   const [dragTargetDate, setDragTargetDate] = useState<string>()
+  const [limitDrafts, setLimitDrafts] = useState<Record<string, number>>({})
 
   const activeBundleId = bundle?.scenarios[0]?.id
   const previousBundleId = useRef<string>()
@@ -200,6 +201,7 @@ export function ReplanDialog({
       setExpandedDates([])
       setDetailDate(undefined)
       setLoadCompareDate(undefined)
+      setLimitDrafts({})
     } else if (regenerated) {
       setDecisions(previous => Object.fromEntries(Object.entries(previous).filter(([, decision]) => decision.previewFixed)))
       setUndoStack([])
@@ -224,8 +226,8 @@ export function ReplanDialog({
     onRegenerate(nextRequest)
   }
 
-  const allowConstraintOnce = (date: string, key: string, limit: number) => {
-    const overrides = [...(request.limitOverrides ?? []).filter(item => !(item.date === date && item.key === key)), { date, key, limit }]
+  const allowConstraintOnce = (date: string, key: string, limit: number, affectedAssignmentIds?: string[]) => {
+    const overrides = [...(request.limitOverrides ?? []).filter(item => !(item.date === date && item.key === key)), { date, key, limit, affectedAssignmentIds }]
     regenerateWith({ limitOverrides: overrides })
   }
 
@@ -478,11 +480,17 @@ export function ReplanDialog({
 
         {result.constraintConflicts.length > 0 && <section className="replan-section constraint-conflict-section">
           <div className="replan-section-title"><AlertTriangle size={18}/><div><h3>没有完全合法的位置，需要你选择</h3><p>所有每日上限默认都是硬限制。这里只提供一次性放宽，不会永久改变任务组规则。</p></div></div>
-          <div className="constraint-conflict-list">{result.constraintConflicts.map(conflict => <article key={`${conflict.date}-${conflict.key}`}>
-            <div><strong>{conflict.date} · {conflict.label}</strong><span>当前需要 {Math.round(conflict.current)}，默认上限 {Math.round(conflict.limit)}；影响 {conflict.affectedAssignmentIds.length} 项任务。</span></div>
-            <ul>{conflict.options.map(option => <li key={option}>{option}</li>)}</ul>
-            <button className="secondary-button" onClick={() => allowConstraintOnce(conflict.date, conflict.key, conflict.suggestedLimit)}>仅本次放宽到 {conflict.suggestedLimit} 并重算</button>
-          </article>)}</div>
+          <div className="constraint-conflict-list">{result.constraintConflicts.map(conflict => {
+            const conflictId = `${conflict.date}:${conflict.key}`
+            const limit = limitDrafts[conflictId] ?? conflict.minimumFeasibleLimit
+            const extra = Math.max(0, limit - conflict.limit)
+            return <article key={conflictId}>
+              <div><strong>{conflict.date} · {conflict.label}</strong><span>当前需要 {Math.round(conflict.current)}，默认上限 {Math.round(conflict.limit)}；影响 {conflict.affectedAssignmentIds.length} 项任务。</span></div>
+              <div className="quantified-negotiation"><strong>量化协商</strong><span>至少需要放宽 {Math.round(conflict.deficit)}；本次上限设为 {Math.round(limit)}，相当于增加 {Math.round(extra)} 个单位。</span><label><span>本次上限</span><NumericInput min={Math.ceil(conflict.limit)} max={Math.max(Math.ceil(conflict.current) + 999, Math.ceil(conflict.limit) + 1)} value={limit} onValueChange={value => setLimitDrafts(previous => ({ ...previous, [conflictId]: value }))}/></label></div>
+              <ul>{conflict.options.map(option => <li key={option}>{option}</li>)}</ul>
+              <button className="secondary-button" disabled={limit < conflict.minimumFeasibleLimit} onClick={() => allowConstraintOnce(conflict.date, conflict.key, limit, conflict.affectedAssignmentIds)}>仅本次放宽到 {Math.round(limit)} 并重算</button>
+            </article>
+          })}</div>
         </section>}
 
         {protectedBufferDates.length > 0 && <section className="replan-section buffer-use-section">
