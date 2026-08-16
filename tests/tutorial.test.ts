@@ -93,6 +93,7 @@ describe('interactive tutorial checkpoints', () => {
     const proposals = generateSchedulingProposals(prepared, event, { baseline: before, expansionLevel: 0 })
     const feasible = proposals.filter(item => !item.infeasible)
     expect(feasible.length).toBeGreaterThan(0)
+    expect(feasible[0].movements.length).toBeGreaterThan(0)
     const next = hydratePortableState(feasible[0].stateAfter, { replanHistory: before.replanHistory, conflictBackups: before.conflictBackups, planVersions: before.planVersions })
     expect(tutorialStateHealth(next, session('goal'))).toEqual({ ok: true })
     expect(next.assignments.find(item => item.id === TUTORIAL_EXECUTE_ASSIGNMENT_ID)?.scheduledDate).toBe(anchor)

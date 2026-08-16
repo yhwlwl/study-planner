@@ -826,10 +826,9 @@ export default function App() {
       const generated = tutorial.step === 'review-carry'
         ? []
         : generateProposals(prepared, event, baseline, undefined, 0)
-      const proposals = [
-        ...(direct.infeasible ? [] : [direct]),
-        ...generated.filter(item => !item.infeasible && item.distinctSignature !== direct.distinctSignature),
-      ]
+      const proposals = tutorial.step === 'review-carry'
+      ? (direct.infeasible ? [] : [direct])
+      : generated.filter(item => !item.infeasible)
       if (!proposals.length) {
         // 保留问题详情给用户看，不自动把整个教程跳回上一层。
         if (!advanceTutorialOnly(tutorial.step, nextPreview)) return
