@@ -4,7 +4,7 @@ import type { Assignment, TaskGroup } from '../types'
 import { minutesText } from '../lib/date'
 import { useApp } from '../AppContext'
 
-export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact = false, tutorialTarget = false, tutorialLocked = false, tutorialDisabled = false }: { assignment: Assignment; group: TaskGroup; onComplete: (assignment: Assignment) => void; onOpenTimer: (assignment: Assignment) => void; compact?: boolean; tutorialTarget?: boolean; tutorialLocked?: boolean; tutorialDisabled?: boolean }) {
+export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact = false, tutorialTarget = false, tutorialLocked = false, tutorialDisabled = false, onTutorialBlocked }: { assignment: Assignment; group: TaskGroup; onComplete: (assignment: Assignment) => void; onOpenTimer: (assignment: Assignment) => void; compact?: boolean; tutorialTarget?: boolean; tutorialLocked?: boolean; tutorialDisabled?: boolean; onTutorialBlocked?: (message?: string) => void }) {
   const { state, updateAssignment, startTimer } = useApp()
   const [tick, setTick] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -32,6 +32,7 @@ export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact =
   const elapsed = active ? timer.accumulatedSeconds + (timer.running && timer.startedAt ? Math.floor((Date.now() - timer.startedAt) / 1000) : 0) : 0
 
   const complete = () => {
+    if (tutorialDisabled) { onTutorialBlocked?.('教程中先完成高亮任务'); return }
     if (assignment.status === 'done') return
     // 正在计时的任务必须回到统一的计时结束流程，避免首页勾选后丢失尚未结算的秒数。
     if (active) { onOpenTimer(assignment); return }
@@ -48,7 +49,7 @@ export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact =
 
   return (
     <article data-assignment-id={assignment.id} className={`task-card ${assignment.status === 'done' ? 'task-done' : ''} ${compact ? 'task-compact' : ''}`} draggable={!tutorialLocked && !assignment.locked && assignment.status !== 'done'} onDragStart={event => event.dataTransfer.setData('text/assignment-id', assignment.id)}>
-      <button className="check-button" data-tutorial-target={tutorialTarget ? 'tutorial-execute' : undefined} data-tutorial-action={tutorialTarget ? 'complete-tutorial-task' : undefined} onClick={complete} disabled={assignment.status === 'done' || tutorialDisabled} aria-label={assignment.status === 'done' ? '任务已完成' : '完成任务'} title={assignment.status === 'done' ? '任务已完成；重新打开请使用更多菜单' : '完成任务'}>
+      <button className={`check-button ${tutorialDisabled ? 'tutorial-disabled-control' : ''}`} data-tutorial-target={tutorialTarget ? 'tutorial-execute' : undefined} data-tutorial-action={tutorialTarget ? 'complete-tutorial-task' : undefined} onClick={complete} disabled={assignment.status === 'done'} aria-disabled={tutorialDisabled || undefined} aria-label={assignment.status === 'done' ? '任务已完成' : '完成任务'} title={assignment.status === 'done' ? '任务已完成；重新打开请使用更多菜单' : tutorialDisabled ? '教程中先完成高亮任务' : '完成任务'}>
         {assignment.status === 'done' ? <Check size={18} /> : null}
       </button>
       <div className="task-main">
@@ -62,15 +63,15 @@ export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact =
         </div>
         {active && <div className="timer-strip"><Clock3 size={15}/><span>{String(Math.floor(elapsed / 3600)).padStart(2,'0')}:{String(Math.floor(elapsed % 3600 / 60)).padStart(2,'0')}:{String(elapsed % 60).padStart(2,'0')}</span></div>}
       </div>
-      {!compact && !tutorialLocked && <div className="task-actions">
+      {!compact && <div className="task-actions">
         {assignment.status !== 'done' && (active
-          ? <button className="text-button timer-start-button" onClick={() => onOpenTimer(assignment)}><Clock3 size={15}/>返回计时</button>
+          ? <button className={`text-button timer-start-button ${tutorialLocked ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialLocked || undefined} onClick={() => tutorialLocked ? onTutorialBlocked?.('教程中暂不操作计时器') : onOpenTimer(assignment)}><Clock3 size={15}/>返回计时</button>
           : anotherTimerActive
-            ? <button className="text-button timer-start-button" onClick={() => onOpenTimer(assignment)} title="请先结束当前任务的计时"><Clock3 size={15}/>查看当前计时</button>
-            : <button className="text-button timer-start-button" onClick={() => { startTimer(assignment.id); onOpenTimer(assignment) }}><Play size={15}/>开始计时</button>)}
-        <button className="icon-button subtle task-lock-action" aria-label={assignment.locked ? '解锁任务' : '锁定任务'} onClick={() => updateAssignment(assignment.id, { locked: !assignment.locked })}>{assignment.locked ? <Lock size={16}/> : <Unlock size={16}/>}<span className="mobile-action-label">{assignment.locked ? '解锁' : '锁定'}</span></button>
+            ? <button className={`text-button timer-start-button ${tutorialLocked ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialLocked || undefined} onClick={() => tutorialLocked ? onTutorialBlocked?.('教程中暂不操作计时器') : onOpenTimer(assignment)} title="请先结束当前任务的计时"><Clock3 size={15}/>查看当前计时</button>
+            : <button className={`text-button timer-start-button ${tutorialLocked ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialLocked || undefined} onClick={() => { if (tutorialLocked) { onTutorialBlocked?.('教程中暂不操作计时器'); return }; startTimer(assignment.id); onOpenTimer(assignment) }}><Play size={15}/>开始计时</button>)}
+        <button className={`icon-button subtle task-lock-action ${tutorialLocked ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialLocked || undefined} aria-label={assignment.locked ? '解锁任务' : '锁定任务'} onClick={() => tutorialLocked ? onTutorialBlocked?.('教程中暂不修改任务锁定状态') : updateAssignment(assignment.id, { locked: !assignment.locked })}>{assignment.locked ? <Lock size={16}/> : <Unlock size={16}/>}<span className="mobile-action-label">{assignment.locked ? '解锁' : '锁定'}</span></button>
         {assignment.status === 'done' && <div className="task-more" ref={menuRef}>
-          <button className="icon-button subtle" onClick={() => setMenuOpen(value => !value)} aria-label="更多任务操作" title="更多"><Ellipsis size={18} aria-hidden="true"/></button>
+          <button className={`icon-button subtle ${tutorialLocked ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialLocked || undefined} onClick={() => tutorialLocked ? onTutorialBlocked?.('教程中暂不重新打开已完成任务') : setMenuOpen(value => !value)} aria-label="更多任务操作" title="更多"><Ellipsis size={18} aria-hidden="true"/></button>
           {menuOpen && <div className="task-more-menu"><button onClick={reopen}>重新打开任务</button><small>会先再次确认，已记录时间不会删除。</small></div>}
         </div>}
       </div>}

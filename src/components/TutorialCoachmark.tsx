@@ -1,5 +1,5 @@
 import { RotateCcw, X } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect } from 'react'
 import type { TutorialStep } from '../lib/tutorial'
 
 export interface TutorialCoachmarkConfig {
@@ -11,8 +11,6 @@ export interface TutorialCoachmarkConfig {
   secondaryLabel?: string
   onSecondary?: () => void
 }
-
-type Position = { left: number; top: number; placement: 'above' | 'below' | 'fallback' }
 
 function findTarget(target?: string) {
   if (!target || typeof document === 'undefined') return null
@@ -29,53 +27,40 @@ export function TutorialCoachmark({ step, config, onExit, onRestart }: {
   onExit: () => void
   onRestart: () => void
 }) {
-  const [position, setPosition] = useState<Position>({ left: 16, top: 16, placement: 'fallback' })
-  const key = `${step}:${config.target ?? 'none'}`
-
-  const updatePosition = useMemo(() => () => {
-    const target = findTarget(config.target)
-    document.querySelectorAll('.tutorial-highlight').forEach(node => node.classList.remove('tutorial-highlight'))
-    if (!target) {
-      setPosition({ left: Math.max(12, Math.min(window.innerWidth - 332, window.innerWidth / 2 - 160)), top: Math.max(12, window.innerHeight - 150), placement: 'fallback' })
-      return
+  useEffect(() => {
+    let stopped = false
+    const timers: number[] = []
+    const clearHighlight = () => document.querySelectorAll('.tutorial-highlight').forEach(node => node.classList.remove('tutorial-highlight'))
+    const reveal = (scroll = false) => {
+      if (stopped) return false
+      clearHighlight()
+      const target = findTarget(config.target)
+      if (!target) return false
+      target.classList.add('tutorial-highlight')
+      if (scroll) {
+        const rect = target.getBoundingClientRect()
+        const comfortablyVisible = rect.top >= 96 && rect.bottom <= window.innerHeight - 48
+        if (!comfortablyVisible) target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+      return true
     }
-    target.classList.add('tutorial-highlight')
-    const rect = target.getBoundingClientRect()
-    if (rect.bottom < 72 || rect.top > window.innerHeight - 72) target.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    const cardWidth = Math.min(320, window.innerWidth - 24)
-    const left = Math.max(12, Math.min(window.innerWidth - cardWidth - 12, rect.left + rect.width / 2 - cardWidth / 2))
-    const above = rect.top >= 120
-    const top = above ? Math.max(12, rect.top - 102) : Math.min(window.innerHeight - 116, rect.bottom + 14)
-    setPosition({ left, top, placement: above ? 'above' : 'below' })
-  }, [config.target])
 
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(updatePosition)
-    const delayed = window.setTimeout(updatePosition, 260)
-    return () => { window.cancelAnimationFrame(frame); window.clearTimeout(delayed) }
-  }, [key, updatePosition])
-
-  useEffect(() => {
-    window.addEventListener('resize', updatePosition)
-    window.addEventListener('scroll', updatePosition, true)
-    const observer = new MutationObserver(() => window.requestAnimationFrame(updatePosition))
-    observer.observe(document.body, { childList: true, subtree: true })
+    // 只在步骤切换时寻找目标，不再监听全页面 mutation/scroll 实时追着元素移动。
+    // 页面或弹窗稍晚挂载时做有限次数重试，找到后即停止。
+    const attempts = [0, 80, 220, 520]
+    for (const delay of attempts) {
+      timers.push(window.setTimeout(() => {
+        if (reveal(delay >= 80)) timers.splice(0).forEach(id => window.clearTimeout(id))
+      }, delay))
+    }
     return () => {
-      window.removeEventListener('resize', updatePosition)
-      window.removeEventListener('scroll', updatePosition, true)
-      observer.disconnect()
-      document.querySelectorAll('.tutorial-highlight').forEach(node => node.classList.remove('tutorial-highlight'))
+      stopped = true
+      timers.forEach(id => window.clearTimeout(id))
+      clearHighlight()
     }
-  }, [updatePosition])
+  }, [step, config.target])
 
-  return <aside
-    className={`tutorial-coachmark tutorial-coachmark-${position.placement}`}
-    style={{ left: position.left, top: position.top }}
-    role="region"
-    aria-label="互动体验引导"
-    aria-live="polite"
-    data-tutorial-control
-  >
+  return <aside className="tutorial-coachmark" role="region" aria-label="互动体验引导" aria-live="polite" data-tutorial-control>
     <div className="tutorial-coachmark-head">
       <span>{config.eyebrow ?? '互动体验'}</span>
       <div>

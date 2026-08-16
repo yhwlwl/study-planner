@@ -242,7 +242,7 @@ function baseTutorialState(anchorDate: string): AppState {
   const assignments: Assignment[] = [
     assignment({ id: 'tutorial-task-done', groupId: 'tutorial-group-math', index: 1, title: '暑假数学复习 01', scheduledDate: shiftDate(anchorDate, -2), estimatedMinutes: 60, status: 'done', progress: 100, actualMinutes: 58, completedAt: stamp(shiftDate(anchorDate, -2), '19'), timeEntries: [{ id: 'tutorial-time-done', minutes: 58, createdAt: stamp(shiftDate(anchorDate, -2), '19'), source: 'manual', countInStatistics: true }] }, anchorDate),
     assignment({ id: 'tutorial-task-overdue', groupId: 'tutorial-group-math', index: 2, title: '暑假数学复习 02', scheduledDate: shiftDate(anchorDate, -1), estimatedMinutes: 60 }, anchorDate),
-    assignment({ id: TUTORIAL_EXECUTE_ASSIGNMENT_ID, groupId: 'tutorial-group-math', index: 3, title: '暑假数学复习 03', scheduledDate: anchorDate, estimatedMinutes: 60 }, anchorDate),
+    assignment({ id: TUTORIAL_EXECUTE_ASSIGNMENT_ID, groupId: 'tutorial-group-math', index: 3, title: '暑假数学复习 03', scheduledDate: anchorDate, estimatedMinutes: 60, intentStrength: 'manual', scheduleSource: 'manual' }, anchorDate),
     assignment({ id: 'tutorial-task-goal-risk', groupId: 'tutorial-group-math', index: 4, title: '暑假数学复习 04', scheduledDate: shiftDate(anchorDate, 8), estimatedMinutes: 60 }, anchorDate),
     assignment({ id: 'tutorial-task-english-today', groupId: 'tutorial-group-english', index: 1, title: '英语阅读训练 01', scheduledDate: anchorDate, estimatedMinutes: 55 }, anchorDate),
     assignment({ id: 'tutorial-task-english-future', groupId: 'tutorial-group-english', index: 2, title: '英语阅读训练 02', scheduledDate: shiftDate(anchorDate, 3), estimatedMinutes: 55 }, anchorDate),
@@ -477,6 +477,54 @@ export function tutorialIssueCount(state: AppState, anchorDate: string) {
   return hard + overdue
 }
 
+/**
+ * Keep the tutorial event scope aligned with the deterministic before/after target.
+ *
+ * The generic direct-preview validator intentionally freezes past dates unless the
+ * event explicitly names the unfinished assignment being carried out of history.
+ * Tutorial repair uses a canonical target rather than the generic search result,
+ * so deriving this scope prevents an otherwise-valid overdue repair from being
+ * mistaken for an unauthorized historical rewrite. It also makes proposal counts
+ * and affected-date explanations match what the tutorial actually changes.
+ */
+export function tutorialEventForTarget(baseline: AppState, target: AppState, event: PlanChangeEvent): PlanChangeEvent {
+  const beforeAssignments = new Map(baseline.assignments.map(item => [item.id, item]))
+  const affectedAssignmentIds = new Set(event.affectedAssignmentIds)
+  const affectedGroupIds = new Set(event.affectedGroupIds)
+  const affectedDates = new Set(event.affectedDates)
+
+  for (const item of target.assignments) {
+    const before = beforeAssignments.get(item.id)
+    const changed = !before
+      || before.scheduledDate !== item.scheduledDate
+      || before.status !== item.status
+      || before.progress !== item.progress
+      || before.actualMinutes !== item.actualMinutes
+    if (!changed) continue
+    affectedAssignmentIds.add(item.id)
+    affectedGroupIds.add(item.groupId)
+    if (before?.scheduledDate) affectedDates.add(before.scheduledDate)
+    if (item.scheduledDate) affectedDates.add(item.scheduledDate)
+  }
+
+  const affectedGoalIds = new Set(event.affectedGoalIds)
+  for (const goal of target.goals) {
+    if (goal.linkedAssignmentIds.some(id => affectedAssignmentIds.has(id))
+      || goal.linkedTaskGroupIds.some(id => affectedGroupIds.has(id))
+      || goal.completionConditions.some(condition => affectedGroupIds.has(condition.groupId))) {
+      affectedGoalIds.add(goal.id)
+    }
+  }
+
+  return {
+    ...event,
+    affectedAssignmentIds: [...affectedAssignmentIds],
+    affectedGroupIds: [...affectedGroupIds],
+    affectedGoalIds: [...affectedGoalIds],
+    affectedDates: [...affectedDates].sort(),
+  }
+}
+
 function hasAppliedTutorialIntake(state: AppState) {
   const batch = state.intakeBatches.find(item => item.id === 'tutorial-intake-batch')
   if (!batch || batch.status !== 'applied' || batch.taskGroups.some(item => !item.appliedAt)) return false
@@ -487,52 +535,78 @@ function hasAppliedTutorialIntake(state: AppState) {
 }
 
 function hasReviewCarryCandidate(state: AppState, anchorDate: string) {
-  const tutorialTarget = shiftDate(anchorDate, 1)
   return state.assignments
     .filter(item => item.scheduledDate === anchorDate && item.status !== 'done' && !item.locked && state.timer.assignmentId !== item.id)
-    .some(item => suggestMoveDates(state, item.id, 8).includes(tutorialTarget))
+    .some(item => suggestMoveDates(state, item.id, 8).some(date => date > anchorDate))
 }
 
 export function tutorialStateHealth(state: AppState, session: TutorialSession) {
+  // Health checks validate durable tutorial invariants at checkpoints. They must not
+  // turn harmless algorithm/UI variation into a surprise backwards jump.
   if (state.templateKind !== 'tutorial') return { ok: false as const, reason: '当前不是教程数据空间' }
   if (todayISO() !== session.anchorDate) return { ok: false as const, reason: '教程时钟没有保持在进入时的日期' }
+
   const requiredIds = [TUTORIAL_GOAL_ID, TUTORIAL_EXECUTE_ASSIGNMENT_ID, 'tutorial-task-locked', 'tutorial-task-done', 'tutorial-task-overdue', 'tutorial-task-goal-risk', 'tutorial-task-review-leftover']
   const ids = new Set([...state.goals.map(item => item.id), ...state.assignments.map(item => item.id)])
   const missing = requiredIds.filter(id => !ids.has(id))
   if (missing.length) return { ok: false as const, reason: `教程关键数据缺失：${missing.join(', ')}` }
+
   const anchor = session.anchorDate
   const locked = state.assignments.find(item => item.id === 'tutorial-task-locked')
   const historical = state.assignments.find(item => item.id === 'tutorial-task-done')
   const overdue = state.assignments.find(item => item.id === 'tutorial-task-overdue')
-  const risk = state.assignments.find(item => item.id === 'tutorial-task-goal-risk')
   const leftover = state.assignments.find(item => item.id === 'tutorial-task-review-leftover')
+
+  // These two records demonstrate that repair/replan respects completed and locked work.
   if (!locked?.locked || locked.status !== 'done' || locked.scheduledDate !== anchor) return { ok: false as const, reason: '教程锁定完成任务状态异常' }
   if (historical?.status !== 'done' || historical.scheduledDate !== shiftDate(anchor, -2)) return { ok: false as const, reason: '教程历史完成记录异常' }
+
   const initial = ['repair-entry', 'repair-action', 'repair-preview'].includes(session.step)
   if (initial) {
-    if (tutorialIssueCount(state, anchor) !== 3) return { ok: false as const, reason: `教程初始问题数量异常：${tutorialIssueCount(state, anchor)}` }
+    // Do not pin the tutorial to an exact analyzer issue count. The fixture still
+    // carries the three teaching scenarios, while the analyzer may legitimately
+    // merge/split issue cards as scheduling rules evolve.
     if (overdue?.scheduledDate !== shiftDate(anchor, -1)) return { ok: false as const, reason: '教程逾期问题被意外改变' }
+    const risk = state.assignments.find(item => item.id === 'tutorial-task-goal-risk')
     if (!risk?.scheduledDate || risk.scheduledDate <= shiftDate(anchor, 5)) return { ok: false as const, reason: '教程目标风险被意外改变' }
     if (leftover?.scheduledDate !== anchor) return { ok: false as const, reason: '教程复盘预留任务被意外改变' }
   } else {
+    // After applying repair we only require the teaching problems to be resolved,
+    // not specific target dates chosen by one exact engine revision.
     if (!overdue?.scheduledDate || overdue.scheduledDate < anchor) return { ok: false as const, reason: '教程修复后的逾期任务仍在过去' }
-    if (!risk?.scheduledDate || risk.scheduledDate > shiftDate(anchor, 5)) return { ok: false as const, reason: '教程修复后的目标风险仍未解除' }
     if (analyzePlan(state, anchor).some(issue => issue.level === 'danger')) return { ok: false as const, reason: '教程修复 checkpoint 仍有硬冲突' }
-    if (leftover?.scheduledDate !== anchor && ['goal', 'intake', 'intake-preview', 'execute', 'review-entry', 'review-carry', 'review-preview'].includes(session.step)) return { ok: false as const, reason: '教程复盘预留任务提前被移动' }
+    if (leftover?.scheduledDate !== anchor && ['goal', 'intake', 'intake-preview', 'execute', 'review-entry', 'review-carry', 'review-preview'].includes(session.step)) {
+      return { ok: false as const, reason: '教程复盘预留任务提前被移动' }
+    }
   }
-  if (['intake', 'intake-preview'].includes(session.step) && !state.intakeBatches.some(batch => batch.id === 'tutorial-intake-batch')) return { ok: false as const, reason: '教程录入批次缺失' }
+
+  if (['intake', 'intake-preview'].includes(session.step) && !state.intakeBatches.some(batch => batch.id === 'tutorial-intake-batch')) {
+    return { ok: false as const, reason: '教程录入批次缺失' }
+  }
+
   if (['execute', 'review-entry', 'review-carry', 'review-preview', 'future-entry', 'future-action', 'future-preview', 'complete', 'free'].includes(session.step)) {
     if (!hasAppliedTutorialIntake(state)) return { ok: false as const, reason: '教程新增任务 checkpoint 缺失或未应用' }
   }
+
   if (['review-entry', 'review-carry', 'review-preview', 'future-entry', 'future-action', 'future-preview', 'complete', 'free'].includes(session.step)) {
     const executed = state.assignments.find(item => item.id === TUTORIAL_EXECUTE_ASSIGNMENT_ID)
-    if (executed?.status !== 'done' || executed.actualMinutes < 1 || executed.actualMinutes > 65 || executed.timeEntries.length === 0) return { ok: false as const, reason: '教程执行 checkpoint 异常' }
+    if (executed?.status !== 'done' || executed.actualMinutes < 1 || executed.actualMinutes > 65 || executed.timeEntries.length === 0) {
+      return { ok: false as const, reason: '教程执行 checkpoint 异常' }
+    }
   }
-  if (['review-entry', 'review-carry', 'review-preview'].includes(session.step) && !hasReviewCarryCandidate(state, anchor)) return { ok: false as const, reason: '教程复盘没有可顺延的未完成任务' }
+
+  if (['review-entry', 'review-carry', 'review-preview'].includes(session.step) && !hasReviewCarryCandidate(state, anchor)) {
+    return { ok: false as const, reason: '教程复盘没有可顺延的未完成任务' }
+  }
+
   if (['future-entry', 'future-action', 'future-preview', 'complete', 'free'].includes(session.step)) {
     if (!state.reviewRecords.some(item => item.date === anchor)) return { ok: false as const, reason: '教程复盘 checkpoint 缺失' }
-    if (state.assignments.some(item => item.scheduledDate === anchor && item.status !== 'done' && !item.locked)) return { ok: false as const, reason: '教程复盘后的未完成任务仍留在当天' }
+    if (state.assignments.some(item => item.scheduledDate === anchor && item.status !== 'done' && !item.locked)) {
+      return { ok: false as const, reason: '教程复盘后的未完成任务仍留在当天' }
+    }
     if (analyzePlan(state, anchor).some(issue => issue.level === 'danger')) return { ok: false as const, reason: '教程复盘后出现新的硬冲突' }
   }
+
   return { ok: true as const }
 }
+

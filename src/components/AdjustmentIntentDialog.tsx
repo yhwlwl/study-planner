@@ -49,9 +49,9 @@ function inPlanDate(date: string, state: AppState) {
   return date < state.settings.startDate ? state.settings.startDate : date > state.settings.endDate ? state.settings.endDate : date
 }
 
-function ActionCard({ actionId, title, description, tone, onClick }: { actionId: string; title: string; description: string; tone?: 'attention' | 'secondary'; onClick: () => void }) {
+function ActionCard({ actionId, title, description, tone, blocked = false, onClick }: { actionId: string; title: string; description: string; tone?: 'attention' | 'secondary'; blocked?: boolean; onClick: () => void }) {
   const tutorialTarget = actionId === 'current-conflicts' ? 'repair-current' : actionId === 'replan' ? 'future-replan' : undefined
-  return <button type="button" data-tutorial-target={tutorialTarget} data-tutorial-action={actionId} className={`adjustment-action-card ${tone ?? ''}`} onClick={onClick}>
+  return <button type="button" data-tutorial-target={tutorialTarget} data-tutorial-action={actionId} aria-disabled={blocked || undefined} className={`adjustment-action-card ${tone ?? ''} ${blocked ? 'tutorial-disabled-control' : ''}`} onClick={onClick}>
     <span className="adjustment-action-copy"><strong>{title}</strong><span>{description}</span></span>
     <ArrowUpRight size={18} aria-hidden="true" />
   </button>
@@ -69,7 +69,7 @@ function ActionHeader({ title, description, onBack }: { title: string; descripti
 
 export function AdjustmentIntentDialog({
   open, state, initialDate, initialReason = 'current-conflicts', onClose, onPrepared,
-  onOpenIntake, onOpenDeadline, onOpenBulkMove, onDurationSuggestion, tutorialMode,
+  onOpenIntake, onOpenDeadline, onOpenBulkMove, onDurationSuggestion, tutorialMode, onTutorialBlocked,
 }: {
   open: boolean
   state: AppState
@@ -82,6 +82,7 @@ export function AdjustmentIntentDialog({
   onOpenBulkMove?: () => void
   onDurationSuggestion?: (suggestion: DurationSuggestion) => void
   tutorialMode?: 'repair' | 'future'
+  onTutorialBlocked?: (message?: string) => void
 }) {
   const today = todayISO()
   const defaultDate = inPlanDate(initialDate ?? today, state)
@@ -105,14 +106,14 @@ export function AdjustmentIntentDialog({
   const [todayMode, setTodayMode] = useState<'none' | '30' | '60' | 'custom'>('none')
   const [customMinutes, setCustomMinutes] = useState(30)
 
+  const overdueAssignments = useMemo(() => state.assignments
+    .filter(item => item.status !== 'done' && item.scheduledDate && item.scheduledDate < today), [state.assignments, today])
   const currentIssues = useMemo(() => {
     const hard = analyzePlan(state, today).filter(issue => issue.level === 'danger')
-    if (tutorialMode !== 'repair') return hard
-    const overdue = state.assignments
-      .filter(item => item.status !== 'done' && item.scheduledDate && item.scheduledDate < today)
+    const overdue = overdueAssignments
       .map(item => ({ level: 'danger' as const, date: item.scheduledDate, message: `“${item.title}”仍停留在过去日期，需要重新安排。` }))
     return [...overdue, ...hard]
-  }, [state, today, tutorialMode])
+  }, [state, today, overdueAssignments])
   const durationSuggestions = useMemo(() => allDurationSuggestions(state), [state])
   const subjects = useMemo(() => Array.from(new Set(state.taskGroups.map(group => group.subject))).sort(), [state.taskGroups])
   const initialAction: ActiveAction = tutorialMode ? 'center' : initialReason === 'too-tiring' ? 'load' : initialReason === 'future-replan' ? 'replan' : initialDate ? 'current-conflicts' : 'center'
@@ -164,11 +165,18 @@ export function AdjustmentIntentDialog({
         metadata: { availabilityMode, capacityMinutes: availabilityMode === 'unavailable' ? 0 : availableMinutes, preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'] },
       }
     } else if (activeAction === 'current-conflicts') {
+      const affectedDates = currentIssues.flatMap(issue => issue.date ? [issue.date] : []).filter((date, index, values) => values.indexOf(date) === index)
+      const affectedAssignmentIds = Array.from(new Set([
+        ...overdueAssignments.map(item => item.id),
+        ...state.assignments.filter(item => item.status !== 'done' && item.scheduledDate && affectedDates.includes(item.scheduledDate)).map(item => item.id),
+      ]))
+      const affectedGroupIds = Array.from(new Set(state.assignments.filter(item => affectedAssignmentIds.includes(item.id)).map(item => item.groupId)))
+      const affectedGoalIds = state.goals.filter(goal => goal.linkedAssignmentIds.some(id => affectedAssignmentIds.includes(id)) || goal.linkedTaskGroupIds.some(id => affectedGroupIds.includes(id)) || goal.completionConditions.some(condition => affectedGroupIds.includes(condition.groupId))).map(goal => goal.id)
       event = {
         id: uid('event'), type: 'execution-difference', action: 'repair', title: '修复当前计划问题',
         description: `当前检测到 ${currentIssues.length} 个容量、期限或规则问题。只处理这些问题，不主动重写没有问题的未来安排。`,
-        affectedGoalIds: [], affectedGroupIds: [], affectedAssignmentIds: [],
-        affectedDates: currentIssues.flatMap(issue => issue.date ? [issue.date] : []).filter((date, index, values) => values.indexOf(date) === index), createdAt: now,
+        affectedGoalIds, affectedGroupIds, affectedAssignmentIds,
+        affectedDates, createdAt: now,
         metadata: { preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'], requestedOutcome: 'fix-current', sourceDate: initialDate ?? today },
       }
     } else if (activeAction === 'load') {
@@ -230,21 +238,25 @@ export function AdjustmentIntentDialog({
       <div className="adjustment-intro-badges"><span>改动先预览</span><span>历史不改写</span><span>可随时撤销</span></div>
     </section>
     <div className="adjustment-action-groups">
-      {actionGroups.map(group => ({ ...group, items: tutorialMode ? group.items.filter(item => item.id === (tutorialMode === 'repair' ? 'current-conflicts' : 'replan')) : group.items })).filter(group => group.items.length).map(group => <section className="adjustment-action-group" key={group.title}>
+      {actionGroups.map(group => <section className="adjustment-action-group" key={group.title}>
         <header><div><strong>{group.title}</strong><span>{group.description}</span></div></header>
         <div className="adjustment-action-grid">
-          {group.items.map(item => <ActionCard key={item.id} actionId={item.id} title={item.title} description={item.id === 'current-conflicts' ? `${item.description} 当前 ${currentIssues.length} 个待处理问题。` : item.description} tone={item.tone} onClick={() => {
-            if (item.id === 'deadline') { onClose(); onOpenDeadline?.(); return }
-            if (item.id === 'bulk-move') { onClose(); onOpenBulkMove?.(); return }
-            setActiveAction(item.id)
-          }} />)}
+          {group.items.map(item => {
+            const allowedTutorialAction = !tutorialMode || item.id === (tutorialMode === 'repair' ? 'current-conflicts' : 'replan')
+            return <ActionCard key={item.id} actionId={item.id} title={item.title} description={item.id === 'current-conflicts' ? `${item.description} 当前 ${currentIssues.length} 个待处理问题。` : item.description} tone={item.tone} blocked={!allowedTutorialAction} onClick={() => {
+              if (!allowedTutorialAction) { onTutorialBlocked?.('教程中先完成高亮的调整动作'); return }
+              if (item.id === 'deadline') { onClose(); onOpenDeadline?.(); return }
+              if (item.id === 'bulk-move') { onClose(); onOpenBulkMove?.(); return }
+              setActiveAction(item.id)
+            }} />
+          })}
         </div>
       </section>)}
     </div>
-    {!tutorialMode && <section className="adjustment-related-entry">
+    <section className="adjustment-related-entry">
       <div><strong>有新任务需要加入？</strong><span>先添加到录入，之后再统一安排，不会打乱当前正式计划。</span></div>
-      <button type="button" className="secondary-button" onClick={() => { onClose(); onOpenIntake?.() }}>打开录入 <ArrowUpRight size={15} /></button>
-    </section>}
+      <button type="button" className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={Boolean(tutorialMode) || undefined} onClick={() => { if (tutorialMode) { onTutorialBlocked?.('教程中稍后会亲手体验录入'); return }; onClose(); onOpenIntake?.() }}>打开录入 <ArrowUpRight size={15} /></button>
+    </section>
   </>
 
   const renderAvailability = () => <>

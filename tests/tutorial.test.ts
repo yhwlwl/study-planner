@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { analyzePlan, suggestMoveDates } from '../src/lib/planner'
+import { analyzePlan, generateSchedulingProposals, suggestMoveDates } from '../src/lib/planner'
+import { hydratePortableState } from '../src/lib/state'
 import { resetNowProvider, setNowProvider, shiftDate, todayISO } from '../src/lib/date'
 import {
   TUTORIAL_EXECUTE_ASSIGNMENT_ID,
@@ -63,6 +64,39 @@ describe('interactive tutorial checkpoints', () => {
     expect(after.assignments.find(item => item.id === 'tutorial-task-overdue')?.scheduledDate).toBe(shiftDate(anchor, 1))
     expect(after.assignments.find(item => item.id === 'tutorial-task-goal-risk')?.scheduledDate).toBe(shiftDate(anchor, 4))
     expect(analyzePlan(after, anchor).some(issue => issue.level === 'danger')).toBe(false)
+  })
+
+  it('real repair scheduling can pass the first tutorial checkpoint without a forced recovery', () => {
+    setNowProvider(() => new Date(`${anchor}T12:00:00Z`))
+    const before = buildTutorialState(anchor)
+    const overdue = before.assignments.filter(item => item.status !== 'done' && item.scheduledDate && item.scheduledDate < anchor)
+    const hard = analyzePlan(before, anchor).filter(issue => issue.level === 'danger')
+    const affectedDates = Array.from(new Set([
+      ...overdue.flatMap(item => item.scheduledDate ? [item.scheduledDate] : []),
+      ...hard.flatMap(issue => issue.date ? [issue.date] : []),
+    ]))
+    const affectedAssignmentIds = Array.from(new Set([
+      ...overdue.map(item => item.id),
+      ...before.assignments.filter(item => item.status !== 'done' && item.scheduledDate && affectedDates.includes(item.scheduledDate)).map(item => item.id),
+    ]))
+    const affectedGroupIds = Array.from(new Set(before.assignments.filter(item => affectedAssignmentIds.includes(item.id)).map(item => item.groupId)))
+    const affectedGoalIds = before.goals.filter(goal => goal.linkedAssignmentIds.some(id => affectedAssignmentIds.includes(id))
+      || goal.linkedTaskGroupIds.some(id => affectedGroupIds.includes(id))
+      || goal.completionConditions.some(condition => affectedGroupIds.includes(condition.groupId))).map(goal => goal.id)
+    const event: PlanChangeEvent = {
+      id: 'tutorial-real-repair', type: 'execution-difference', action: 'repair', title: '修复当前计划问题',
+      description: '教程真实调度修复', affectedGoalIds, affectedGroupIds, affectedAssignmentIds, affectedDates,
+      createdAt: `${anchor}T12:00:00.000Z`, metadata: { requestedOutcome: 'fix-current', sourceDate: anchor, preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'] },
+    }
+    const prepared = structuredClone(before)
+    prepared.changeEvents = [...prepared.changeEvents, event]
+    const proposals = generateSchedulingProposals(prepared, event, { baseline: before, expansionLevel: 0 })
+    const feasible = proposals.filter(item => !item.infeasible)
+    expect(feasible.length).toBeGreaterThan(0)
+    const next = hydratePortableState(feasible[0].stateAfter, { replanHistory: before.replanHistory, conflictBackups: before.conflictBackups, planVersions: before.planVersions })
+    expect(tutorialStateHealth(next, session('goal'))).toEqual({ ok: true })
+    expect(next.assignments.find(item => item.id === TUTORIAL_EXECUTE_ASSIGNMENT_ID)?.scheduledDate).toBe(anchor)
+    expect(next.assignments.find(item => item.id === 'tutorial-task-review-leftover')?.scheduledDate).toBe(anchor)
   })
 
   it('adds one canonical intake batch and applies five new tasks exactly once', () => {
