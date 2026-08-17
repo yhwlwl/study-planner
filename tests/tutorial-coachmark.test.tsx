@@ -11,11 +11,11 @@ Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
 
 afterEach(() => cleanup())
 
-const calendarTransitions: Array<[TutorialStep, TutorialStep]> = [
-  ['repair-preview', 'repair-calendar'],
-  ['intake-preview', 'intake-calendar'],
-  ['review-preview', 'review-calendar'],
-  ['future-preview', 'future-calendar'],
+const calendarTransitions: Array<[TutorialStep, TutorialStep, string]> = [
+  ['repair-preview', 'repair-calendar', '高亮日期就是刚才实际改动的位置'],
+  ['intake-preview', 'intake-calendar', '新任务已经进入正式计划'],
+  ['review-preview', 'review-calendar', '未完成任务已经接到后面的日期'],
+  ['future-preview', 'future-calendar', '主动重排已经生效'],
 ]
 
 function visibleRect(width = 120, height = 40) {
@@ -25,7 +25,7 @@ function visibleRect(width = 120, height = 40) {
 }
 
 describe('TutorialCoachmark portal 生命周期', () => {
-  it.each(calendarTransitions)('%s → %s 后立即回到页面文档流', async (previewStep, calendarStep) => {
+  it.each(calendarTransitions)('%s → %s 后立即回到页面文档流', async (previewStep, calendarStep, expectedCopy) => {
     const modal = document.createElement('section')
     modal.className = 'modal-card'
     const slot = document.createElement('div')
@@ -59,8 +59,13 @@ describe('TutorialCoachmark portal 生命周期', () => {
     )
 
     // 不刷新页面也必须立即在当前 document 中找到新提示，不能继续 portal 到已卸载节点。
-    expect(screen.getByText('月历结果已经显示')).toBeTruthy()
-    expect(screen.getByRole('button', { name: '下一步' })).toBeTruthy()
+    await waitFor(() => {
+      const coachmark = document.querySelector<HTMLElement>('.tutorial-coachmark')
+      expect(coachmark).toBeTruthy()
+      expect(coachmark?.textContent).toContain(expectedCopy)
+      expect(screen.getByRole('button', { name: '下一步' })).toBeTruthy()
+    })
+    expect(modal.isConnected).toBe(false)
   })
 
   it('修复方案先引导查看移动任务，再引导应用方案', async () => {
