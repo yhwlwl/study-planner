@@ -1,0 +1,33 @@
+.tutorial-coachmark {
+  position: relative;
+  z-index: 8;
+  width: auto;
+  margin: 12px 20px 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--primary, #4f6ef7) 28%, var(--line, #e7ebf1));
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  box-shadow: 0 5px 16px rgba(20, 28, 45, .07);
+  overflow-wrap: anywhere;
+}
+.tutorial-coachmark-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tutorial-coachmark-head > span { font-size: 12px; font-weight: 700; color: var(--muted, #667085); }
+.tutorial-coachmark-head > div { display: flex; gap: 2px; }
+.tutorial-icon-button { border: 0; background: transparent; color: var(--muted, #667085); width: 27px; height: 27px; border-radius: 8px; display: grid; place-items: center; cursor: pointer; }
+.tutorial-icon-button:hover { background: var(--surface-2, rgba(127,127,127,.08)); }
+.tutorial-coachmark p { margin: 4px 0 0; font-size: 14px; line-height: 1.45; font-weight: 650; color: var(--text, inherit); }
+.tutorial-coachmark-actions { margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.tutorial-coachmark-actions .primary-button { min-height: 34px; padding: 7px 12px; }
+.tutorial-highlight { outline: 3px solid color-mix(in srgb, var(--primary, #4f6ef7) 34%, transparent) !important; outline-offset: 3px; border-radius: 10px; animation: tutorial-pulse 1.8s ease-in-out infinite; }
+@keyframes tutorial-pulse { 0%,100% { outline-color: color-mix(in srgb, var(--primary, #4f6ef7) 22%, transparent); } 50% { outline-color: color-mix(in srgb, var(--primary, #4f6ef7) 50%, transparent); } }
+.tutorial-mode-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 700; background: var(--surface-2, rgba(127,127,127,.08)); color: var(--muted, #667085); }
+.tutorial-blocked-notice { position: fixed; z-index: 2700; left: 50%; bottom: calc(22px + env(safe-area-inset-bottom)); transform: translateX(-50%); max-width: min(88vw, 420px); padding: 9px 12px; border-radius: 999px; background: var(--text, #1d2939); color: var(--surface, #fff); font-size: 13px; text-align: center; box-shadow: 0 8px 24px rgba(0,0,0,.16); }
+.tutorial-finish-card { display: grid; gap: 14px; }
+.tutorial-finish-flow { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; color: var(--muted, #667085); }
+.tutorial-finish-flow strong { color: var(--text, inherit); }
+.tutorial-disabled-control,
+[aria-disabled="true"].tutorial-disabled-control { opacity: .48; cursor: not-allowed !important; filter: saturate(.65); }
+@media (max-width: 640px) {
+  .tutorial-coachmark { margin: 8px 12px 0; padding: 9px 10px; }
+  .tutorial-coachmark p { font-size: 13px; }
+}

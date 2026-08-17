@@ -3,8 +3,8 @@ import { timestampForDate, todayISO, withNowProvider } from '../src/lib/date'
 
 describe('deterministic date semantics', () => {
   it('uses an injectable clock for today', () => {
-    expect(withNowProvider(() => new Date('2026-08-09T23:30:00+08:00'), () => todayISO())).toBe('2026-08-09')
-    expect(withNowProvider(() => new Date('2026-08-10T00:30:00+08:00'), () => todayISO())).toBe('2026-08-10')
+    expect(withNowProvider(() => new Date(2026, 7, 9, 23, 30, 0), () => todayISO())).toBe('2026-08-09')
+    expect(withNowProvider(() => new Date(2026, 7, 10, 0, 30, 0), () => todayISO())).toBe('2026-08-10')
   })
 
   it('keeps a recorded calendar date stable across timezone parsing', () => {

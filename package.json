@@ -21,7 +21,7 @@
     "test:intake": "node scripts/runtime-intake-v09.mjs",
     "test:planner-performance": "node scripts/runtime-planner-performance.mjs",
     "test:bundle": "node scripts/check-bundle.mjs",
-    "test": "vitest run --pool=threads --maxWorkers=1",
+    "test": "vitest run --pool=forks --maxWorkers=1",
     "test:coverage": "vitest run --coverage --pool=threads --maxWorkers=1",
     "test:quality": "npm run typecheck && npm test && npm run validate:v08 && npm run build && npm run test:bundle"
   },

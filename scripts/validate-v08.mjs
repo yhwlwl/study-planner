@@ -85,7 +85,7 @@ add('典型场景', '目标事件日期不再误作调度起点', /function prop
 add('典型场景', '部分目标只约束满足条件所需任务', /conditionCountedAssignmentIds/.test(source.goals) && /goalAppliesToAssignment/.test(source.goals), '50% teacher check does not pull the other 50% forward')
 add('典型场景', '目标变更事件只纳入条件实际计数任务', /goalProgress\(before, existing\)/.test(source.context) && /goalProgress\(next, goal\)/.test(source.context) && /affectedAssignmentIds/.test(source.context), 'partial Goal edits do not nominate the whole linked group for movement')
 add('典型场景', '计划太累转化为具体减负结果', /load-preference-change/.test(source.adjustment) && /每天最多安排（分钟）/.test(source.adjustment) && /最多连续几个高负载日/.test(source.adjustment) && /exploratory-optimization/.test(source.adjustmentPolicy), 'AdjustmentIntentDialog + orchestration policy')
-add('交互融合', '结束今天与复盘已合并为单一入口', (source.app.match(/结束今天并复盘/g) ?? []).length === 1 && /completeReview/.test(source.context) && /处理未完成任务/.test(source.review), 'Today + ReviewDialog')
+add('交互融合', '结束今天与复盘已合并为单一入口', (source.app.match(/\{isToday \? '结束今天并复盘'/g) ?? []).length === 1 && /completeReview/.test(source.context) && /处理未完成任务/.test(source.review), 'Today + ReviewDialog')
 add('交互融合', '完成任务更多按钮使用固定横向图形', /Ellipsis/.test(source.taskCard) && !/more-dots[^>]*>···/.test(source.taskCard), 'TaskCard')
 add('交互融合', '桌面日期与操作不再被单字拆行', /date-switcher h2\{white-space:nowrap/.test(source.styles) && /today-hero-actions button\{white-space:nowrap/.test(source.styles), 'styles.css')
 add('交互融合', '复盘具有视觉摘要、任务决策卡与按需图表', /review-progress-ring/.test(source.review) && /review-task-decision/.test(source.review) && /review-charts/.test(source.review), 'ReviewDialog + styles')
