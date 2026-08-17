@@ -40,9 +40,11 @@ export interface FeedbackSessionContext {
 }
 
 const SCREENSHOT_BUCKET = 'feedback-screenshots'
+const GUEST_SECRET_KEY = 'study-planner:feedback-guest-secret'
 const MAX_SCREENSHOTS = 3
 const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024
 const ALLOWED_SCREENSHOT_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+let memoryGuestSecret = ''
 
 function sessionIsFeedbackAdmin(session: Session | null): boolean {
   return Boolean((session?.user as any)?.app_metadata?.feedback_admin === true)
@@ -74,7 +76,29 @@ function screenshotExtension(file: File) {
 
 function randomToken() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
+}
+
+function guestFeedbackSecret(): string {
+  if (memoryGuestSecret) return memoryGuestSecret
+  if (typeof window !== 'undefined') {
+    try {
+      const stored = window.localStorage.getItem(GUEST_SECRET_KEY)
+      if (stored && stored.length >= 32) {
+        memoryGuestSecret = stored
+        return stored
+      }
+    } catch {
+      // localStorage 不可用时退回到当前页面生命周期内的内存密钥。
+    }
+  }
+
+  const generated = `${randomToken()}.${randomToken()}`
+  memoryGuestSecret = generated
+  if (typeof window !== 'undefined') {
+    try { window.localStorage.setItem(GUEST_SECRET_KEY, generated) } catch { /* ignore */ }
+  }
+  return generated
 }
 
 export async function submitFeedback(input: { type: FeedbackType; content: string; screenshots?: File[] }) {
@@ -89,17 +113,25 @@ export async function submitFeedback(input: { type: FeedbackType; content: strin
   const session = await getSession()
   if (screenshots.length > 0 && !session) throw new Error('登录后才能上传截图。你也可以先移除截图，只提交文字反馈。')
 
+  const stableVisitorId = typeof window === 'undefined' ? null : visitorId()
+
+  if (!session) {
+    if (!stableVisitorId) throw new Error('反馈提交失败，请刷新页面后重试。')
+    const result = await supabase.rpc('submit_guest_feedback', {
+      p_feedback_type: input.type,
+      p_content: content,
+      p_visitor_id: stableVisitorId,
+      p_guest_secret: guestFeedbackSecret(),
+    })
+    if (result.error || !result.data) throw new Error('反馈提交失败，请稍后重试。')
+    return { id: String(result.data), uploadedCount: 0, failedCount: 0 }
+  }
+
   const basePayload = {
     feedback_type: input.type,
     content,
-    user_id: session?.user.id ?? null,
-    visitor_id: typeof window === 'undefined' ? null : visitorId(),
-  }
-
-  if (!session) {
-    const { error } = await supabase.from('feedback_submissions').insert(basePayload)
-    if (error) throw new Error('反馈提交失败，请稍后重试。')
-    return { id: undefined as string | undefined, uploadedCount: 0, failedCount: 0 }
+    user_id: session.user.id,
+    visitor_id: stableVisitorId,
   }
 
   const inserted = await supabase.from('feedback_submissions').insert(basePayload).select('id').single()
@@ -139,11 +171,45 @@ async function signedAttachment(attachment: FeedbackAttachment): Promise<Feedbac
   return signed.error || !signed.data?.signedUrl ? attachment : { ...attachment, signed_url: signed.data.signedUrl }
 }
 
+async function listGuestFeedbackForBrowser(): Promise<FeedbackRecord[]> {
+  if (!supabase || typeof window === 'undefined') return []
+  const stableVisitorId = visitorId()
+  const result = await supabase.rpc('list_guest_feedback', {
+    p_visitor_id: stableVisitorId,
+    p_guest_secret: guestFeedbackSecret(),
+  })
+  if (result.error) throw new Error('本机游客反馈加载失败，请稍后重试。')
+  if (!Array.isArray(result.data)) return []
+  return result.data.map((row: any) => ({
+    id: String(row.id),
+    user_id: row.user_id ? String(row.user_id) : null,
+    feedback_type: row.feedback_type as FeedbackType,
+    content: String(row.content ?? ''),
+    status: row.status as FeedbackStatus,
+    created_at: String(row.created_at),
+    replies: Array.isArray(row.replies) ? row.replies as FeedbackReply[] : [],
+    attachments: [],
+  }))
+}
+
+function newestFirst(records: FeedbackRecord[]): FeedbackRecord[] {
+  const seen = new Set<string>()
+  return records
+    .filter(record => {
+      if (seen.has(record.id)) return false
+      seen.add(record.id)
+      return true
+    })
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+}
+
 export async function listFeedback(scope: 'mine' | 'admin'): Promise<FeedbackRecord[]> {
   if (!supabase) throw new Error('反馈服务暂不可用，请稍后重试。')
   const { session, isAdmin } = await getFeedbackSessionContext({ refresh: true })
-  if (!session) throw new Error('请先登录后查看反馈。')
-  if (scope === 'admin' && !isAdmin) throw new Error('当前账号没有反馈管理权限。')
+  if (scope === 'admin' && (!session || !isAdmin)) throw new Error('当前账号没有反馈管理权限。')
+
+  const guestRows = scope === 'mine' ? await listGuestFeedbackForBrowser() : []
+  if (!session) return guestRows
 
   let query = supabase
     .from('feedback_submissions')
@@ -154,7 +220,7 @@ export async function listFeedback(scope: 'mine' | 'admin'): Promise<FeedbackRec
   const submissions = await query
   if (submissions.error) throw new Error('反馈记录加载失败，请稍后重试。')
   const rows = (submissions.data ?? []) as Array<Omit<FeedbackRecord, 'replies' | 'attachments'>>
-  if (rows.length === 0) return []
+  if (rows.length === 0) return newestFirst(guestRows)
 
   const ids = rows.map(row => row.id)
   const [repliesResult, attachmentsResult] = await Promise.all([
@@ -166,11 +232,13 @@ export async function listFeedback(scope: 'mine' | 'admin'): Promise<FeedbackRec
 
   const replies = (repliesResult.data ?? []) as FeedbackReply[]
   const attachments = await Promise.all(((attachmentsResult.data ?? []) as FeedbackAttachment[]).map(signedAttachment))
-  return rows.map(row => ({
+  const accountRows = rows.map(row => ({
     ...row,
     replies: replies.filter(reply => reply.feedback_id === row.id),
     attachments: attachments.filter(attachment => attachment.feedback_id === row.id),
   }))
+
+  return scope === 'mine' ? newestFirst([...accountRows, ...guestRows]) : accountRows
 }
 
 export async function replyToFeedback(feedbackId: string, content: string) {
