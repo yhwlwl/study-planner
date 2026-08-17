@@ -49,6 +49,22 @@ export async function signOut() {
   if (error) throw error
 }
 
+export type FeedbackType = 'bug' | 'feature'
+
+export async function submitFeedback(input: { type: FeedbackType; content: string }) {
+  if (!supabase) throw new Error('反馈服务暂不可用，请稍后重试。')
+  const content = input.content.trim()
+  if (!content) throw new Error('请填写反馈内容。')
+  if (content.length > 4000) throw new Error('反馈内容不能超过 4000 个字符。')
+  const session = await getSession()
+  const { error } = await supabase.from('feedback_submissions').insert({
+    feedback_type: input.type,
+    content,
+    user_id: session?.user.id ?? null,
+  })
+  if (error) throw new Error('反馈提交失败，请稍后重试。')
+}
+
 /**
  * Replan snapshots and conflict backups are intentionally local-only. They can be
  * several times larger than the active plan and previously made every cloud upsert
