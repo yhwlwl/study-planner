@@ -1,0 +1,45 @@
+name: supabase-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Supabase smoke 模式
+        required: true
+        default: full
+        type: choice
+        options:
+          - public
+          - full
+  schedule:
+    # 新加坡时间每天 07:17 运行一次完整链路探测。
+    - cron: '17 23 * * *'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      SUPABASE_SMOKE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'full' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 检查 Supabase smoke 配置
+        shell: bash
+        run: |
+          test -n "$SUPABASE_URL" || { echo '::error::缺少 GitHub Secret: SUPABASE_URL'; exit 1; }
+          test -n "$SUPABASE_PUBLISHABLE_KEY" || { echo '::error::缺少 GitHub Secret: SUPABASE_PUBLISHABLE_KEY'; exit 1; }
+          if [ "$SUPABASE_SMOKE_MODE" = "full" ]; then
+            test -n "$SUPABASE_SECRET_KEY" || { echo '::error::full 模式缺少 GitHub Secret: SUPABASE_SECRET_KEY'; exit 1; }
+          fi
+      - name: Supabase 全链路 smoke
+        run: npm run test:supabase:smoke
