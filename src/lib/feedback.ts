@@ -32,6 +32,37 @@ export interface FeedbackRecord {
   created_at: string
   replies: FeedbackReply[]
   attachments: FeedbackAttachment[]
+  account_email?: string | null
+  app_version?: string | null
+  page_path?: string | null
+  user_agent?: string | null
+  visitor_id?: string | null
+  account_mode?: string | null
+  utm_source?: string | null
+  utm_campaign?: string | null
+  first_referrer?: string | null
+  browser_language?: string | null
+  client_timezone?: string | null
+  is_pwa?: boolean | null
+  first_seen_at?: string | null
+  last_seen_at?: string | null
+  tenure_days?: number | null
+  total_sessions?: number | null
+  total_events?: number | null
+  total_active_days?: number | null
+  sessions_30d?: number | null
+  events_30d?: number | null
+  active_days_30d?: number | null
+  unique_pages_30d?: number | null
+  assignment_count?: number | null
+  completed_assignment_count?: number | null
+  task_group_count?: number | null
+  goal_count?: number | null
+  intake_batch_count?: number | null
+  replan_count?: number | null
+  depth_score?: number | null
+  depth_level?: string | null
+  depth_calculated_at?: string | null
 }
 
 export interface FeedbackSessionContext {
@@ -211,15 +242,23 @@ export async function listFeedback(scope: 'mine' | 'admin'): Promise<FeedbackRec
   const guestRows = scope === 'mine' ? await listGuestFeedbackForBrowser() : []
   if (!session) return guestRows
 
-  let query = supabase
-    .from('feedback_submissions')
-    .select('id,user_id,feedback_type,content,status,created_at')
-    .order('created_at', { ascending: false })
-  if (scope === 'mine') query = query.eq('user_id', session.user.id)
+  let rows: Array<Omit<FeedbackRecord, 'replies' | 'attachments'>> = []
+  if (scope === 'admin') {
+    const adminResult = await supabase.rpc('list_feedback_admin_details')
+    if (adminResult.error) throw new Error('反馈详细信息加载失败，请稍后重试。')
+    rows = Array.isArray(adminResult.data)
+      ? adminResult.data as Array<Omit<FeedbackRecord, 'replies' | 'attachments'>>
+      : []
+  } else {
+    const submissions = await supabase
+      .from('feedback_submissions')
+      .select('id,user_id,feedback_type,content,status,created_at')
+      .eq('user_id', session.user.id)
+      .order('created_at', { ascending: false })
+    if (submissions.error) throw new Error('反馈记录加载失败，请稍后重试。')
+    rows = (submissions.data ?? []) as Array<Omit<FeedbackRecord, 'replies' | 'attachments'>>
+  }
 
-  const submissions = await query
-  if (submissions.error) throw new Error('反馈记录加载失败，请稍后重试。')
-  const rows = (submissions.data ?? []) as Array<Omit<FeedbackRecord, 'replies' | 'attachments'>>
   if (rows.length === 0) return newestFirst(guestRows)
 
   const ids = rows.map(row => row.id)
