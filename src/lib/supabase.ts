@@ -49,7 +49,7 @@ export async function signOut() {
   if (error) throw error
 }
 
-export type FeedbackType = 'bug' | 'feature'
+export type FeedbackType = 'bug' | 'suggestion' | 'experience' | 'other'
 
 export async function submitFeedback(input: { type: FeedbackType; content: string }) {
   if (!supabase) throw new Error('反馈服务暂不可用，请稍后重试。')
@@ -58,7 +58,7 @@ export async function submitFeedback(input: { type: FeedbackType; content: strin
   if (content.length > 4000) throw new Error('反馈内容不能超过 4000 个字符。')
   const session = await getSession()
   const { error } = await supabase.from('feedback_submissions').insert({
-    feedback_type: input.type === 'feature' ? 'suggestion' : 'bug',
+    feedback_type: input.type,
     content,
     user_id: session?.user.id ?? null,
     visitor_id: typeof window === 'undefined' ? null : visitorId(),
