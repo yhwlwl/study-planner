@@ -258,7 +258,7 @@ export async function listFeedback(scope: 'mine' | 'admin'): Promise<FeedbackRec
       .select(ADMIN_DETAIL_COLUMNS)
       .order('created_at', { ascending: false })
     if (submissions.error) throw new Error('反馈详细信息加载失败，请稍后重试。')
-    rows = (submissions.data ?? []) as Array<Omit<FeedbackRecord, 'replies' | 'attachments'>>
+    rows = (submissions.data ?? []) as unknown as Array<Omit<FeedbackRecord, 'replies' | 'attachments'>>
   } else {
     const submissions = await supabase
       .from('feedback_submissions')
