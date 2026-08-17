@@ -34,6 +34,7 @@ function splitTrailingModalActions(node: ReactNode): { content: ReactNode; actio
 export function Modal({ open, title, children, footer, onClose, wide = false, mobileSheet = false, mobileFullscreen = false, className = '' }: { open: boolean; title: string; children: ReactNode; footer?: ReactNode; onClose: () => void; wide?: boolean; mobileSheet?: boolean; mobileFullscreen?: boolean; className?: string }) {
   const titleIdRef = useRef<string>()
   const dialogRef = useRef<HTMLElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
@@ -43,12 +44,25 @@ export function Modal({ open, title, children, footer, onClose, wide = false, mo
   useEffect(() => {
     if (!open) return
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const previous = document.body.style.overflow
+    const previousBodyOverflow = document.body.style.overflow
+    const previousDocumentOverflow = document.documentElement.style.overflow
+    const previousScrollX = window.scrollX
+    const previousScrollY = window.scrollY
+    const anchorFullscreenToViewport = mobileFullscreen && window.innerWidth <= 760
+
+    // iOS Safari can keep a fixed full-screen portal aligned to the document's current
+    // scroll offset when it opens from deep inside Settings. Move the document viewport
+    // to its origin while the modal is open, then restore the user's exact page position.
+    if (anchorFullscreenToViewport) window.scrollTo(0, 0)
     document.body.style.overflow = 'hidden'
+    if (anchorFullscreenToViewport) document.documentElement.style.overflow = 'hidden'
+
     const focusableSelector = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
     const focusFirst = window.requestAnimationFrame(() => {
+      if (dialogRef.current) dialogRef.current.scrollTop = 0
+      if (bodyRef.current) bodyRef.current.scrollTop = 0
       const focusable = dialogRef.current?.querySelector<HTMLElement>(focusableSelector)
-      ;(focusable ?? dialogRef.current)?.focus()
+      ;(focusable ?? dialogRef.current)?.focus({ preventScroll: true })
     })
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -77,10 +91,12 @@ export function Modal({ open, title, children, footer, onClose, wide = false, mo
     return () => {
       window.cancelAnimationFrame(focusFirst)
       document.removeEventListener('keydown', handleKeyDown)
-      document.body.style.overflow = previous
-      previousFocusRef.current?.focus()
+      document.body.style.overflow = previousBodyOverflow
+      document.documentElement.style.overflow = previousDocumentOverflow
+      if (anchorFullscreenToViewport) window.scrollTo(previousScrollX, previousScrollY)
+      previousFocusRef.current?.focus({ preventScroll: true })
     }
-  }, [open])
+  }, [open, mobileFullscreen])
 
   useEffect(() => {
     if (!open || !mobileFullscreen) return
@@ -110,7 +126,7 @@ export function Modal({ open, title, children, footer, onClose, wide = false, mo
       <section ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={titleId} className={`modal-card ${wide ? 'modal-wide' : ''} ${mobileSheet ? 'modal-mobile-sheet' : ''} ${mobileFullscreen ? 'modal-mobile-fullscreen' : ''} ${effectiveFooter ? 'modal-with-footer' : ''} ${className}`.trim()} onMouseDown={e => e.stopPropagation()}>
         <header className="modal-header"><h2 id={titleId}>{title}</h2><button className="icon-button" onClick={onClose} aria-label="关闭"><X size={20} /></button></header>
         <div className="tutorial-modal-coachmark-slot" aria-live="polite"/>
-        <div className="modal-body">{extracted.content}</div>
+        <div ref={bodyRef} className="modal-body">{extracted.content}</div>
         {effectiveFooter && <footer className="modal-footer">{effectiveFooter}</footer>}
       </section>
     </div>,
