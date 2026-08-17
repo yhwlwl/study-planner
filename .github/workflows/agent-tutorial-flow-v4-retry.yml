@@ -1,0 +1,55 @@
+name: agent tutorial flow v4 retry
+
+on:
+  push:
+    branches:
+      - agent/tutorial-flow-v4-strict
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Patch updater anchor and apply
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/agent-tutorial-flow-v4.py')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('state.taskGroups.map(group => [group.id, group])', 'state.taskGroups.map(item => [item.id, item])')
+          p.write_text(s, encoding='utf-8')
+          PY
+          python scripts/agent-tutorial-flow-v4.py
+          rm scripts/agent-tutorial-flow-v4.py
+          rm .github/workflows/agent-tutorial-flow-v4.yml
+          rm .github/workflows/agent-tutorial-flow-v4-retry.yml
+      - name: Install dependencies
+        run: npm ci
+      - name: Tutorial static audit
+        run: node scripts/tutorial-flow-audit.mjs
+      - name: Tutorial focused tests
+        run: npx vitest run tests/tutorial.test.ts tests/tutorial-coachmark.test.tsx --pool=forks --maxWorkers=1
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Production build
+        run: npm run build
+      - name: Full quality gate
+        run: npm run test:quality
+        env:
+          PLANNER_P95_500_MS: 1500
+      - name: Commit validated changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: 补齐严格教程闭环流程"
+          git push origin HEAD:agent/tutorial-flow-v4-strict
