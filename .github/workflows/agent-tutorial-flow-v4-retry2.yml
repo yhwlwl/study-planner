@@ -1,0 +1,64 @@
+name: agent tutorial flow v4 retry2
+
+on:
+  push:
+    branches:
+      - agent/tutorial-flow-v4-strict
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply tutorial flow update
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/agent-tutorial-flow-v4.py')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('state.taskGroups.map(group => [group.id, group])', 'state.taskGroups.map(item => [item.id, item])')
+          p.write_text(s, encoding='utf-8')
+          PY
+          python scripts/agent-tutorial-flow-v4.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/App.tsx')
+          s = p.read_text(encoding='utf-8')
+          bad = "text: '你已经走完一次真实的计划循环。\n\n目标 → 录入 → 排期 → 执行 → 复盘 → 调整'"
+          good = r"text: '你已经走完一次真实的计划循环。\n\n目标 → 录入 → 排期 → 执行 → 复盘 → 调整'"
+          if bad not in s:
+              raise SystemExit('missing generated multiline tutorial completion text')
+          p.write_text(s.replace(bad, good, 1), encoding='utf-8')
+          PY
+          rm scripts/agent-tutorial-flow-v4.py
+          rm -f .github/workflows/agent-tutorial-flow-v4.yml .github/workflows/agent-tutorial-flow-v4-retry.yml .github/workflows/agent-tutorial-flow-v4-retry2.yml
+      - name: Install dependencies
+        run: npm ci
+      - name: Tutorial static audit
+        run: node scripts/tutorial-flow-audit.mjs
+      - name: Tutorial focused tests
+        run: npx vitest run tests/tutorial.test.ts tests/tutorial-coachmark.test.tsx --pool=forks --maxWorkers=1
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Production build
+        run: npm run build
+      - name: Full quality gate
+        run: npm run test:quality
+        env:
+          PLANNER_P95_500_MS: 1500
+      - name: Commit validated changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: 补齐严格教程闭环流程"
+          git push origin HEAD:agent/tutorial-flow-v4-strict
