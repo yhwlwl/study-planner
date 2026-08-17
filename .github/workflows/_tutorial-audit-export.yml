@@ -1,0 +1,27 @@
+name: temporary tutorial audit export
+on:
+  push:
+    branches:
+      - agent/tutorial-guided-flow-v2
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tutorial-audit-source
+          path: |
+            src
+            tests
+            scripts
+            package.json
+            package-lock.json
+            tsconfig.json
+            tsconfig.check.json
+            tsconfig.node.json
+            vitest.config.ts
+            vite.config.ts
+          retention-days: 1
