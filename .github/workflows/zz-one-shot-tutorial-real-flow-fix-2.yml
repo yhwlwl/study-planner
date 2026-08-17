@@ -22,7 +22,10 @@ jobs:
           node-version: 22
           cache: npm
       - name: 应用修复
-        run: python scripts/one-shot-tutorial-fix.py
+        shell: bash
+        run: |
+          python scripts/one-shot-tutorial-fix.py
+          sed -i '1i // @vitest-environment jsdom' tests/modal.test.tsx
       - name: 安装依赖
         run: npm ci
       - name: 完整质量验证
