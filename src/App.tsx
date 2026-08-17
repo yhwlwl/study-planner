@@ -217,10 +217,7 @@ export default function App() {
     }
   }
 
-  const advanceTutorialAfterImport = () => advanceTutorialStable('intake-parse', 'tasks-intake')
-  const openTutorialGoalCreate = () => advanceTutorialStable('tasks-intake', 'goal-create')
-  const tutorialGoalCreated = () => advanceTutorialStable('goal-create', 'goal-link')
-  const tutorialGoalLinked = () => advanceTutorialStable('goal-link', 'intake-schedule')
+  const advanceTutorialAfterImport = () => advanceTutorialStable('intake-parse', 'intake-schedule')
   const tutorialStatsExpanded = () => advanceTutorialStable('stats', 'stats-detail')
 
   const tutorialProposalState = (proposal: SchedulingProposal) => hydratePortableState(proposal.stateAfter, {
@@ -1032,66 +1029,60 @@ export default function App() {
   let tutorialCoachConfig: TutorialCoachmarkConfig | undefined
   if (tutorialRestricted && tutorialStepValue) {
     const base: Partial<Record<TutorialStep, TutorialCoachmarkConfig>> = {
-      'repair-entry': { target: 'replan-center', text: '计划已经赶不上变化了，先看看哪里出了问题。' },
-      'repair-action': { target: 'repair-submit|repair-current', text: '先解决已经发生的问题。生成方案后，看看系统怎样保护已完成和锁定内容。' },
-      'repair-preview': { target: 'proposal-primary', text: '先看完整变更：已完成任务保持不变、锁定任务保持不变，同时缓解目标风险。确认后才会改计划。' },
-      'repair-calendar': { text: '刚才的调整已经落到计划里了。高亮日期就是发生变化的位置。', actionLabel: '继续：看看目标', onAction: () => advanceTutorialStable('repair-calendar', 'goal-existing') },
-      'goal-existing': { target: 'tutorial-goal-view', text: '先看看刚才受影响的目标。排期会考虑目标和截止时间，不只是把任务放进日历。' },
-      'intake-entry': { target: 'tutorial-natural-input', text: '这里是录入工作区。先点“自然语言 / 粘贴清单”，体验最快的批量录入方式。' },
-      'intake-source': { target: 'tutorial-parse|tutorial-natural-text', text: '示例作业已经放进输入框。先看一眼原文，再点“解析并预览”。' },
-      'intake-parse': { target: 'tutorial-import-confirm', text: '现在看到的是结构化识别结果。确认后，它们只会进入待排期区，还不会进日历。' },
-      'tasks-intake': { target: 'tutorial-task-intake-list', text: '任务已经记下来了，但还没有正式日期：录入不等于排期。', actionLabel: '继续：新建目标', onAction: openTutorialGoalCreate },
-      'goal-create': { target: 'tutorial-goal-create|tutorial-goal-create-confirm', text: '现在给刚才那批任务建立一个共同目标。字段已预填，亲手确认创建。' },
-      'goal-link': { target: 'tutorial-goal-link|tutorial-goal-link-confirm', text: '目标不是标签。把刚才录入的四组任务关联进来，它们之后会受这个目标的期限约束。' },
-      'intake-schedule': { target: 'schedule-intake', text: '任务和目标都准备好了。现在生成排期预览；确认前仍不会进入正式计划。' },
-      'intake-preview': { target: 'proposal-primary', text: '看看新任务去了哪些日期、有没有影响已有计划和目标。确认后才正式进入日历。' },
-      'intake-calendar': { text: '刚才录入的任务现在真正进入计划了。高亮日期展示这次排期落在哪里。', actionLabel: '继续：执行今天', onAction: () => advanceTutorialStable('intake-calendar', 'execute-complete') },
-      'execute-complete': { target: 'tutorial-complete-confirm|tutorial-execute', text: '计划排好了，现在只处理今天。先完整完成高亮任务，并记录实际用时。' },
-      'execute-partial': { target: 'tutorial-partial-confirm|tutorial-execute', text: '实际执行不总是全做完。把第二项任务记录成部分完成，剩下一项保持未完成。' },
-      'review-entry': { target: 'today-review', text: '按实际情况结束今天，不需要假装所有任务都完成。现在进入今日复盘。' },
-      'review-carry': { target: 'review-carry', text: '今天没做完的不用重新录入。选择顺延，再看一次变更预览。' },
-      'review-preview': { target: 'proposal-primary', text: '先确认未完成任务会移到哪里；应用后我们会回月历看结果。' },
-      'review-calendar': { text: '今天没完成的内容已经接到后面的计划里。一天没做完，不等于整个计划废掉。', actionLabel: '继续：看看统计', onAction: () => advanceTutorialStable('review-calendar', 'stats') },
-      stats: { target: 'tutorial-stats-summary|tutorial-stats-expand', text: '这里记录的是实际执行，不只是原来的计划。展开一次详细统计，看看计划与实际。' },
-      'stats-detail': { text: '统计会把执行结果、目标和时间差异沉淀下来，不需要一次看完所有图表。', actionLabel: '继续：重新安排未来', onAction: () => advanceTutorialStable('stats-detail', 'future-entry') },
-      'future-entry': { target: 'replan-center', text: '当前问题已经处理完。没有故障，也可以主动改变后面的节奏。' },
-      'future-action': { target: 'future-submit|future-replan', text: '这次不是救火。四种取舍都完整保留，可以选择一种后生成未来方案。' },
-      'future-preview': { target: 'proposal-primary', text: '对比未来几天的前后变化。确认后，我们最后再回月历看一次。' },
-      'future-calendar': { text: '这次不是修复故障，而是主动重新规划后面的节奏。', actionLabel: '完成体验', onAction: () => advanceTutorialStable('future-calendar', 'complete') },
-      complete: { text: '你已经走完一次真实的计划循环：目标 → 录入 → 排期 → 执行 → 复盘 → 调整。', actionLabel: '开始我的计划', onAction: () => { void exitTutorial(true) }, secondaryLabel: '继续看看', onSecondary: () => { const updated = advanceTutorialOnly('complete', 'free'); if (updated) setPage('today') } },
+      'repair-entry': { target: 'replan-center', text: '这里有 3 个问题：今天超载、任务逾期、目标有风险。点“重排中心”查看。' },
+      'repair-action': { target: 'repair-submit|repair-current', text: '点“修复当前问题”。系统只重新安排需要处理的内容，不动已完成和锁定任务。' },
+      'repair-preview': { target: 'proposal-primary', text: '先看哪些任务会移动。确认没问题后，点“应用方案”。' },
+      'repair-calendar': { text: '高亮日期就是刚刚改动的位置。已完成和锁定内容没有被打乱。', actionLabel: '下一步：看目标', onAction: () => advanceTutorialStable('repair-calendar', 'goal-existing') },
+      'goal-existing': { target: 'tutorial-goal-view', text: '点“查看”打开目标详情。看完后用正常的“关闭”返回，教程会继续。' },
+      'intake-entry': { target: 'tutorial-natural-input', text: '点“自然语言 / 粘贴清单”。先把任务录进来，再决定怎么排。' },
+      'intake-source': { target: 'tutorial-parse', text: '示例任务已经填好。直接点“解析并预览”。' },
+      'intake-parse': { target: 'tutorial-import-confirm', text: '确认识别出的任务、数量和时长，然后点“加入当前批次”。现在还不会进入日历。' },
+      'intake-schedule': { target: 'schedule-intake', text: '任务已经在真实录入区里。点“生成排期预览”。有截止日期的内容会按正式规则参与目标与期限判断。' },
+      'intake-preview': { target: 'proposal-primary', text: '看清任务被安排到哪些日期。确认后点“应用方案”，这时才会进入正式计划。' },
+      'intake-calendar': { text: '新任务已经进入计划。高亮日期就是这次排期新增或调整的位置。', actionLabel: '下一步：执行今天', onAction: () => advanceTutorialStable('intake-calendar', 'execute-complete') },
+      'execute-complete': { target: 'tutorial-complete-confirm|tutorial-execute', text: '完成高亮任务，并记录 52 分钟实际用时。' },
+      'execute-partial': { target: 'tutorial-partial-confirm|tutorial-execute', text: '把第二项记录为部分完成：12 分钟、50%。' },
+      'review-entry': { target: 'today-review', text: '今天没有全部做完。点“结束今天并复盘”，按真实结果处理剩余任务。' },
+      'review-carry': { target: 'review-carry', text: '选择顺延日期，再点“完成复盘，并按当前方案顺延”。不用重新录入任务。' },
+      'review-preview': { target: 'proposal-primary', text: '确认未完成任务会移到哪里，然后点“应用方案”。' },
+      'review-calendar': { text: '未完成任务已经接到后面的日期，今天的执行记录仍然保留。', actionLabel: '下一步：看统计', onAction: () => advanceTutorialStable('review-calendar', 'stats') },
+      stats: { target: 'tutorial-stats-expand', text: '点“查看连续记录和学习热力图”，展开详细统计。' },
+      'stats-detail': { text: '这里保存的是实际执行结果：学了多久、完成多少、计划和实际差多少。', actionLabel: '下一步：调整未来', onAction: () => advanceTutorialStable('stats-detail', 'future-entry') },
+      'future-entry': { target: 'replan-center', text: '现在没有故障，也可以主动改后面的节奏。点“计划有变化”进入重排中心。' },
+      'future-action': { target: 'future-submit|future-replan', text: '选择一个取舍方向，再生成未来方案。这里是在主动规划，不是在修复错误。' },
+      'future-preview': { target: 'proposal-primary', text: '对比未来几天调整前后。确认后点“应用方案”。' },
+      'future-calendar': { text: '主动重排已经生效。它和刚才“修复问题”走的是同一套真实预览与确认流程。', actionLabel: '完成体验', onAction: () => advanceTutorialStable('future-calendar', 'complete') },
+      complete: { text: '你已经走完：发现问题 → 修复 → 录入 → 排期 → 执行 → 复盘 → 再调整。', actionLabel: '开始我的计划', onAction: () => { void exitTutorial(true) }, secondaryLabel: '继续看看', onSecondary: () => { const updated = advanceTutorialOnly('complete', 'free'); if (updated) setPage('today') } },
     }
     const headlines: Partial<Record<TutorialStep, string>> = {
-      'repair-entry': '先定位计划出了什么问题',
-      'repair-action': '让系统先找修复方案',
-      'repair-preview': '确认前先看哪些内容会变',
-      'repair-calendar': '变化已经落到月历',
-      'goal-existing': '先理解目标怎样影响排期',
-      'intake-entry': '在录入页选择自然语言录入',
-      'intake-source': '看原文，再让系统解析',
-      'intake-parse': '识别结果暂时还没进入日历',
-      'tasks-intake': '记住：录入不等于排期',
-      'goal-create': '为这批任务建立共同目标',
-      'goal-link': '让任务真正受目标期限约束',
-      'intake-schedule': '现在才生成正式排期',
-      'intake-preview': '确认新任务会被放到哪里',
-      'intake-calendar': '新任务已经正式进入计划',
-      'execute-complete': '先完整完成一项任务',
-      'execute-partial': '再记录一次部分完成',
-      'review-entry': '按真实执行结果结束今天',
-      'review-carry': '把未完成内容接到后面',
-      'review-preview': '先看顺延会改什么',
-      'review-calendar': '未完成内容已经接回计划',
-      stats: '看看计划与实际的差异',
-      'stats-detail': '统计是执行之后的沉淀',
-      'future-entry': '没出问题也可以主动重排',
-      'future-action': '选择你想要的未来节奏',
-      'future-preview': '确认未来几天会怎样变化',
-      'future-calendar': '主动规划已经生效',
-      complete: '完整的计划循环已经走完',
+      'repair-entry': '打开重排中心',
+      'repair-action': '生成修复方案',
+      'repair-preview': '确认这次调整',
+      'repair-calendar': '看修复结果',
+      'goal-existing': '查看目标怎样影响排期',
+      'intake-entry': '打开自然语言录入',
+      'intake-source': '解析示例任务',
+      'intake-parse': '把识别结果加入录入批次',
+      'intake-schedule': '生成新任务排期',
+      'intake-preview': '确认新任务排期',
+      'intake-calendar': '看新任务落在哪些天',
+      'execute-complete': '完整完成一项任务',
+      'execute-partial': '记录一次部分完成',
+      'review-entry': '按真实结果结束今天',
+      'review-carry': '把没做完的接到后面',
+      'review-preview': '确认顺延结果',
+      'review-calendar': '看顺延后的计划',
+      stats: '展开详细统计',
+      'stats-detail': '看计划和实际留下了什么数据',
+      'future-entry': '主动调整后面的计划',
+      'future-action': '选择未来节奏',
+      'future-preview': '确认未来几天的变化',
+      'future-calendar': '看主动重排结果',
+      complete: '完整流程走完了',
     }
     const phase = tutorialStepValue.startsWith('repair') ? '01 · 修复计划'
-      : ['goal-existing', 'goal-create', 'goal-link'].includes(tutorialStepValue) ? '02 · 目标'
-        : tutorialStepValue === 'tasks-intake' || tutorialStepValue.startsWith('intake') ? '03 · 录入与排期'
+      : tutorialStepValue === 'goal-existing' ? '02 · 目标'
+        : tutorialStepValue.startsWith('intake') ? '03 · 录入与排期'
           : tutorialStepValue.startsWith('execute') ? '04 · 执行'
             : tutorialStepValue.startsWith('review') ? '05 · 复盘'
               : tutorialStepValue.startsWith('stats') ? '06 · 统计'
@@ -1139,7 +1130,7 @@ export default function App() {
           {page === 'tasks' && <TasksPage onOpenIntake={() => navigate('intake')} onPrepared={openPrepared} tutorialMode={tutorialRestricted} tutorialStep={tutorialStepValue} onTutorialBlocked={tutorialNotice}/>}
           <Suspense fallback={<div className="page-loading"><div className="spinner"/><p>正在载入页面……</p></div>}>
             {page === 'intake' && <IntakePage onPrepared={openPrepared} onNavigate={target => navigate(target)} onAddTask={batchId => openAddTask(undefined, 'system', batchId)} addRequest={intakeAddRequest} onAddRequestHandled={() => setIntakeAddRequest(undefined)} tutorialMode={tutorialRestricted && tutorialPageForStep(tutorialStepValue!) === 'intake'} tutorialStep={tutorialStepValue} tutorialText={tutorialSession ? tutorialNaturalLanguageText(tutorialSession.anchorDate) : undefined} onTutorialNaturalOpen={() => advanceTutorialStable('intake-entry', 'intake-source')} onTutorialParsed={() => advanceTutorialStable('intake-source', 'intake-parse')} onTutorialImported={advanceTutorialAfterImport} onStartTutorial={() => setTutorialOfferOpen(true)} onTutorialBlocked={tutorialNotice}/>}
-            {page === 'goals' && <GoalsPage onPrepared={openPrepared} tutorialMode={tutorialRestricted && tutorialPageForStep(tutorialStepValue!) === 'goals'} tutorialStep={tutorialStepValue} tutorialAnchorDate={tutorialSession?.anchorDate} onTutorialExistingViewed={() => { void enterTutorialIntake() }} onTutorialGoalCreated={tutorialGoalCreated} onTutorialGoalLinked={tutorialGoalLinked} onTutorialBlocked={tutorialNotice}/>}
+            {page === 'goals' && <GoalsPage onPrepared={openPrepared} tutorialMode={tutorialRestricted && tutorialPageForStep(tutorialStepValue!) === 'goals'} tutorialStep={tutorialStepValue} onTutorialExistingViewed={() => { void enterTutorialIntake() }} onTutorialBlocked={tutorialNotice}/>}
             {page === 'stats' && <StatsPage onOpenReplan={date => openAdjustment(date, 'current-conflicts')} tutorialMode={tutorialRestricted && (tutorialStepValue === 'stats' || tutorialStepValue === 'stats-detail')} onTutorialExpanded={tutorialStatsExpanded}/>}
             {page === 'export' && <ExportPage onNavigate={target => navigate(target)}/>}
             {page === 'guide' && <GuidePage onNavigate={target => navigate(target)} onStartTutorial={() => setTutorialOfferOpen(true)}/>}
@@ -2252,7 +2243,6 @@ function TasksPage({ onOpenIntake, onPrepared, tutorialMode = false, tutorialSte
   const subjects = Array.from(new Set([...state.settings.customSubjects, ...state.taskGroups.map(group => group.subject)])).sort()
   const today = todayISO()
   const query = search.trim().toLowerCase()
-  const tutorialPending = tutorialMode && tutorialStep === 'tasks-intake' ? state.intakeBatches.find(batch => batch.id === 'tutorial-intake-batch')?.taskGroups.filter(item => !item.appliedAt) ?? [] : []
   const groups = state.taskGroups.filter(group => !group.hiddenStandalone && (showHidden || !group.hidden) && (priority === 'all' || group.priority === priority) && (subject === 'all' || group.subject === subject) && (`${group.subject}${group.title}${group.notes ?? ''}`.toLowerCase().includes(query)))
   const taskCounts = useMemo(() => {
     const active = state.assignments.filter(item => item.status !== 'done')
@@ -2388,7 +2378,6 @@ function TasksPage({ onOpenIntake, onPrepared, tutorialMode = false, tutorialSte
   ]
 
   return <>
-    {tutorialPending.length > 0 && <section className="card tutorial-pending-panel" data-tutorial-target="tutorial-task-intake-list"><div><strong>刚录入、还未排期</strong><p className="muted-text">这些内容已经记下，但还没有正式日期。</p></div><div className="tutorial-pending-list">{tutorialPending.map(item => <div className="tutorial-pending-item" key={item.id}><span><strong>{item.title}</strong><small>{item.subject} · {item.quantity} 项 · 每项 {item.unitMinutes} 分钟</small></span><em>待排期</em></div>)}</div></section>}
     <section className="tasks-toolbar task-hub-toolbar">
       <div className="segmented-control task-mode-toggle"><button className={mode === 'tasks' ? 'active' : ''} onClick={() => setMode('tasks')}>具体任务</button><button className={mode === 'groups' ? 'active' : ''} onClick={() => setMode('groups')}>任务组</button></div>
       <div className="search-box"><Search size={18}/><input value={search} onChange={event => setSearch(event.target.value)} placeholder={mode === 'tasks' ? '搜索任务、任务组或科目' : '搜索任务组'}/></div>

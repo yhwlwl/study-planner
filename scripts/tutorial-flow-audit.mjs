@@ -8,150 +8,87 @@ const source = {
   context: read('src/AppContext.tsx'),
   tutorial: read('src/lib/tutorial.ts'),
   intake: read('src/components/IntakePage.tsx'),
-  intakeLib: read('src/lib/intake.ts'),
   goals: read('src/components/GoalsPage.tsx'),
+  modal: read('src/components/Modal.tsx'),
   adjustment: read('src/components/AdjustmentIntentDialog.tsx'),
   proposal: read('src/components/ProposalDialog.tsx'),
   review: read('src/components/ReviewDialog.tsx'),
   stats: read('src/components/StatsPage.tsx'),
-  task: read('src/components/TaskCard.tsx'),
   coach: read('src/components/TutorialCoachmark.tsx'),
-  guide: read('src/components/GuidePage.tsx'),
   css: read('src/tutorial.css'),
+  styles: read('src/styles.css'),
 }
 
 const results = []
 const has = (text, ...needles) => needles.every(needle => text.includes(needle))
 const lacks = (text, ...needles) => needles.every(needle => !text.includes(needle))
-const check = (group, name, ok, detail = '') => results.push({ group, name, ok: Boolean(ok), detail })
+const check = (group, name, ok) => results.push({ group, name, ok: Boolean(ok) })
 
 const expectedSteps = [
   'repair-entry','repair-action','repair-preview','repair-calendar','goal-existing',
-  'intake-entry','intake-source','intake-parse','tasks-intake','goal-create','goal-link','intake-schedule','intake-preview','intake-calendar',
+  'intake-entry','intake-source','intake-parse','intake-schedule','intake-preview','intake-calendar',
   'execute-complete','execute-partial','review-entry','review-carry','review-preview','review-calendar',
   'stats','stats-detail','future-entry','future-action','future-preview','future-calendar','complete','free',
 ]
 
-check('00 入口', '教程版本独立升级到 v2', has(source.tutorial, 'TUTORIAL_VERSION = 2', 'tutorial:v${TUTORIAL_VERSION}'))
-check('00 入口', '首次空白游客只弹介绍、不自动启动', has(source.app, '!tutorialCompleted()', 'setTutorialOfferOpen(true)') && lacks(source.app, "if (namespace === 'guest' && !sessionUser && !loadedFromStorage && !tutorialCompleted()) {\n      void startTutorial"))
-check('00 入口', '介绍弹窗明确独立演示和不修改真实计划', has(source.app, 'title="体验完整流程"', '这是一个独立的演示教程', '教程使用演示数据，不会修改你的真实计划。'))
-check('00 入口', '介绍弹窗可开始或直接跳过', has(source.app, '直接开始我的计划', '开始体验', 'markTutorialOfferDismissed'))
-check('00 入口', '介绍弹窗说明关闭后可在使用教程重新打开', has(source.app, '之后可以在“使用教程”里重新打开'))
-check('00 入口', '互动教程入口归到使用教程页，设置页不再重复', has(source.guide, 'onStartTutorial', '打开互动教程', '重新打开提示') && lacks(source.app, 'title="交互教程"'))
+check('00 版本与入口', '教程升级到 v3，旧流程不会把用户恢复到已删除步骤', has(source.tutorial, 'TUTORIAL_VERSION = 3', 'tutorial:v${TUTORIAL_VERSION}'))
+check('00 版本与入口', '教程仍使用独立数据空间', has(source.tutorial, 'TUTORIAL_NAMESPACE = `tutorial:v${TUTORIAL_VERSION}`') && has(source.app, 'clearDataSpace(TUTORIAL_NAMESPACE)'))
+check('00 版本与入口', '入口明确不会修改真实计划', has(source.app, '教程使用演示数据，不会修改你的真实计划。'))
 
-for (const step of expectedSteps) check('01 状态机', `存在步骤 ${step}`, source.tutorial.includes(`'${step}'`))
-check('01 状态机', '页面映射覆盖月历/目标/录入/任务/统计', has(source.tutorial, "'repair-calendar', 'intake-calendar', 'review-calendar', 'future-calendar'", "'goal-existing', 'goal-create', 'goal-link'", "step === 'tasks-intake'", "'stats', 'stats-detail'"))
-check('01 状态机', '瞬态刷新回安全 checkpoint', has(source.tutorial, "'repair-preview': 'repair-entry'", "'intake-source': 'intake-entry'", "'intake-parse': 'intake-entry'", "'intake-preview': 'intake-schedule'", "'review-preview': 'review-entry'", "'future-preview': 'future-entry'"))
-check('01 状态机', '运行时不因普通状态偏差自动跳回', lacks(source.app, '教程状态已自动恢复到当前步骤'))
-check('01 状态机', '重复推进要求 expected step 匹配', has(source.tutorial, 'if (!allowed.includes(session.step)) return session'))
-check('01 状态机', '跨午夜锁定 anchor 时钟', has(source.tutorial, 'setNowProvider(() => new Date(`${anchorDate}T12:00:00`))'))
+for (const step of expectedSteps) check('01 真实路线', `存在正式步骤 ${step}`, source.tutorial.includes(`'${step}'`))
+check('01 真实路线', '主步骤数组不再经过教程专属任务页/新建目标/假关联', lacks(source.tutorial.match(/export const TUTORIAL_STEPS:[\s\S]*?\n\]/)?.[0] ?? '', "'tasks-intake'", "'goal-create'", "'goal-link'"))
+check('01 真实路线', '录入确认后直接回真实录入页生成排期', has(source.app, "advanceTutorialStable('intake-parse', 'intake-schedule')"))
+check('01 真实路线', '目标步骤只查看真实目标详情', has(source.tutorial, "if (step === 'goal-existing') return 'goals'"))
 
-check('02 独立空间', '教程使用独立 namespace', has(source.tutorial, 'TUTORIAL_NAMESPACE = `tutorial:v${TUTORIAL_VERSION}`'))
-check('02 独立空间', '进入前保存真实空间', has(source.app, 'if (returnHadData) await setDataSpace(returnNamespace, stateRef.current, false)'))
-check('02 独立空间', '退出成功后才清教程 session/空间', has(source.app, 'if (!switched) return', 'clearTutorialSession(markCompleted)', 'clearDataSpace(TUTORIAL_NAMESPACE)'))
-check('02 独立空间', '退出恢复失败不会覆盖真实计划', has(source.app, '暂时无法恢复你的原计划，请稍后再退出教程', 'return'))
-check('02 独立空间', '教程 namespace 不参与账号普通云同步', has(source.app, 'namespace !== `user:${sessionUser.id}`'))
+check('02 修复', '开场问题仍由真实分析数据产生', has(source.tutorial, 'return Number(overdue) + Number(capacityDanger) + Number(goalRisk)'))
+check('02 修复', '修复仍走正式 proposal 引擎', has(source.app, 'generateProposals(prepared, event, baseline, undefined, 0)', 'repairTeachingProposals'))
+check('02 修复', '预览继续显示已完成和锁定保护', has(source.proposal, '已完成任务保持不变', '已锁定任务保持不变'))
 
-check('03 开场问题', 'fixture 有完成、锁定、逾期、今日超载、目标风险数据', has(source.tutorial, "id: 'tutorial-task-done'", "id: 'tutorial-task-overdue'", "id: 'tutorial-task-locked'", 'regularMinutes: 160', "id: 'tutorial-task-goal-risk'"))
-check('03 开场问题', '首页教程问题数按三类心智问题计算', has(source.tutorial, 'return Number(overdue) + Number(capacityDanger) + Number(goalRisk)'))
-check('03 开场问题', '开场引导指向重排中心', has(source.app, "'repair-entry': { target: 'replan-center'", '计划已经赶不上变化了'))
+check('03 目标', '目标查看使用真实卡片的查看按钮', has(source.goals, 'tutorial-goal-view', 'title="查看详情"'))
+check('03 目标', '看完目标通过正常关闭动作继续', has(source.goals, 'const closeDetail = () =>', 'onClose={closeDetail}', 'onClick={closeDetail}>关闭'))
+check('03 目标', '没有教程专属“关联新录入任务”产品按钮或弹窗', lacks(source.goals, '关联新录入任务', 'tutorial-goal-link-confirm', 'linkOpen'))
 
-check('04 修复', '修复中心只允许本步动作但其他动作仍渲染', has(source.adjustment, 'const allowedTutorialAction', 'blocked={!allowedTutorialAction}', "item.id === (tutorialMode === 'repair' ? 'current-conflicts' : 'replan')"))
-check('04 修复', '修复用正式 proposal 引擎而非写死结果', has(source.app, 'generateProposals(prepared, event, baseline, undefined, 0)', 'repairTeachingProposals') && lacks(source.app, 'buildTutorialRepairedFrom(prepared'))
-check('04 修复', '修复教学方案要求真实移动和目标风险改善', has(source.app, "tutorial.step === 'repair-action'", 'item.movements.length > 0', 'goal.latestRiskBefore && !goal.latestRiskAfter'))
-check('04 修复', 'Proposal 显示完成/锁定保护和目标风险结果', has(source.proposal, '✓ 已完成任务保持不变', '🔒 已锁定任务保持不变', '⚠ 目标风险得到缓解'))
+check('04 录入', '先到录入页再点真实自然语言入口', has(source.app, "'intake-entry': { target: 'tutorial-natural-input'", "advanceTutorialStable('intake-entry', 'intake-source')"))
+check('04 录入', '自然语言解析和加入批次使用现有按钮', has(source.intake, '解析并预览', '加入当前批次', 'tutorial-import-confirm'))
+check('04 录入', '任务确认后不再插入教程专属任务页', lacks(source.app, 'tutorial-task-intake-list', '刚录入、还未排期'))
+check('04 录入', '真实排期按钮作为下一步目标', has(source.intake, 'data-tutorial-target={tutorialCanSchedule ? "schedule-intake" : undefined}', '生成排期预览'))
+check('04 录入', 'checkpoint 不再预造共同目标绑定', has(source.tutorial, "ensureParsedTutorialBatch(state, anchorDate)\n    return state") && lacks(source.tutorial, 'hasLinkedTutorialIntake'))
+check('04 录入', '带截止日的示例在应用后按真实规则产生对应目标', has(source.tutorial, "title: '读书报告完成目标'", "groupId: 'tutorial-added-report'"))
 
-check('05 修复后月历', '修复应用后进入 repair-calendar', has(source.app, "applyTutorialProposal(proposal, 'repair-preview', 'repair-calendar')"))
-check('05 修复后月历', '月历记录并高亮变化日期', has(source.app, 'highlightDates', 'proposal.movements.flatMap') && has(source.css, 'tutorial-calendar-changed'))
-check('05 修复后月历', '月历有结果说明和继续动作', has(source.app, "'repair-calendar':", '高亮日期就是发生变化的位置', '继续：看看目标'))
+check('05 执行与复盘', '完成和部分完成仍写真实执行记录', has(source.tutorial, 'TUTORIAL_EXECUTE_ASSIGNMENT_ID', 'TUTORIAL_PARTIAL_ASSIGNMENT_ID', "action === 'execute-task'"))
+check('05 执行与复盘', '复盘仍走真实顺延与 proposal 预览', has(source.app, "'review-carry': 'review-preview'", "applyTutorialProposal(proposal, 'review-preview', 'review-calendar')"))
 
-check('06 已有目标', '已有目标可点详情并展示期限/进度/预计完成/关联任务', has(source.goals, 'tutorial-goal-view', '期望完成', '最晚完成', '当前进度', '预计完成', '关联任务'))
-check('06 已有目标', '查看后先进入录入页而不是直接弹自然语言框', has(source.app, "advanceTutorialOnly('goal-existing', 'intake-entry')", "setPage('intake')"))
+check('06 统计', '统计提示只指向实际需要展开的 summary', lacks(source.stats, 'tutorial-stats-summary') && has(source.stats, '<summary data-tutorial-target={tutorialMode ? "tutorial-stats-expand" : undefined}>查看连续记录和学习热力图</summary>'))
+check('06 统计', '展开后才推进 stats-detail', has(source.stats, 'event.currentTarget.open', 'onTutorialExpanded?.()') && has(source.app, "advanceTutorialStable('stats', 'stats-detail')"))
 
-check('07 自然语言录入', '固定示例文本包含四类任务', has(source.tutorial, '数学卷子 2 张，每张 60 分钟', '英语阅读 3 篇，每篇 30 分钟', '读书报告 1 份，每份 90 分钟', '整理物理错题 1 次，每次 45 分钟'))
-check('07 自然语言录入', '先高亮录入页的自然语言入口并由用户亲手打开', has(source.app, "'intake-entry': { target: 'tutorial-natural-input'", "advanceTutorialStable('intake-entry', 'intake-source')") && has(source.intake, "tutorialStep === 'intake-entry'", 'onTutorialNaturalOpen?.()'))
-check('07 自然语言录入', '点击入口后才打开现有自然语言框并只读', has(source.intake, 'tutorialNaturalChoice', 'tutorialNaturalEntry', 'setPasteText(tutorialText)', 'setPasteOpen(true)', 'readOnly={tutorialNaturalEntry}'))
-check('07 自然语言录入', '用户亲手点击解析', has(source.intake, "'tutorial-parse'", 'onTutorialParsed?.()'))
-check('07 自然语言录入', '解析结果完整显示但教程不可编辑', has(source.intake, 'tutorial-import-preview-fieldset', 'disabled={tutorialNaturalEntry}', '加入当前批次'))
-check('07 自然语言录入', '自然语言解析支持张/篇/份等每项时长单位', has(source.intakeLib, '张|篇|份|个|章|节|组'))
+check('07 文案', '关键动作标题是直接动词句', has(source.app, "'repair-entry': '打开重排中心'", "'intake-entry': '打开自然语言录入'", "stats: '展开详细统计'"))
+check('07 文案', '录入文案明确“现在还不会进入日历”', has(source.app, '现在还不会进入日历'))
+check('07 文案', '预览文案明确确认后才进入正式计划', has(source.app, '这时才会进入正式计划'))
 
-check('08 任务页', '确认录入后进入 tasks-intake', has(source.app, "advanceTutorialStable('intake-parse', 'tasks-intake')"))
-check('08 任务页', '任务页展示待排期录入内容', has(source.app, '刚录入、还未排期', 'tutorial-task-intake-list', '待排期'))
+check('08 Coachmark', '浮层不再提供随机换位置按钮', lacks(source.coach, '换空位', 'tutorial-position-button', 'safeFloatingPositions'))
+check('08 Coachmark', '桌面浮层锚定真实目标上下方', has(source.coach, "type FloatingMode = 'above' | 'below' | 'top-dock' | 'bottom-dock'", 'targetRect.bottom + gap', 'targetRect.top - measuredHeight - gap'))
+check('08 Coachmark', '移动端弹窗提示固定到目标反侧边缘', has(source.coach, 'dockBottom', "mode: dockBottom ? 'bottom-dock' : 'top-dock'"))
+check('08 Coachmark', '提示保留阶段/标题/正文层级', has(source.coach, 'tutorial-coachmark-head', 'tutorial-coachmark-title', 'tutorial-coachmark-copy'))
+check('08 Coachmark', '关联气泡有指向目标的箭头，移动端 dock 不伪装指向', has(source.css, '.tutorial-coachmark-floating::after', '.tutorial-placement-top-dock::after'))
 
-check('09 新建目标', '从任务页进入 goal-create', has(source.app, "advanceTutorialStable('tasks-intake', 'goal-create')"))
-check('09 新建目标', '创建目标字段预填固定期限并由用户确认', has(source.goals, 'TUTORIAL_NEW_GOAL_TITLE', 'shiftDate(tutorialAnchorDate, 5)', 'shiftDate(tutorialAnchorDate, 7)', 'tutorial-goal-create-confirm'))
-check('09 新建目标', '教程目标创建使用业务 commit 白名单', has(source.goals, "tutorialAction: 'goal-create'") && has(source.tutorial, "session.step === 'goal-create' && action === 'goal-create'"))
+check('09 移动端弹窗', 'Modal 使用 visualViewport 的实际可见高度', has(source.modal, 'window.visualViewport', '--modal-visible-height'))
+check('09 移动端弹窗', '全屏弹窗正文独立滚动且 footer 永远占据可见高度', has(source.styles, '/* v0.9 tutorial: visible viewport modal guarantee */', 'flex:1 1 0!important', 'flex:0 0 auto!important'))
+check('09 移动端弹窗', 'footer 仍由 Modal 结构化拆出，不依赖滚到正文底部', has(source.modal, 'splitTrailingModalActions', '<footer className="modal-footer">'))
 
-check('10 关联目标', '新目标创建后进入 goal-link', has(source.app, "advanceTutorialStable('goal-create', 'goal-link')"))
-check('10 关联目标', '用户逐项勾选四组新录入任务并确认关联', has(source.goals, '关联新录入任务', 'linkIds', '确认关联', 'linkIds.length !== tutorialPendingItems.length'))
-check('10 关联目标', '绑定写回 intake goalIds 且受白名单保护', has(source.goals, "tutorialAction: 'goal-link'", 'item.goalIds =') && has(source.tutorial, "session.step === 'goal-link' && action === 'goal-link'"))
+check('10 约束', '教程错误导航继续由真实页面白名单拦截', has(source.app, 'tutorialAllowsPage(current.step, target)'))
+check('10 约束', '教程仍允许随时退出', has(source.coach, '退出教程', 'onExit'))
+check('10 约束', '真实账号/游客数据恢复逻辑未被教程 UI 改写', has(source.app, '暂时无法恢复你的原计划，请稍后再退出教程'))
 
-check('11 新任务排期', '绑定后进入 intake-schedule', has(source.app, "advanceTutorialStable('goal-link', 'intake-schedule')"))
-check('11 新任务排期', '用户亲手生成排期预览', has(source.intake, 'tutorialCanSchedule', 'schedule-intake') && has(source.app, "'intake-schedule': 'intake-preview'"))
-check('11 新任务排期', '排期仍用正式 proposal 引擎', has(source.app, 'generateProposals(prepared, event, baseline, undefined, 0)'))
-check('11 新任务排期', '确认后进入 intake-calendar', has(source.app, "applyTutorialProposal(proposal, 'intake-preview', 'intake-calendar')"))
-
-check('12 新任务月历', '新任务月历有高亮结果说明', has(source.app, "'intake-calendar':", '刚才录入的任务现在真正进入计划了', '继续：执行今天'))
-
-check('13 今日执行', '第一项要求完整完成并预填 52 分钟', has(source.app, "tutorialStep === 'execute-complete'", "'52'", 'tutorial-complete-confirm'))
-check('13 今日执行', '第二项要求部分完成并预填 12 分钟/50%', has(source.app, "tutorialStep === 'execute-partial'", "'12'", '50', 'tutorial-partial-confirm'))
-check('13 今日执行', '两步只允许指定任务写入', has(source.tutorial, 'TUTORIAL_EXECUTE_ASSIGNMENT_ID', 'TUTORIAL_PARTIAL_ASSIGNMENT_ID', "action === 'execute-task'"))
-
-check('14 复盘', '部分完成后进入 review-entry', has(source.app, "advanceTutorialStable('execute-partial', 'review-entry')"))
-check('14 复盘', '复盘入口有高亮引导', has(source.app, "'review-entry':", '结束今天并复盘'))
-check('14 复盘', '复盘摘要保留完成/计划/实际/待处理信息', has(source.review, '已完成', '计划时间', '实际时间', '待处理'))
-
-check('15 顺延', '教程保留每项未完成任务和合法日期选择', has(source.review, 'tutorialPreferredTarget', 'legalOptions', 'review-carry-date'))
-check('15 顺延', '用户必须确认当前顺延方案', has(source.review, 'review-carry', '完成复盘，并按当前方案顺延'))
-check('15 顺延', '顺延仍通过 proposal 预览', has(source.app, "'review-carry': 'review-preview'"))
-check('15 顺延', '确认后进入 review-calendar', has(source.app, "applyTutorialProposal(proposal, 'review-preview', 'review-calendar')"))
-
-check('16 复盘月历', '复盘月历解释未完成已接到未来', has(source.app, "'review-calendar':", '一天没做完，不等于整个计划废掉'))
-
-check('17 统计', '复盘月历后进入 stats', has(source.app, "advanceTutorialStable('review-calendar', 'stats')"))
-check('17 统计', '统计页有摘要目标和展开详情目标', has(source.stats, 'tutorial-stats-summary', 'tutorial-stats-expand'))
-check('17 统计', '用户展开后才进入 stats-detail', has(source.stats, 'onTutorialExpanded?.()') && has(source.app, "advanceTutorialStable('stats', 'stats-detail')"))
-
-check('18 未来重排', 'stats-detail 后进入 future-entry', has(source.app, "advanceTutorialStable('stats-detail', 'future-entry')"))
-check('18 未来重排', '重排中心区分没有问题时的主动未来调整', has(source.app, "'future-entry':", '没有故障，也可以主动改变后面的节奏'))
-check('18 未来重排', '四个偏好全部可见可点击', has(source.adjustment, "(['preserve', 'balanced', 'goal', 'rest'] as ReplanOutcome[])", 'onClick={() => setReplanOutcome(item)}') && lacks(source.adjustment, "disabled={tutorialMode === 'future' && item !=="))
-check('18 未来重排', '未来教学方案优先选择有真实移动的方案', has(source.app, 'futureTeachingProposals', 'item.movements.length > 0'))
-check('18 未来重排', '未来确认后进入 future-calendar', has(source.app, "applyTutorialProposal(proposal, 'future-preview', 'future-calendar')"))
-
-check('19 最终月历', '最终月历说明主动规划和修复故障的区别', has(source.app, "'future-calendar':", '这次不是修复故障，而是主动重新规划后面的节奏'))
-check('20 结束', '结束文案包含完整闭环并有两个出口', has(source.app, '你已经走完一次真实的计划循环', '目标 → 录入 → 排期 → 执行 → 复盘 → 调整', '开始我的计划', '继续看看'))
-check('20 结束', '继续看看进入 free，真实计划仍隔离', has(source.app, "advanceTutorialOnly('complete', 'free')") && has(source.tutorial, "session.step === 'free'"))
-
-check('21 引导体验', '每一个教程步骤都有 coach config', expectedSteps.filter(step => step !== 'free').every(step => source.app.includes(`'${step}':`) || source.app.includes(`${step}:`)))
-check('21 引导体验', '引导关闭只收起当前提示，且有明确重新打开入口', has(source.coach, 'setCollapsed(true)', '重新打开提示') && lacks(source.coach, 'aria-label="关闭当前提示" onClick={onExit}'))
-check('21 引导体验', '引导为普通文档流而非覆盖悬浮', has(source.css, '.tutorial-coachmark {\n  position: relative;'))
-check('21 引导体验', '弹窗步骤自动切为小型可关闭浮层并高于 Modal', has(source.coach, "target.closest('.modal-card')", 'tutorial-coachmark-floating') && has(source.css, '.tutorial-coachmark-floating {', 'z-index: 180'))
-check('21 引导体验', '弹窗浮层只在不遮挡当前目标或可操作控件的安全位置间切换', has(source.coach, 'safeFloatingPositions', 'targetOverlap === 0 && item.controlOverlap === 0', '移动到其他安全位置', '换空位') && has(source.css, '.tutorial-position-top-left', '.tutorial-position-middle-right', '.tutorial-position-middle-left'))
-check('21 引导体验', '提示文案有阶段、标题、正文和动作词强调层级', has(source.coach, 'headline?: string', 'tutorial-coachmark-title', 'tutorial-inline-emphasis') && has(source.app, 'const headlines:', "'intake-entry': '在录入页选择自然语言录入'") && has(source.css, '.tutorial-coachmark-title', '.tutorial-inline-emphasis'))
-check('21 引导体验', '移动端教程介绍弹窗保留顶部安全间距', has(source.css, '.modal-backdrop:has(.tutorial-offer-copy)', 'env(safe-area-inset-top)'))
-check('21 引导体验', '任务与目标教学文字在窄屏保持自然排版', has(source.css, '.tutorial-pending-item > span', '[data-tutorial-target="tutorial-goal-link"]', 'white-space: nowrap'))
-check('21 引导体验', '教程页面切换使用轻量进入动画且尊重减少动画偏好', has(source.css, '@keyframes tutorial-page-enter', '@media (prefers-reduced-motion: reduce)'))
-check('21 引导体验', '目标高亮有限重试，不持续 mutation/scroll 追踪', has(source.coach, 'for (const delay of [0, 100, 280, 650])') && lacks(source.coach, 'MutationObserver'))
-
-check('22 显示但阻止', '侧栏仍完整渲染，错误导航由 navigate 拦截', has(source.app, 'navItems.map', 'tutorialAllowsPage', 'tutorialNotice()'))
-check('22 显示但阻止', '任务操作仍显示，教程用 aria-disabled/业务拦截', has(source.task, 'tutorial-disabled-control', 'onTutorialBlocked'))
-check('22 显示但阻止', '目标编辑/归档/删除仍显示但会阻止', has(source.goals, '教程中先查看目标，不修改它', '教程中暂不归档目标', '教程中暂不删除目标'))
-check('22 显示但阻止', 'Proposal 更多方案/逐项微调仍显示但不可改剧情', has(source.proposal, '生成更多不同方案（教程中暂不可用）', '逐项微调', '教程中完整展示该功能'))
-check('22 显示但阻止', 'Review 更多方案/仅保存仍显示但不可改剧情', has(source.review, '获取更多方案', '仅保存复盘，暂不顺延', '教程中先使用当前顺延方案'))
-check('22 显示但阻止', 'AppContext 业务层仍有教程白名单', has(source.context, 'tutorialAllowsCommit(readTutorialSession()', 'guidedTutorialMutationBlocked'))
-
-const failed = results.filter(item => !item.ok)
 const grouped = new Map()
 for (const item of results) {
-  if (!grouped.has(item.group)) grouped.set(item.group, [])
-  grouped.get(item.group).push(item)
+  const list = grouped.get(item.group) ?? []
+  list.push(item)
+  grouped.set(item.group, list)
 }
 for (const [group, items] of grouped) {
   console.log(`\n${group}`)
-  for (const item of items) console.log(`${item.ok ? '✓' : '✗'} ${item.name}${item.detail ? ` — ${item.detail}` : ''}`)
+  for (const item of items) console.log(`${item.ok ? '✓' : '✗'} ${item.name}`)
 }
+const failed = results.filter(item => !item.ok)
 console.log(`\n教程流程静态审计：${results.length - failed.length}/${results.length} 通过`)
-if (failed.length) {
-  console.error(`失败 ${failed.length} 项：${failed.map(item => item.name).join('；')}`)
-  process.exit(1)
-}
+if (failed.length) process.exit(1)

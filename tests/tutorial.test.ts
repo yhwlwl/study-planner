@@ -7,7 +7,6 @@ import {
   TUTORIAL_EXECUTE_ASSIGNMENT_ID,
   TUTORIAL_GOAL_ID,
   TUTORIAL_INTAKE_BATCH_ID,
-  TUTORIAL_NEW_GOAL_ID,
   TUTORIAL_PARTIAL_ASSIGNMENT_ID,
   TUTORIAL_STEPS,
   TUTORIAL_UNFINISHED_ASSIGNMENT_ID,
@@ -78,7 +77,7 @@ function futureEvent(state: ReturnType<typeof buildTutorialCheckpoint>, preferen
 }
 
 const stableSteps: TutorialStep[] = [
-  'repair-entry', 'repair-calendar', 'goal-existing', 'intake-entry', 'tasks-intake', 'goal-create', 'goal-link',
+  'repair-entry', 'repair-calendar', 'goal-existing', 'intake-entry',
   'intake-schedule', 'intake-calendar', 'execute-complete', 'execute-partial', 'review-entry', 'review-calendar',
   'stats', 'stats-detail', 'future-entry', 'future-calendar', 'complete', 'free',
 ]
@@ -87,14 +86,13 @@ describe('tutorial v2 flow and checkpoints', () => {
   it('keeps the exact guided route in the required order', () => {
     expect(TUTORIAL_STEPS).toEqual([
       'repair-entry','repair-action','repair-preview','repair-calendar','goal-existing',
-      'intake-entry','intake-source','intake-parse','tasks-intake','goal-create','goal-link','intake-schedule','intake-preview','intake-calendar',
+      'intake-entry','intake-source','intake-parse','intake-schedule','intake-preview','intake-calendar',
       'execute-complete','execute-partial','review-entry','review-carry','review-preview','review-calendar',
       'stats','stats-detail','future-entry','future-action','future-preview','future-calendar','complete','free',
     ])
     expect(tutorialPageForStep('repair-calendar')).toBe('calendar')
-    expect(tutorialPageForStep('goal-create')).toBe('goals')
+    expect(tutorialPageForStep('goal-existing')).toBe('goals')
     expect(tutorialPageForStep('intake-entry')).toBe('intake')
-    expect(tutorialPageForStep('tasks-intake')).toBe('tasks')
     expect(tutorialPageForStep('stats')).toBe('stats')
   })
 
@@ -156,24 +154,17 @@ describe('tutorial v2 flow and checkpoints', () => {
     resetNowProvider()
   })
 
-  it('keeps the parsed batch, new goal, linkage, formal schedule, execution, review and stats checkpoints distinct', () => {
+  it('keeps parsed intake, formal scheduling, execution, review and stats checkpoints distinct', () => {
     setNowProvider(() => new Date(`${anchor}T12:00:00`))
-    const parsed = buildTutorialCheckpoint('tasks-intake', anchor)
+    const parsed = buildTutorialCheckpoint('intake-schedule', anchor)
     const batch = parsed.intakeBatches.find(item => item.id === TUTORIAL_INTAKE_BATCH_ID)!
     expect(batch.taskGroups).toHaveLength(4)
-    expect(batch.taskGroups.every(item => !item.appliedAt)).toBe(true)
-    expect(parsed.goals.some(item => item.id === TUTORIAL_NEW_GOAL_ID)).toBe(false)
-
-    const created = buildTutorialCheckpoint('goal-link', anchor)
-    expect(created.goals.some(item => item.id === TUTORIAL_NEW_GOAL_ID)).toBe(true)
-    expect(created.intakeBatches.find(item => item.id === TUTORIAL_INTAKE_BATCH_ID)!.taskGroups.every(item => item.goalIds.length === 0)).toBe(true)
-
-    const linked = buildTutorialCheckpoint('intake-schedule', anchor)
-    expect(linked.intakeBatches.find(item => item.id === TUTORIAL_INTAKE_BATCH_ID)!.taskGroups.every(item => item.goalIds.includes(TUTORIAL_NEW_GOAL_ID))).toBe(true)
+    expect(batch.taskGroups.every(item => !item.appliedAt && item.goalIds.length === 0)).toBe(true)
 
     const scheduled = buildTutorialCheckpoint('intake-calendar', anchor)
     expect(scheduled.intakeBatches.find(item => item.id === TUTORIAL_INTAKE_BATCH_ID)?.status).toBe('applied')
     expect(scheduled.assignments.filter(item => item.groupId.startsWith('tutorial-added-'))).toHaveLength(7)
+    expect(scheduled.goals.some(item => item.title === '读书报告完成目标')).toBe(true)
 
     const complete = buildTutorialCheckpoint('execute-partial', anchor)
     expect(complete.assignments.find(item => item.id === TUTORIAL_EXECUTE_ASSIGNMENT_ID)).toMatchObject({ status: 'done', actualMinutes: 52 })
@@ -247,8 +238,8 @@ describe('tutorial v2 recovery and action gates', () => {
 
   it('allows only the explicit tutorial mutations before free exploration', () => {
     expect(tutorialAllowsCommit(session('intake-parse'), 'intake-import')).toBe(true)
-    expect(tutorialAllowsCommit(session('goal-create'), 'goal-create')).toBe(true)
-    expect(tutorialAllowsCommit(session('goal-link'), 'goal-link')).toBe(true)
+    expect(tutorialAllowsCommit(session('goal-create'), 'goal-create')).toBe(false)
+    expect(tutorialAllowsCommit(session('goal-link'), 'goal-link')).toBe(false)
     expect(tutorialAllowsCommit(session('execute-complete'), 'execute-task', TUTORIAL_EXECUTE_ASSIGNMENT_ID)).toBe(true)
     expect(tutorialAllowsCommit(session('execute-complete'), 'execute-task', TUTORIAL_PARTIAL_ASSIGNMENT_ID)).toBe(false)
     expect(tutorialAllowsCommit(session('execute-partial'), 'execute-task', TUTORIAL_PARTIAL_ASSIGNMENT_ID)).toBe(true)

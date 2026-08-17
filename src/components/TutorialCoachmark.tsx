@@ -1,5 +1,5 @@
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { LogOut, RotateCcw, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
 import type { TutorialStep } from '../lib/tutorial'
 
 export interface TutorialCoachmarkConfig {
@@ -13,176 +13,174 @@ export interface TutorialCoachmarkConfig {
   onSecondary?: () => void
 }
 
+type FloatingMode = 'above' | 'below' | 'top-dock' | 'bottom-dock'
+type FloatingLayout = { mode: FloatingMode; style: CSSProperties }
+
 function findTarget(target?: string) {
-  if (!target || typeof document === 'undefined') return null
-  for (const candidate of target.split('|').map(item => item.trim()).filter(Boolean)) {
-    const node = document.querySelector<HTMLElement>(`[data-tutorial-target="${candidate}"]`)
-    if (node) return node
+  if (!target) return undefined
+  for (const name of target.split('|').map(item => item.trim()).filter(Boolean)) {
+    const matches = Array.from(document.querySelectorAll<HTMLElement>(`[data-tutorial-target="${name}"]`))
+    const visible = matches.find(element => {
+      const rect = element.getBoundingClientRect()
+      return rect.width > 0 && rect.height > 0
+    })
+    if (visible) return visible
   }
-  return null
+  return undefined
 }
 
-type FloatingPosition = 'top-right' | 'bottom-right' | 'bottom-left' | 'top-left' | 'middle-right' | 'middle-left'
-const floatingPositions: FloatingPosition[] = ['top-right', 'bottom-right', 'bottom-left', 'top-left', 'middle-right', 'middle-left']
-
-function overlapArea(a: DOMRect, b: DOMRect) {
-  const width = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left))
-  const height = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top))
-  return width * height
-}
-
-function candidateRect(position: FloatingPosition, width: number, height: number) {
-  const compact = window.innerWidth <= 640
-  const side = compact ? 10 : 18
-  const top = compact ? 82 : 80
-  const bottom = compact ? 14 : 18
-  const x = position.endsWith('right') ? Math.max(side, window.innerWidth - side - width) : side
-  const y = position.startsWith('top') ? top
-    : position.startsWith('bottom') ? Math.max(top, window.innerHeight - bottom - height)
-      : Math.max(top, (window.innerHeight - height) / 2)
-  return new DOMRect(x, y, width, height)
-}
-
-function safeFloatingPositions(target: HTMLElement, coach: HTMLElement) {
-  const scope = target.closest<HTMLElement>('.modal-card') ?? document.body
-  const targetRect = target.getBoundingClientRect()
-  const width = Math.min(coach.offsetWidth || 300, Math.max(220, window.innerWidth - 20))
-  const height = Math.min(coach.offsetHeight || 170, Math.max(120, window.innerHeight - 28))
-  const controls = Array.from(scope.querySelectorAll<HTMLElement>('button, a[href], input, textarea, select, [role="button"]')).filter(node => {
-    if (node.closest('[data-tutorial-control]')) return false
-    if (node.matches(':disabled, [aria-disabled="true"], .tutorial-disabled-control')) return false
-    if (node.closest('.tutorial-disabled-control, [aria-disabled="true"]')) return false
-    const rect = node.getBoundingClientRect()
-    return rect.width > 2 && rect.height > 2
+function renderEmphasized(text: string): ReactNode[] {
+  return text.split(/([“”「」][^“”「」]+[“”「」])/g).filter(Boolean).map((part, index) => {
+    if (/^[“「].+[”」]$/.test(part)) return <strong className="tutorial-inline-emphasis" key={`${part}-${index}`}>{part}</strong>
+    return <span key={`${part}-${index}`}>{part}</span>
   })
-
-  const ranked = floatingPositions.map(position => {
-    const rect = candidateRect(position, width, height)
-    const targetOverlap = overlapArea(rect, targetRect)
-    const controlOverlap = controls.reduce((sum, node) => sum + overlapArea(rect, node.getBoundingClientRect()), 0)
-    return { position, targetOverlap, controlOverlap, score: targetOverlap * 1000 + controlOverlap }
-  }).sort((a, b) => a.score - b.score)
-
-  const completelySafe = ranked.filter(item => item.targetOverlap === 0 && item.controlOverlap === 0)
-  if (completelySafe.length) return completelySafe.map(item => item.position)
-  const targetSafe = ranked.filter(item => item.targetOverlap === 0)
-  if (targetSafe.length) return targetSafe.slice(0, 2).map(item => item.position)
-  return [ranked[0].position]
 }
 
-function emphasizedText(text: string) {
-  const parts = text.split(/(“[^”]+”|「[^」]+」|《[^》]+》)/g)
-  return parts.map((part, index) => /^(“[^”]+”|「[^」]+」|《[^》]+》)$/.test(part)
-    ? <strong className="tutorial-inline-emphasis" key={`${part}-${index}`}>{part}</strong>
-    : part)
+function visibleViewport() {
+  const viewport = window.visualViewport
+  return {
+    top: viewport?.offsetTop ?? 0,
+    left: viewport?.offsetLeft ?? 0,
+    width: viewport?.width ?? window.innerWidth,
+    height: viewport?.height ?? window.innerHeight,
+  }
 }
 
-export function TutorialCoachmark({ step, config, onExit, onRestart }: {
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value))
+}
+
+export function TutorialCoachmark({ step, config, onRestart, onExit }: {
   step: TutorialStep
-  config: TutorialCoachmarkConfig
-  onExit: () => void
+  config?: TutorialCoachmarkConfig
   onRestart: () => void
+  onExit: () => void
 }) {
+  const coachRef = useRef<HTMLDivElement>(null)
+  const targetRef = useRef<HTMLElement>()
   const [collapsed, setCollapsed] = useState(false)
   const [floating, setFloating] = useState(false)
-  const [safePositions, setSafePositions] = useState<FloatingPosition[]>(floatingPositions)
-  const [position, setPosition] = useState<FloatingPosition>('top-right')
-  const coachRef = useRef<HTMLElement>(null)
+  const [layout, setLayout] = useState<FloatingLayout>()
+
+  useEffect(() => { setCollapsed(false) }, [step])
 
   useEffect(() => {
-    setCollapsed(false)
-    setFloating(false)
-    setSafePositions(floatingPositions)
-    setPosition('top-right')
-  }, [step])
-
-  useEffect(() => {
-    let stopped = false
+    let target: HTMLElement | undefined
+    let cancelled = false
     const timers: number[] = []
-    const clearHighlight = () => document.querySelectorAll('.tutorial-highlight').forEach(node => node.classList.remove('tutorial-highlight'))
-    if (collapsed) {
-      clearHighlight()
-      return () => clearHighlight()
-    }
-    const reveal = (scroll = false) => {
-      if (stopped) return false
-      clearHighlight()
-      const target = findTarget(config.target)
-      if (!target) return false
-      target.classList.add('tutorial-highlight')
-      setFloating(Boolean(target.closest('.modal-card')))
-      if (scroll) {
-        const rect = target.getBoundingClientRect()
-        const comfortablyVisible = rect.top >= 112 && rect.bottom <= window.innerHeight - 48
-        if (!comfortablyVisible) target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    const locate = () => {
+      if (cancelled || collapsed) return
+      const found = findTarget(config?.target)
+      if (!found) return
+      if (target && target !== found) target.classList.remove('tutorial-highlight')
+      target = found
+      targetRef.current = found
+      found.classList.add('tutorial-highlight')
+      const inModal = Boolean(found.closest('.modal-card'))
+      setFloating(inModal)
+      const rect = found.getBoundingClientRect()
+      const viewport = visibleViewport()
+      const safeTop = viewport.top + 76
+      const safeBottom = viewport.top + viewport.height - 28
+      if (rect.top < safeTop || rect.bottom > safeBottom) {
+        found.scrollIntoView({ behavior: 'smooth', block: inModal ? 'nearest' : 'center', inline: 'nearest' })
       }
-      return true
     }
-    for (const delay of [0, 100, 280, 650]) {
-      timers.push(window.setTimeout(() => {
-        if (reveal(delay >= 100)) timers.splice(0).forEach(id => window.clearTimeout(id))
-      }, delay))
-    }
+    locate()
+    for (const delay of [80, 220, 520, 900]) timers.push(window.setTimeout(locate, delay))
     return () => {
-      stopped = true
-      timers.forEach(id => window.clearTimeout(id))
-      clearHighlight()
+      cancelled = true
+      timers.forEach(window.clearTimeout)
+      target?.classList.remove('tutorial-highlight')
+      if (targetRef.current === target) targetRef.current = undefined
     }
-  }, [step, config.target, collapsed])
+  }, [step, config?.target, collapsed])
 
   useEffect(() => {
-    if (!floating || collapsed) return
+    if (!floating || collapsed || !config) { setLayout(undefined); return }
     let frame = 0
-    const refresh = () => {
+    const update = () => {
       window.cancelAnimationFrame(frame)
       frame = window.requestAnimationFrame(() => {
-        const target = findTarget(config.target)
+        const target = targetRef.current
         const coach = coachRef.current
         if (!target || !coach) return
-        const next = safeFloatingPositions(target, coach)
-        setSafePositions(current => current.join('|') === next.join('|') ? current : next)
-        setPosition(current => next.includes(current) ? current : next[0])
+        const targetRect = target.getBoundingClientRect()
+        const viewport = visibleViewport()
+        const viewportBottom = viewport.top + viewport.height
+        const viewportRight = viewport.left + viewport.width
+        const isMobile = viewport.width <= 640
+        const measuredHeight = Math.max(90, coach.offsetHeight)
+
+        if (isMobile) {
+          const width = Math.max(260, viewport.width - 20)
+          const targetMiddle = targetRect.top + targetRect.height / 2
+          const dockBottom = targetMiddle < viewport.top + viewport.height / 2
+          const top = dockBottom
+            ? Math.max(viewport.top + 10, viewportBottom - measuredHeight - 10)
+            : viewport.top + 10
+          setLayout({
+            mode: dockBottom ? 'bottom-dock' : 'top-dock',
+            style: { top, left: viewport.left + 10, width },
+          })
+          return
+        }
+
+        const width = Math.min(320, Math.max(260, viewport.width - 32))
+        const gap = 12
+        const roomBelow = viewportBottom - targetRect.bottom
+        const roomAbove = targetRect.top - viewport.top
+        const below = roomBelow >= measuredHeight + gap || roomBelow >= roomAbove
+        const top = below
+          ? Math.min(viewportBottom - measuredHeight - 12, targetRect.bottom + gap)
+          : Math.max(viewport.top + 12, targetRect.top - measuredHeight - gap)
+        const left = clamp(targetRect.left + targetRect.width / 2 - width / 2, viewport.left + 16, viewportRight - width - 16)
+        setLayout({ mode: below ? 'below' : 'above', style: { top, left, width } })
       })
     }
-    refresh()
-    window.addEventListener('resize', refresh)
-    window.addEventListener('scroll', refresh, true)
+    update()
+    const delayed = window.setTimeout(update, 80)
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    window.visualViewport?.addEventListener('resize', update)
+    window.visualViewport?.addEventListener('scroll', update)
     return () => {
       window.cancelAnimationFrame(frame)
-      window.removeEventListener('resize', refresh)
-      window.removeEventListener('scroll', refresh, true)
+      window.clearTimeout(delayed)
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+      window.visualViewport?.removeEventListener('resize', update)
+      window.visualViewport?.removeEventListener('scroll', update)
     }
-  }, [floating, collapsed, config.target, step])
+  }, [floating, collapsed, step, config])
 
-  if (collapsed) return <div className="tutorial-coachmark-collapsed tutorial-coachmark-reopen" data-tutorial-control>
-    <button type="button" className="primary-button" onClick={() => setCollapsed(false)}>重新打开提示</button>
-    <button type="button" className="text-button" onClick={onExit}>退出教程</button>
-  </div>
+  if (!config) return null
+  if (collapsed) {
+    return <div className={`tutorial-coachmark-collapsed ${floating ? 'tutorial-coachmark-reopen' : ''}`}>
+      <button className="primary-button" onClick={() => setCollapsed(false)}>重新打开提示</button>
+      <button className="text-button" onClick={onExit}>退出教程</button>
+    </div>
+  }
 
-  const moveToNextSafePosition = () => setPosition(current => {
-    const index = Math.max(0, safePositions.indexOf(current))
-    return safePositions[(index + 1) % safePositions.length] ?? current
-  })
-
-  return <aside ref={coachRef} className={`tutorial-coachmark ${floating ? `tutorial-coachmark-floating tutorial-position-${position}` : ''}`} role="region" aria-label="互动体验引导" aria-live="polite" data-tutorial-control>
+  const floatingClass = floating && layout ? ` tutorial-coachmark-floating tutorial-placement-${layout.mode}` : ''
+  return <div ref={coachRef} style={floating && layout ? layout.style : undefined} className={`tutorial-coachmark${floatingClass}`} role="status" aria-live="polite">
     <div className="tutorial-coachmark-head">
-      <span>{config.eyebrow ?? '互动体验'}</span>
+      <span>{config.eyebrow ?? '互动教程'}</span>
       <div>
-        {floating && safePositions.length > 1 && <button type="button" className="tutorial-position-button" aria-label="移动到其他安全位置" title="只在不遮挡当前操作的位置之间切换" onClick={moveToNextSafePosition} data-tutorial-control>换空位</button>}
-        <button type="button" className="tutorial-icon-button" aria-label="重新开始教程" title="重新开始" onClick={onRestart} data-tutorial-control><RotateCcw size={14}/></button>
-        <button type="button" className="tutorial-icon-button" aria-label="收起当前提示" title="收起提示，可稍后重新打开" onClick={() => setCollapsed(true)} data-tutorial-control><X size={15}/></button>
+        <button className="tutorial-icon-button" onClick={onRestart} title="从头开始" aria-label="从头开始"><RotateCcw size={14}/></button>
+        <button className="tutorial-icon-button" onClick={() => setCollapsed(true)} title="收起提示" aria-label="收起提示"><X size={15}/></button>
       </div>
     </div>
     <div className="tutorial-coachmark-copy">
       {config.headline && <strong className="tutorial-coachmark-title">{config.headline}</strong>}
-      <p>{emphasizedText(config.text)}</p>
+      <p>{renderEmphasized(config.text)}</p>
     </div>
+    {(config.secondaryLabel || config.actionLabel) && <div className="tutorial-coachmark-actions">
+      {config.secondaryLabel && <button className="secondary-button" onClick={config.onSecondary}>{config.secondaryLabel}</button>}
+      {config.actionLabel && <button className="primary-button" onClick={config.onAction}>{config.actionLabel}</button>}
+    </div>}
     <div className="tutorial-coachmark-footer">
-      <button type="button" className="tutorial-exit-button" onClick={onExit} data-tutorial-control><LogOut size={13}/>退出教程</button>
-      {(config.actionLabel || config.secondaryLabel) && <div className="tutorial-coachmark-actions">
-        {config.secondaryLabel && <button type="button" className="text-button" onClick={config.onSecondary} data-tutorial-control>{config.secondaryLabel}</button>}
-        {config.actionLabel && <button type="button" className="primary-button" onClick={config.onAction} data-tutorial-control>{config.actionLabel}</button>}
-      </div>}
+      <button className="tutorial-exit-button" onClick={onExit}><LogOut size={13}/>退出教程</button>
     </div>
-  </aside>
+  </div>
 }

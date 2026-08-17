@@ -125,3 +125,41 @@
   :where(.today-page,.calendar-page,.tasks-page,.intake-shell,.goals-page,.stats-page,.guide-page,.settings-stack) { animation: none; }
   .tutorial-highlight { animation: none; }
 }
+
+/* v3 coachmark: anchor to the explained control instead of roaming between screen corners. */
+.tutorial-coachmark-floating{
+  position:fixed!important;
+  z-index:2700!important;
+  margin:0!important;
+  max-height:min(42vh,260px);
+  overflow:auto;
+  border-color:color-mix(in srgb,var(--primary,#4f6ef7) 36%,var(--line,#e7ebf1));
+  box-shadow:0 16px 42px rgba(20,28,45,.2);
+}
+.tutorial-coachmark-floating::after{
+  content:'';
+  position:absolute;
+  width:12px;
+  height:12px;
+  background:var(--surface,#fff);
+  border:1px solid color-mix(in srgb,var(--primary,#4f6ef7) 36%,var(--line,#e7ebf1));
+  transform:rotate(45deg);
+  left:50%;
+  margin-left:-6px;
+}
+.tutorial-placement-below::after{top:-7px;border-right:0;border-bottom:0}
+.tutorial-placement-above::after{bottom:-7px;border-left:0;border-top:0}
+.tutorial-placement-top-dock::after,
+.tutorial-placement-bottom-dock::after{display:none}
+@media(max-width:640px){
+  .tutorial-coachmark-floating{
+    max-height:min(190px,36vh);
+    border-radius:14px;
+    box-shadow:0 12px 34px rgba(20,28,45,.18);
+  }
+  .tutorial-placement-top-dock,
+  .tutorial-placement-bottom-dock{
+    background:color-mix(in srgb,var(--surface,#fff) 97%,transparent);
+    backdrop-filter:blur(14px);
+  }
+}

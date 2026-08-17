@@ -2436,3 +2436,34 @@ body{
 .task-bulk-bar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:11px 0;padding:10px 12px;border:1px solid #d8e4f4;border-radius:12px;background:#f7faff;color:var(--muted);font-size:12px}.task-bulk-bar strong{color:var(--text);font-size:12px}.task-bulk-bar button{min-height:36px}.task-bulk-select{display:inline-flex;align-items:center;gap:7px;margin-right:3px;color:var(--text);font-size:12px}.task-bulk-select input,.assignment-select-checkbox input{accent-color:var(--primary)}.assignment-list-card{grid-template-columns:auto minmax(0,1fr) auto}.assignment-list-card.selected{border-color:#8eb2f0;background:#f7faff}.assignment-select-checkbox{display:flex;align-items:flex-start;padding:4px 0 0 2px;cursor:pointer}.assignment-select-checkbox input{width:17px;height:17px;margin:0}
 .adjustment-preference-options button{position:relative}.adjustment-preference-options .choice-indicator{position:absolute;right:8px;top:7px;color:var(--muted);background:#edf1f6;border-radius:999px;padding:3px 6px;font-size:9px;font-weight:800;line-height:1}.adjustment-preference-options button.selected .choice-indicator{color:var(--primary);background:#dceaff}
 @media(max-width:760px){.task-bulk-bar{align-items:flex-start}.task-bulk-bar .task-bulk-select{width:100%;margin-bottom:2px}.task-bulk-bar button{flex:1 1 auto;min-width:0}.assignment-list-card{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start}.assignment-list-actions{grid-column:2;justify-content:flex-start}}
+
+/* v0.9 tutorial: visible viewport modal guarantee */
+@media(max-width:760px){
+  .modal-backdrop:has(.modal-mobile-fullscreen){
+    align-items:flex-start!important;
+    place-items:start stretch!important;
+    overflow:hidden!important;
+  }
+  .modal-card.modal-mobile-fullscreen{
+    height:var(--modal-visible-height,100svh)!important;
+    max-height:var(--modal-visible-height,100svh)!important;
+    min-height:0!important;
+    display:flex!important;
+    flex-direction:column!important;
+    overflow:hidden!important;
+  }
+  .modal-card.modal-mobile-fullscreen .modal-header{flex:0 0 auto!important}
+  .modal-card.modal-mobile-fullscreen .modal-body{
+    flex:1 1 0!important;
+    min-height:0!important;
+    overflow-y:auto!important;
+    overscroll-behavior:contain;
+    -webkit-overflow-scrolling:touch;
+  }
+  .modal-card.modal-mobile-fullscreen .modal-footer{
+    position:relative!important;
+    inset:auto!important;
+    flex:0 0 auto!important;
+    z-index:10!important;
+  }
+}

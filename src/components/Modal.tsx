@@ -14,9 +14,7 @@ function splitTrailingModalActions(node: ReactNode): { content: ReactNode; actio
   if (!items.length) return { content: node }
 
   const last = items[items.length - 1]
-  if (isModalActions(last)) {
-    return { content: items.slice(0, -1), actions: last }
-  }
+  if (isModalActions(last)) return { content: items.slice(0, -1), actions: last }
 
   if (isValidElement(last)) {
     const element = last as ChildElement
@@ -40,6 +38,7 @@ export function Modal({ open, title, children, footer, onClose, wide = false, mo
   onCloseRef.current = onClose
   if (!titleIdRef.current) titleIdRef.current = `modal-title-${Math.random().toString(36).slice(2, 10)}`
   const titleId = titleIdRef.current
+
   useEffect(() => {
     if (!open) return
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -81,6 +80,25 @@ export function Modal({ open, title, children, footer, onClose, wide = false, mo
       previousFocusRef.current?.focus()
     }
   }, [open])
+
+  useEffect(() => {
+    if (!open || !mobileFullscreen) return
+    const viewport = window.visualViewport
+    const syncVisibleHeight = () => {
+      const visibleHeight = Math.max(320, Math.round(viewport?.height ?? window.innerHeight))
+      dialogRef.current?.style.setProperty('--modal-visible-height', `${visibleHeight}px`)
+    }
+    syncVisibleHeight()
+    viewport?.addEventListener('resize', syncVisibleHeight)
+    viewport?.addEventListener('scroll', syncVisibleHeight)
+    window.addEventListener('resize', syncVisibleHeight)
+    return () => {
+      viewport?.removeEventListener('resize', syncVisibleHeight)
+      viewport?.removeEventListener('scroll', syncVisibleHeight)
+      window.removeEventListener('resize', syncVisibleHeight)
+    }
+  }, [open, mobileFullscreen])
+
   if (!open) return null
 
   const extracted = footer ? { content: children, actions: undefined } : splitTrailingModalActions(children)
