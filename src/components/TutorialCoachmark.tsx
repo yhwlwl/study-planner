@@ -21,6 +21,8 @@ function findTarget(target?: string) {
   return null
 }
 
+const floatingPositions = ['top-right', 'bottom-right', 'bottom-left'] as const
+
 export function TutorialCoachmark({ step, config, onExit, onRestart }: {
   step: TutorialStep
   config: TutorialCoachmarkConfig
@@ -29,6 +31,7 @@ export function TutorialCoachmark({ step, config, onExit, onRestart }: {
 }) {
   const [collapsed, setCollapsed] = useState(false)
   const [floating, setFloating] = useState(false)
+  const [positionIndex, setPositionIndex] = useState(0)
 
   useEffect(() => { setCollapsed(false); setFloating(false) }, [step])
 
@@ -66,17 +69,19 @@ export function TutorialCoachmark({ step, config, onExit, onRestart }: {
     }
   }, [step, config.target, collapsed])
 
-  if (collapsed) return <div className="tutorial-coachmark-collapsed" data-tutorial-control>
-    <button type="button" className="secondary-button" onClick={() => setCollapsed(false)}>查看当前提示</button>
+  if (collapsed) return <div className="tutorial-coachmark-collapsed tutorial-coachmark-reopen" data-tutorial-control>
+    <button type="button" className="primary-button" onClick={() => setCollapsed(false)}>重新打开提示</button>
     <button type="button" className="text-button" onClick={onExit}>退出教程</button>
   </div>
 
-  return <aside className={`tutorial-coachmark ${floating ? 'tutorial-coachmark-floating' : ''}`} role="region" aria-label="互动体验引导" aria-live="polite" data-tutorial-control>
+  const position = floatingPositions[positionIndex % floatingPositions.length]
+  return <aside className={`tutorial-coachmark ${floating ? `tutorial-coachmark-floating tutorial-position-${position}` : ''}`} role="region" aria-label="互动体验引导" aria-live="polite" data-tutorial-control>
     <div className="tutorial-coachmark-head">
       <span>{config.eyebrow ?? '互动体验'}</span>
       <div>
+        {floating && <button type="button" className="tutorial-position-button" aria-label="移动提示位置" title="换个位置" onClick={() => setPositionIndex(current => (current + 1) % floatingPositions.length)} data-tutorial-control>换位置</button>}
         <button type="button" className="tutorial-icon-button" aria-label="重新开始教程" title="重新开始" onClick={onRestart} data-tutorial-control><RotateCcw size={14}/></button>
-        <button type="button" className="tutorial-icon-button" aria-label="收起当前提示" title="收起提示" onClick={() => setCollapsed(true)} data-tutorial-control><X size={15}/></button>
+        <button type="button" className="tutorial-icon-button" aria-label="收起当前提示" title="收起提示，可稍后重新打开" onClick={() => setCollapsed(true)} data-tutorial-control><X size={15}/></button>
       </div>
     </div>
     <p>{config.text}</p>

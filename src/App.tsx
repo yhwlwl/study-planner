@@ -211,6 +211,7 @@ export default function App() {
     try {
       const next = ensureTutorialIntakeBatch(stateRef.current, updated.anchorDate)
       await persistTutorialState(next)
+      tutorialNotice('接下来：体验自然语言录入')
       setPage('intake')
     } finally {
       tutorialTransitionRunning.current = false
@@ -1037,7 +1038,7 @@ export default function App() {
       'repair-preview': { target: 'proposal-primary', text: '先看完整变更：已完成任务保持不变、锁定任务保持不变，同时缓解目标风险。确认后才会改计划。' },
       'repair-calendar': { text: '刚才的调整已经落到计划里了。高亮日期就是发生变化的位置。', actionLabel: '继续：看看目标', onAction: () => advanceTutorialStable('repair-calendar', 'goal-existing') },
       'goal-existing': { target: 'tutorial-goal-view', text: '先看看刚才受影响的目标。排期会考虑目标和截止时间，不只是把任务放进日历。' },
-      'intake-source': { target: 'tutorial-parse|tutorial-natural-text', text: '又收到了一批新作业。这里模拟自然语言录入，示例文字已经固定好，亲手点“解析并预览”。' },
+      'intake-source': { target: 'tutorial-parse|tutorial-natural-text', eyebrow: '下一步 · 自然语言录入', text: '又收到了一批新作业。这里模拟自然语言录入，示例文字已经固定好，亲手点“解析并预览”。' },
       'intake-parse': { target: 'tutorial-import-confirm', text: '现在看到的是结构化识别结果。确认后，它们只会进入待排期区，还不会进日历。' },
       'tasks-intake': { target: 'tutorial-task-intake-list', text: '任务已经记下来了，但还没有正式日期：录入不等于排期。', actionLabel: '继续：新建目标', onAction: openTutorialGoalCreate },
       'goal-create': { target: 'tutorial-goal-create|tutorial-goal-create-confirm', text: '现在给刚才那批任务建立一个共同目标。字段已预填，亲手确认创建。' },
@@ -1105,11 +1106,11 @@ export default function App() {
             {page === 'export' && <ExportPage onNavigate={target => navigate(target)}/>}
             {page === 'guide' && <GuidePage onNavigate={target => navigate(target)} onStartTutorial={() => setTutorialOfferOpen(true)}/>}
           </Suspense>
-          {page === 'settings' && <SettingsPage sessionUserId={sessionUser?.id} sessionEmail={sessionUser?.email} cloudMessage={cloudMessage} onCloudUpload={uploadCloudNow} onPrepared={openPrepared} onStartTutorial={() => setTutorialOfferOpen(true)}/>}
+          {page === 'settings' && <SettingsPage sessionUserId={sessionUser?.id} sessionEmail={sessionUser?.email} cloudMessage={cloudMessage} onCloudUpload={uploadCloudNow} onPrepared={openPrepared}/>}
         </div>
       </main>
       <Modal open={tutorialOfferOpen} title="体验完整流程" onClose={() => { markTutorialOfferDismissed(); setTutorialOfferOpen(false) }}>
-        <div className="tutorial-offer-copy"><p>这是一个独立的演示教程，会带你一步一步体验：计划修复、目标、录入、排期、执行、复盘和调整。</p><p>教程使用演示数据，不会修改你的真实计划。</p></div>
+        <div className="tutorial-offer-copy"><p>这是一个独立的演示教程，会带你一步一步体验：计划修复、目标、录入、排期、执行、复盘和调整。</p><p>教程使用演示数据，不会修改你的真实计划。</p><p>如果暂时关闭，之后可以在“使用教程”里重新打开。</p></div>
         <div className="modal-actions"><button className="secondary-button" onClick={() => { markTutorialOfferDismissed(); setTutorialOfferOpen(false); if (!state.assignments.length) setPage('intake') }}>直接开始我的计划</button><button className="primary-button" onClick={() => { setTutorialOfferOpen(false); void startTutorial() }}>开始体验</button></div>
       </Modal>
       <AddTaskDialog open={addTaskOpen} onClose={() => setAddTaskOpen(false)} onSelect={selectTaskCreation}/>
@@ -2399,7 +2400,7 @@ function TasksPage({ onOpenIntake, onPrepared, tutorialMode = false, tutorialSte
   </>
 }
 
-function SettingsPage({ sessionUserId, sessionEmail, cloudMessage, onCloudUpload, onPrepared, onStartTutorial }: { sessionUserId?: string; sessionEmail?: string; cloudMessage?: string; onCloudUpload: () => Promise<string>; onPrepared: (state: AppState, event: PlanChangeEvent) => void; onStartTutorial: () => void }) {
+function SettingsPage({ sessionUserId, sessionEmail, cloudMessage, onCloudUpload, onPrepared }: { sessionUserId?: string; sessionEmail?: string; cloudMessage?: string; onCloudUpload: () => Promise<string>; onPrepared: (state: AppState, event: PlanChangeEvent) => void }) {
   const { state, namespace, updateSettings, undo, canUndo, replaceState, resetAll, restoreReplanHistory, previewPlanVersion, restorePlanVersion } = useApp()
   const [email,setEmail]=useState('')
   const [password,setPassword]=useState('')
@@ -2472,7 +2473,6 @@ function SettingsPage({ sessionUserId, sessionEmail, cloudMessage, onCloudUpload
     onPrepared(prepared, event)
   }
   return <div className="settings-stack">
-    <SettingsSection title="交互教程" description="教程使用独立数据空间，不会改动当前计划；随时退出都会回到这里。"><div className="button-wrap"><button className="secondary-button" onClick={onStartTutorial}>重新体验完整流程</button></div></SettingsSection>
     <SettingsSection title="计划基础" description="目标日期已统一迁移到“目标”页面，这里只保留计划边界和默认风格，避免多个可编辑真相。"><div className="form-grid"><label className="field span-2"><span>计划名称</span><input value={planNameDraft} onChange={event=>setPlanNameDraft(event.target.value)} onBlur={()=>planNameDraft!==state.settings.planName&&updateSettings({planName:planNameDraft})}/></label><label className="field"><span>开始日期</span><input type="date" value={state.settings.startDate} onChange={event=>prepareSettingsChange({startDate:event.target.value}, '调整计划开始日期', 'availability-change')}/></label><label className="field"><span>结束日期</span><input type="date" value={state.settings.endDate} onChange={event=>prepareSettingsChange({endDate:event.target.value}, '调整计划结束日期', 'availability-change')}/></label><label className="field"><span>默认排期风格</span><select value={state.settings.planningMode} onChange={event=>updateSettings({planningMode:event.target.value as AppState['settings']['planningMode']})}><option value="sprint">冲刺</option><option value="balanced">平衡</option><option value="relaxed">轻松</option></select></label></div></SettingsSection>
     <SettingsSection title="显示" description="跟随系统适合多设备使用；深色模式会同步调整页面、弹窗、表单和统计图表的对比度。"><div className="form-grid"><label className="field"><span>颜色模式</span><select value={state.settings.theme} onChange={event=>updateSettings({theme:event.target.value as AppState['settings']['theme']})}><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label></div></SettingsSection>
     <details className="settings-advanced"><summary>高级排期参数</summary><div className="settings-advanced-body">

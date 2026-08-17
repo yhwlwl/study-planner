@@ -26,9 +26,10 @@ export function GuidePage({ onNavigate, onStartTutorial }: { onNavigate: (page: 
         <p>这不是一张静态待办清单。你先收集任务、设置可用时间，再用今日执行和复盘记录真实进展。现实变化时，系统只在你确认后修复计划。</p>
         <div className="guide-hero-actions">
           <button type="button" className="primary-button" onClick={() => onNavigate('intake')}><Inbox size={16}/>开始录入任务</button>
-          {onStartTutorial && <button type="button" className="secondary-button" onClick={onStartTutorial}><RefreshCw size={16}/>体验完整流程</button>}
+          {onStartTutorial && <button type="button" className="secondary-button" onClick={onStartTutorial}><RefreshCw size={16}/>打开互动教程</button>}
           <a className="secondary-button" href={GITHUB_REPO_URL} target="_blank" rel="noreferrer"><Github size={16}/>查看 GitHub 仓库<ArrowUpRight size={14}/></a>
         </div>
+        {onStartTutorial && <p className="muted-text">互动教程使用独立演示数据；步骤提示可以随时收起，并通过右下角“重新打开提示”继续。</p>}
       </div>
       <figure className="guide-hero-figure">
         <img src={todayImage} alt="今日执行页面，展示当天任务、实际用时与完成入口" />

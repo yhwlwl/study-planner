@@ -36,7 +36,8 @@ check('00 入口', '教程版本独立升级到 v2', has(source.tutorial, 'TUTOR
 check('00 入口', '首次空白游客只弹介绍、不自动启动', has(source.app, '!tutorialCompleted()', 'setTutorialOfferOpen(true)') && lacks(source.app, "if (namespace === 'guest' && !sessionUser && !loadedFromStorage && !tutorialCompleted()) {\n      void startTutorial"))
 check('00 入口', '介绍弹窗明确独立演示和不修改真实计划', has(source.app, 'title="体验完整流程"', '这是一个独立的演示教程', '教程使用演示数据，不会修改你的真实计划。'))
 check('00 入口', '介绍弹窗可开始或直接跳过', has(source.app, '直接开始我的计划', '开始体验', 'markTutorialOfferDismissed'))
-check('00 入口', '设置和帮助均可重开完整体验', has(source.app, 'onStartTutorial={() => setTutorialOfferOpen(true)}') && has(source.guide, 'onStartTutorial', '体验完整流程'))
+check('00 入口', '介绍弹窗说明关闭后可在使用教程重新打开', has(source.app, '之后可以在“使用教程”里重新打开'))
+check('00 入口', '互动教程入口归到使用教程页，设置页不再重复', has(source.guide, 'onStartTutorial', '打开互动教程', '重新打开提示') && lacks(source.app, 'title="交互教程"'))
 
 for (const step of expectedSteps) check('01 状态机', `存在步骤 ${step}`, source.tutorial.includes(`'${step}'`))
 check('01 状态机', '页面映射覆盖月历/目标/录入/任务/统计', has(source.tutorial, "'repair-calendar', 'intake-calendar', 'review-calendar', 'future-calendar'", "'goal-existing', 'goal-create', 'goal-link'", "step === 'tasks-intake'", "'stats', 'stats-detail'"))
@@ -121,9 +122,13 @@ check('20 结束', '结束文案包含完整闭环并有两个出口', has(sourc
 check('20 结束', '继续看看进入 free，真实计划仍隔离', has(source.app, "advanceTutorialOnly('complete', 'free')") && has(source.tutorial, "session.step === 'free'"))
 
 check('21 引导体验', '每一个教程步骤都有 coach config', expectedSteps.filter(step => step !== 'free').every(step => source.app.includes(`'${step}':`) || source.app.includes(`${step}:`)))
-check('21 引导体验', '引导关闭只收起当前提示，不退出教程', has(source.coach, 'setCollapsed(true)', '查看当前提示') && lacks(source.coach, 'aria-label="关闭当前提示" onClick={onExit}'))
+check('21 引导体验', '引导关闭只收起当前提示，且有明确重新打开入口', has(source.coach, 'setCollapsed(true)', '重新打开提示') && lacks(source.coach, 'aria-label="关闭当前提示" onClick={onExit}'))
 check('21 引导体验', '引导为普通文档流而非覆盖悬浮', has(source.css, '.tutorial-coachmark {\n  position: relative;'))
 check('21 引导体验', '弹窗步骤自动切为小型可关闭浮层并高于 Modal', has(source.coach, "target.closest('.modal-card')", 'tutorial-coachmark-floating') && has(source.css, '.tutorial-coachmark-floating {', 'z-index: 180'))
+check('21 引导体验', '弹窗浮层可在三个位置间切换', has(source.coach, "['top-right', 'bottom-right', 'bottom-left']", '移动提示位置') && has(source.css, '.tutorial-position-top-right', '.tutorial-position-bottom-right', '.tutorial-position-bottom-left'))
+check('21 引导体验', '移动端教程介绍弹窗保留顶部安全间距', has(source.css, '.modal-backdrop:has(.tutorial-offer-copy)', 'env(safe-area-inset-top)'))
+check('21 引导体验', '任务与目标教学文字在窄屏保持自然排版', has(source.css, '.tutorial-pending-item > span', '[data-tutorial-target="tutorial-goal-link"]', 'white-space: nowrap'))
+check('21 引导体验', '教程页面切换使用轻量进入动画且尊重减少动画偏好', has(source.css, '@keyframes tutorial-page-enter', '@media (prefers-reduced-motion: reduce)'))
 check('21 引导体验', '目标高亮有限重试，不持续 mutation/scroll 追踪', has(source.coach, 'for (const delay of [0, 100, 280, 650])') && lacks(source.coach, 'MutationObserver'))
 
 check('22 显示但阻止', '侧栏仍完整渲染，错误导航由 navigate 拦截', has(source.app, 'navItems.map', 'tutorialAllowsPage', 'tutorialNotice()'))
