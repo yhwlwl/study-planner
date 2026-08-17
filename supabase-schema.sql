@@ -83,3 +83,37 @@ create index if not exists visit_logs_event_type_idx on public.visit_logs (event
 create index if not exists visit_logs_attribution_idx on public.visit_logs (utm_source, utm_campaign, occurred_at desc);
 
 comment on table public.visit_logs is 'Server-written access logs. IP-derived location is approximate and may be affected by VPN/proxy.';
+
+-- 用户意见反馈。游客与登录用户都可提交，但浏览器端不能读取、修改或删除任何反馈。
+create table if not exists public.feedback_submissions (
+  id uuid primary key default gen_random_uuid(),
+  feedback_type text not null check (feedback_type in ('bug', 'feature')),
+  content text not null check (char_length(btrim(content)) between 1 and 4000),
+  user_id uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+alter table public.feedback_submissions enable row level security;
+
+revoke all on table public.feedback_submissions from anon, authenticated;
+grant insert on table public.feedback_submissions to anon, authenticated;
+grant select, insert, update, delete on table public.feedback_submissions to service_role;
+
+drop policy if exists "Guests can submit feedback" on public.feedback_submissions;
+create policy "Guests can submit feedback"
+on public.feedback_submissions
+for insert
+to anon
+with check (user_id is null);
+
+drop policy if exists "Authenticated users can submit feedback" on public.feedback_submissions;
+create policy "Authenticated users can submit feedback"
+on public.feedback_submissions
+for insert
+to authenticated
+with check ((select auth.uid()) = user_id);
+
+create index if not exists feedback_submissions_created_at_idx on public.feedback_submissions (created_at desc);
+create index if not exists feedback_submissions_type_created_at_idx on public.feedback_submissions (feedback_type, created_at desc);
+
+comment on table public.feedback_submissions is 'User-submitted bug reports and feature requests. Frontend roles may insert only; feedback is not readable from the client.';
