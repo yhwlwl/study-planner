@@ -7,6 +7,7 @@ import { SCHEMA_VERSION } from '../types'
 import { dateRange, shiftDate, todayISO } from './date'
 import { uid } from './id'
 import { updateGoalAndGroupLifecycle } from './goals'
+import { safeExecutionDate } from './execution'
 
 const DEFAULT_SUBJECTS = ['语文', '数学', '英语', '物理', '化学', '生物', '其他']
 
@@ -56,6 +57,7 @@ export function defaultSettings(input: Partial<AppSettings> = {}): AppSettings {
     maxLoadChangeRatio: 0.15,
     customSubjects: DEFAULT_SUBJECTS,
     duration: { enabled: true, windowSize: 10, minimumSamples: 3, deviationThreshold: 0.2, outlierRule: 'iqr' },
+    setupProgress: { currentStep: 1, availabilityConfirmed: false },
   }
   return {
     ...defaults,
@@ -127,6 +129,7 @@ function createBaseState(settings: AppSettings, groups: TaskGroup[], templateKin
   return {
     schemaVersion: SCHEMA_VERSION,
     version: SCHEMA_VERSION,
+    dataRevision: 1,
     updatedAt: now,
     settings,
     dayConfigs: Object.fromEntries(dateRange(settings.startDate, settings.endDate).map(date => [date, { date, type: 'regular' as const, userSet: false }])),
@@ -174,6 +177,7 @@ export function buildGuestDemoState(): AppState {
     group({ subject: '英语', title: '词汇打卡', priority: 5, quantity: 29, unitMinutes: 15, targetDate: end, dueDate: end, recurring: true, recurrenceStart: start, recurrenceEnd: end, countInStats: false, memoryTask: true }),
   ]
   let state = createBaseState(defaultSettings({ planName: '完整功能演示计划', startDate: start, endDate: end, coreTargetDate: core, chemistryTargetDate: chemistryDate }), groups, 'demo')
+  state.settings.setupProgress = { currentStep: 4, availabilityConfirmed: true }
   const days = dateRange(today, end)
   const schedulable = state.assignments.filter(item => item.scheduleSource !== 'recurring')
   schedulable.forEach((item, index) => { item.scheduledDate = days[index % Math.min(days.length, 23)] })
@@ -248,12 +252,36 @@ function normalizeAssignment(raw: Partial<Assignment>, group: TaskGroup | undefi
   const expected = group ? (group.quantity > 1 ? `${group.title} ${String(index).padStart(2, '0')}` : group.title) : String(raw.title ?? '未命名任务')
   const estimate = Math.max(1, Math.round(Number(raw.estimatedMinutes ?? group?.unitMinutes ?? 30)))
   const status = raw.status === 'done' || raw.status === 'partial' ? raw.status : 'todo'
+  const timeEntries = Array.isArray(raw.timeEntries) ? raw.timeEntries.map(entry => ({
+    ...entry,
+    id: entry.id ?? uid('time'),
+    minutes: Math.max(0, Math.round(Number(entry.minutes ?? 0))),
+    date: safeExecutionDate(entry.date) ?? safeExecutionDate(entry.createdAt) ?? safeExecutionDate(raw.completedAt) ?? safeExecutionDate(raw.scheduledDate) ?? todayISO(),
+    createdAt: entry.createdAt ?? now,
+    updatedAt: entry.updatedAt,
+    originalCreatedAt: entry.originalCreatedAt,
+  })) : []
+  const statusHistory = Array.isArray(raw.statusHistory)
+    ? raw.statusHistory.filter(event => event && safeExecutionDate(event.date)).map(event => ({
+      id: event.id ?? uid('status'),
+      date: safeExecutionDate(event.date)!,
+      createdAt: event.createdAt ?? now,
+      status: (event.status === 'done' || event.status === 'partial' ? event.status : 'todo') as Assignment['status'],
+      progress: event.status === 'done' ? 100 : Math.max(0, Math.min(99, Math.round(Number(event.progress ?? 0)))),
+      source: event.source === 'completion' || event.source === 'partial' || event.source === 'reopen' ? event.source : 'migration' as const,
+    }))
+    : raw.completedAt && safeExecutionDate(raw.completedAt)
+      ? [{ id: uid('status'), date: safeExecutionDate(raw.completedAt)!, createdAt: raw.completedAt, status: 'done' as const, progress: 100, source: 'migration' as const }]
+      : raw.status === 'partial' && safeExecutionDate(raw.updatedAt)
+        ? [{ id: uid('status'), date: safeExecutionDate(raw.updatedAt)!, createdAt: raw.updatedAt!, status: 'partial' as const, progress: Math.max(1, Math.min(99, Math.round(Number(raw.progress ?? 1)))), source: 'migration' as const }]
+        : []
   return {
     id: raw.id ?? uid('task'), groupId: String(raw.groupId ?? group?.id ?? ''), index, title: String(raw.title ?? expected),
     scheduledDate: raw.scheduledDate, estimatedMinutes: estimate, actualMinutes: Math.max(0, Math.round(Number(raw.actualMinutes ?? 0))),
     progress: status === 'done' ? 100 : Math.min(99, Math.max(0, Math.round(Number(raw.progress ?? 0)))), status,
     locked: Boolean(raw.locked), completedAt: raw.completedAt, notes: raw.notes,
-    timeEntries: Array.isArray(raw.timeEntries) ? raw.timeEntries.map(entry => ({ ...entry, id: entry.id ?? uid('time'), minutes: Math.max(0, Math.round(Number(entry.minutes ?? 0))), createdAt: entry.createdAt ?? now, updatedAt: entry.updatedAt, originalCreatedAt: entry.originalCreatedAt })) : [],
+    timeEntries,
+    statusHistory,
     scheduleSource: raw.scheduleSource ?? (group?.recurring ? 'recurring' : 'system'),
     intentStrength: raw.intentStrength ?? (raw.locked ? 'locked' : raw.scheduleSource === 'manual' ? 'manual' : 'normal'),
     previousDate: raw.previousDate, lastManualMoveAt: raw.lastManualMoveAt, remainingMinutes: raw.remainingMinutes,
@@ -323,6 +351,7 @@ function normalizeIntakeBatch(raw: Partial<IntakeBatch>, now: string): IntakeBat
     createdAt: raw.createdAt ?? now,
     updatedAt: raw.updatedAt ?? now,
     lastEditedItemId: raw.lastEditedItemId,
+    formDraft: raw.formDraft ? structuredClone(raw.formDraft) : undefined,
     archivedAt: raw.archivedAt,
   }
 }
@@ -384,7 +413,7 @@ export function normalizeState(rawInput: AppState): AppState {
     dayConfigs[date] = { ...(existing ?? { type: 'regular' as const }), date, userSet: existing?.userSet ?? false, bufferProtected: existing?.bufferProtected ?? Boolean(existing?.isBufferDay && existing?.userSet) }
   }
   const state: AppState = {
-    schemaVersion: SCHEMA_VERSION, version: SCHEMA_VERSION, updatedAt: raw.updatedAt ?? now, settings, dayConfigs,
+    schemaVersion: SCHEMA_VERSION, version: SCHEMA_VERSION, dataRevision: Math.max(1, Math.round(Number(raw.dataRevision ?? 1))), updatedAt: raw.updatedAt ?? now, settings, dayConfigs,
     taskGroups, assignments, goals, calendarConstraints: migrateConstraints(raw, now),
     acceptedConstraintExceptions: (raw.acceptedConstraintExceptions ?? []).filter(item => item?.date && item?.key).slice(-100),
     timer: raw.timer ?? { accumulatedSeconds: 0, running: false }, reviewRecords: raw.reviewRecords ?? [], changeEvents: raw.changeEvents ?? [],
@@ -394,6 +423,8 @@ export function normalizeState(rawInput: AppState): AppState {
       assignments: item.assignments.map(assignment => ({
         assignmentId: String(assignment.assignmentId), groupId: String(assignment.groupId), title: String(assignment.title),
         estimatedMinutes: Math.max(1, Math.round(Number(assignment.estimatedMinutes ?? 0))),
+        statusAtCapture: (assignment.statusAtCapture === 'done' || assignment.statusAtCapture === 'partial' ? assignment.statusAtCapture : assignment.statusAtCapture === 'todo' ? 'todo' : undefined) as Assignment['status'] | undefined,
+        progressAtCapture: assignment.progressAtCapture === undefined ? undefined : Math.max(0, Math.min(100, Math.round(Number(assignment.progressAtCapture)))),
       })),
     })).slice(-400),
     guestModified: raw.guestModified ?? false, lastCloudSyncAt: raw.lastCloudSyncAt, templateKind: raw.templateKind ?? 'blank',

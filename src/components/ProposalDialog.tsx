@@ -59,6 +59,8 @@ export function ProposalDialog({
   onGenerateMore,
   onResolveConflicts,
   onRequestExternalChange,
+  tutorialMode = false,
+  onTutorialBlocked,
 }: {
   open: boolean
   baseline: AppState
@@ -75,6 +77,8 @@ export function ProposalDialog({
   onGenerateMore?: () => void
   onResolveConflicts: (proposal: SchedulingProposal, decisions: ConflictResolutionDecision[], exceptionDecisions: ConstraintExceptionResolutionDecision[]) => void
   onRequestExternalChange?: (action: 'change-goal' | 'change-capacity') => void
+  tutorialMode?: boolean
+  onTutorialBlocked?: (message?: string) => void
 }) {
   const initial = recommendedProposal(proposals, event)
   const explicitLocalOperation = event.metadata?.explicitLocalOperation === true || event.metadata?.operationScope === 'requested-change-only'
@@ -94,6 +98,8 @@ export function ProposalDialog({
   }, [event.id, calculationRevision])
 
   const selectedBase = useMemo(() => proposals.find(item => item.id === selectedId) ?? recommendedProposal(proposals, event), [proposals, selectedId, event])
+  const tutorialProposal = tutorialMode ? recommendedProposal(proposals, event) : undefined
+  const displayedProposals = tutorialMode ? proposals : proposals.slice(0, visibleCount)
   const selected = selectedBase ? drafts[selectedBase.id] ?? selectedBase : undefined
   const singleLocalProposal = explicitLocalOperation && proposals.length === 1 && Boolean(selected)
   const recommendedId = recommendedProposal(proposals, event)?.id
@@ -179,8 +185,8 @@ export function ProposalDialog({
 
   const footer = <div className="proposal-footer-actions">
     <button className="proposal-cancel-action" onClick={onClose}>取消</button>
-    {keepLabel && <button className="secondary-button proposal-keep-action" onClick={onKeep}>{keepLabel}</button>}
-    <button className="primary-button" onClick={handlePrimary}>{primaryLabel}</button>
+    {keepLabel && <button className={`secondary-button proposal-keep-action ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中先应用推荐方案') : onKeep()}>{keepLabel}</button>}
+    <button className="primary-button" data-tutorial-target="proposal-primary" data-tutorial-action="proposal-primary" onClick={handlePrimary}>{primaryLabel}</button>
   </div>
 
   return <Modal open={open} title="计划调整预览" onClose={onClose} footer={footer} wide mobileFullscreen className="proposal-modal">
@@ -195,20 +201,21 @@ export function ProposalDialog({
 
     {directConflict && <section className="proposal-direct-conflict">
       <div><strong>你的原选择中发现 {directConflict.issues.length} 个问题</strong><span>合法选择保持不变；冲突项可逐项接受例外、保持原状或交给系统换日。</span></div>
-      <button type="button" className="secondary-button" onClick={() => selectProposal(directConflict.id)}>查看并处理具体问题</button>
+      <button type="button" className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中先按推荐方案继续') : selectProposal(directConflict.id)}>查看并处理具体问题</button>
     </section>}
 
-    {!proposals.length && <section id="proposal-no-solution" className="empty-state proposal-no-solution"><h3>当前条件下还没有可执行方案</h3><p>系统没有强行塞入冲突日期。你可以继续扩大搜索范围，或返回调整目标与可用时间；每次修改仍会重新预览。</p><div className="proposal-no-solution-actions">{onGenerateMore && <button type="button" className="secondary-button" onClick={onGenerateMore}>扩大范围继续寻找</button>}<button type="button" className="secondary-button" onClick={() => onRequestExternalChange?.('change-capacity')}>调整可用时间</button><button type="button" className="secondary-button" onClick={() => onRequestExternalChange?.('change-goal')}>调整目标</button></div></section>}
+    {!proposals.length && <section id="proposal-no-solution" className="empty-state proposal-no-solution"><h3>当前条件下还没有可执行方案</h3><p>系统没有强行塞入冲突日期。你可以继续扩大搜索范围，或返回调整目标与可用时间；每次修改仍会重新预览。</p><div className="proposal-no-solution-actions">{onGenerateMore && <button type="button" className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中暂不扩大搜索范围') : onGenerateMore()}>扩大范围继续寻找</button>}<button type="button" className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中暂不修改可用时间') : onRequestExternalChange?.('change-capacity')}>调整可用时间</button><button type="button" className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中暂不修改目标') : onRequestExternalChange?.('change-goal')}>调整目标</button></div></section>}
 
     {!singleLocalProposal && <section className="proposal-options-heading">
-      <div><strong>{proposals.length > 1 ? '选择一个方案' : '确认本次改动'}</strong><span>任何方案都只会在你确认后执行；存在冲突时也不会只留下灰色按钮。</span></div>
-      {proposals.length > 1 && <small>已生成 {proposals.length} 个实质不同方案</small>}
+      <div><strong>{tutorialMode ? '确认教程推荐方案' : proposals.length > 1 ? '选择一个方案' : '确认本次改动'}</strong><span>任何方案都只会在你确认后执行；存在冲突时也不会只留下灰色按钮。</span></div>
+      {proposals.length > 1 && <small>已生成 {proposals.length} 个实质不同方案{tutorialMode ? ' · 教程固定使用推荐方案' : ''}</small>}
     </section>}
     {!singleLocalProposal && <div className="proposal-choice-list">
-      {proposals.slice(0, visibleCount).map(proposal => {
+      {displayedProposals.map(proposal => {
         const display = drafts[proposal.id] ?? proposal
         const selectedChoice = selectedBase?.id === proposal.id
-        return <button key={proposal.id} className={`proposal-choice ${selectedChoice ? 'selected' : ''} ${proposal.infeasible ? 'proposal-choice-infeasible' : ''}`} onClick={() => selectProposal(proposal.id)}>
+        const tutorialBlockedChoice = tutorialMode && proposal.id !== recommendedId
+        return <button key={proposal.id} aria-disabled={tutorialBlockedChoice || undefined} className={`proposal-choice ${selectedChoice ? 'selected' : ''} ${proposal.infeasible ? 'proposal-choice-infeasible' : ''} ${tutorialBlockedChoice ? 'tutorial-disabled-control' : ''}`} onClick={() => tutorialBlockedChoice ? onTutorialBlocked?.('教程中固定使用推荐方案，其他方案仍保留展示') : selectProposal(proposal.id)}>
           <div className="proposal-choice-title"><div><strong>{display.title}</strong><small>{preferenceLabels[display.preference] ?? display.preference} · 影响{display.metrics.impactLevel === 'small' ? '较小' : display.metrics.impactLevel === 'medium' ? '中等' : '较大'}</small></div><span>{proposal.id === recommendedId ? '推荐' : selectedChoice ? '已选择' : '可选'}</span></div>
           <div className="proposal-choice-metrics"><span>{display.metrics.movedTaskCount} 项移动</span><span>{display.metrics.affectedDateCount} 天变化</span><span>{display.metrics.issueCount} 个本次问题</span>{display.exceptions.length > 0 && <em>{display.exceptions.length} 项例外需逐项决定</em>}</div>
           {display.issueDelta && explicitLocalOperation && <div className="proposal-existing-issue-summary"><span>计划原有 {display.issueDelta.preExistingCount} 个硬问题</span><span>本次解决 {display.issueDelta.resolvedPreExistingCount} 个</span><span>本次新增/恶化 {display.issueDelta.newOrWorsenedCount} 个</span></div>}
@@ -219,11 +226,11 @@ export function ProposalDialog({
 
     {singleLocalProposal && selected && <LocalOperationResult proposal={selected} actionLabel={requestedActionLabel}/>} 
 
-    {!singleLocalProposal && (visibleCount < proposals.length || onGenerateMore) && <button className="secondary-button proposal-more" disabled={Boolean(moreExhausted && visibleCount >= proposals.length)} onClick={showMore}>{visibleCount < proposals.length ? `比较另外 ${proposals.length - visibleCount} 个已生成方案` : moreExhausted ? '已检查更大范围，没有更多实质不同方案' : '生成更多不同方案'}</button>}
-    {singleLocalProposal && onGenerateMore && <div className="proposal-local-alternatives"><div><strong>需要同时处理计划原有问题？</strong><span>当前保存只完成本次操作；查看其他方案后，才会扩大调整范围。</span></div><button type="button" className="text-button" disabled={moreExhausted} onClick={onGenerateMore}>{moreExhausted ? '没有更多实质不同方案' : '查看其他方案'}</button></div>}
+    {!singleLocalProposal && (visibleCount < proposals.length || onGenerateMore) && <button className={`secondary-button proposal-more ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} disabled={!tutorialMode && Boolean(moreExhausted && visibleCount >= proposals.length)} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中不扩大方案范围，避免剧情发生变化') : showMore()}>{tutorialMode ? '生成更多不同方案（教程中暂不可用）' : visibleCount < proposals.length ? `比较另外 ${proposals.length - visibleCount} 个已生成方案` : moreExhausted ? '已检查更大范围，没有更多实质不同方案' : '生成更多不同方案'}</button>}
+    {singleLocalProposal && onGenerateMore && <div className="proposal-local-alternatives"><div><strong>需要同时处理计划原有问题？</strong><span>当前保存只完成本次操作；查看其他方案后，才会扩大调整范围。</span></div><button type="button" className={`text-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} disabled={!tutorialMode && moreExhausted} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中暂不扩大调整范围') : onGenerateMore()}>{tutorialMode ? '查看其他方案（教程中暂不可用）' : moreExhausted ? '没有更多实质不同方案' : '查看其他方案'}</button></div>}
 
     {selected && selectedBase && <>
-      <ProposalDetails proposal={selected} event={event} baseline={baseline} assignmentMap={assignmentMap} goalMap={goalMap} compactLocal={singleLocalProposal} onRevise={revision => {
+      <ProposalDetails proposal={selected} event={event} baseline={baseline} assignmentMap={assignmentMap} goalMap={goalMap} compactLocal={singleLocalProposal} tutorialMode={tutorialMode} onRevise={revision => {
         const revised = reviseSchedulingProposal(baseline, event, selected, revision)
         setDrafts(current => ({ ...current, [selectedBase.id]: revised }))
         resetDecisions()
@@ -368,11 +375,15 @@ function openSection(proposalId: string, section: string) {
   element.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
-function ProposalDetails({ proposal, event, baseline, assignmentMap, goalMap, compactLocal = false, onRevise }: { proposal: SchedulingProposal; event: PlanChangeEvent; baseline: AppState; assignmentMap: Map<string, Assignment>; goalMap: Map<string, Goal>; compactLocal?: boolean; onRevise: (revision: ProposalMovementRevision) => void }) {
+function ProposalDetails({ proposal, event, baseline, assignmentMap, goalMap, compactLocal = false, tutorialMode = false, onRevise }: { proposal: SchedulingProposal; event: PlanChangeEvent; baseline: AppState; assignmentMap: Map<string, Assignment>; goalMap: Map<string, Goal>; compactLocal?: boolean; tutorialMode?: boolean; onRevise: (revision: ProposalMovementRevision) => void }) {
   const newTaskIds = event.type === 'new-task-insertion' || event.type === 'task-group-size-increase' ? event.affectedAssignmentIds : []
   const manualMoves = proposal.movements.filter(item => item.manualIntentImpact === 'moved-manual')
   const explicitLocalOperation = event.metadata?.explicitLocalOperation === true || event.metadata?.operationScope === 'requested-change-only'
+  const completedPreserved = tutorialMode ? baseline.assignments.filter(before => before.status === 'done' && proposal.stateAfter.assignments.some(after => after.id === before.id && after.status === before.status && after.scheduledDate === before.scheduledDate)).length : 0
+  const lockedPreserved = tutorialMode ? baseline.assignments.filter(before => before.locked && proposal.stateAfter.assignments.some(after => after.id === before.id && after.locked && after.scheduledDate === before.scheduledDate)).length : 0
+  const goalRiskImproved = tutorialMode && proposal.goalImpacts.some(item => (item.latestRiskBefore && !item.latestRiskAfter) || (item.desiredRiskBefore && !item.desiredRiskAfter) || Boolean(item.beforeExpectedCompletion && item.afterExpectedCompletion && item.afterExpectedCompletion < item.beforeExpectedCompletion))
   return <div className={`proposal-details ${compactLocal ? 'proposal-details-compact-local' : ''}`}>
+    {tutorialMode && event.metadata?.requestedOutcome === 'fix-current' && <section className="tutorial-proposal-protection"><div><strong>✓ 已完成任务保持不变</strong><span>{completedPreserved} 项历史完成记录未被改写</span></div><div><strong>🔒 已锁定任务保持不变</strong><span>{lockedPreserved} 项锁定安排继续受保护</span></div><div className={goalRiskImproved ? 'success' : 'warning'}><strong>{goalRiskImproved ? '⚠ 目标风险得到缓解' : '⚠ 目标风险仍需关注'}</strong><span>{goalRiskImproved ? '新的安排让目标预计结果变得更安全。' : '这个方案没有把目标风险隐藏掉，请继续检查目标影响。'}</span></div></section>}
     {!compactLocal && explicitLocalOperation && proposal.issueDelta && <section className="proposal-scope-summary"><div><span>本次作用范围</span><strong>只执行用户操作</strong><p>其他任务移动 {proposal.movements.length} 项；计划原有问题不会阻止本次操作，也不会自动触发全面重排。</p></div><div className="proposal-scope-stats"><span><small>原有硬问题</small><strong>{proposal.issueDelta.preExistingCount}</strong></span><span><small>本次已解决</small><strong>{proposal.issueDelta.resolvedPreExistingCount}</strong></span><span><small>本次有所缓解</small><strong>{proposal.issueDelta.improvedPreExistingCount}</strong></span><span className={proposal.issueDelta.newOrWorsenedCount ? 'danger' : 'success'}><small>新增或恶化</small><strong>{proposal.issueDelta.newOrWorsenedCount}</strong></span></div></section>}
     {proposal.infeasible && <div className="proposal-warning"><strong>这个方案需要先处理问题</strong><p>{proposal.infeasibleReason}</p><small>你可以逐项接受可豁免规则、拒绝并要求换日，或恢复原安排；系统不会只把按钮禁用。</small></div>}
     {!compactLocal && <section className="proposal-human-summary"><span>方案结果</span><h3>{proposal.infeasible ? `发现 ${proposal.issues.length} 个问题` : proposal.goalImpacts.some(item => item.latestRiskAfter) ? '可执行，但仍有最晚期限风险' : '已通过完整执行检查'}</h3><p>{proposal.metrics.manualTaskMoveCount ? '该方案会触及手动安排，请重点检查对应明细。' : '手动安排保持受保护。'} 默认只展示结论；点击数字可展开完整任务、日期、目标和计算依据。</p></section>}
@@ -395,7 +406,7 @@ function ProposalDetails({ proposal, event, baseline, assignmentMap, goalMap, co
         const afterTask = proposal.stateAfter.assignments.find(item => item.id === move.assignmentId)
         const baselineTask = baseline.assignments.find(item => item.id === move.assignmentId)
         return <article key={move.assignmentId} className="proposal-card proposal-movement-card"><strong>{assignmentMap.get(move.assignmentId)?.title ?? move.assignmentId}</strong><div className="before-after"><span><small>之前</small>{move.fromDate ? fmtDate(move.fromDate) : '未安排'} · 当日 {minutesText(move.beforeLoad)}</span><span><small>之后</small>{move.toDate ? fmtDate(move.toDate) : '未安排'} · 当日 {minutesText(move.afterLoad)}</span></div><p>{move.reason}</p><small>{move.goalImpact} · 手动意图：{move.manualIntentImpact === 'preserved' ? '已保护' : move.manualIntentImpact === 'moved-manual' ? '此方案会移动手动安排' : move.manualIntentImpact === 'locked-blocked' ? '被锁定阻止' : '无影响'}</small>
-          {!proposal.infeasible && <div className="proposal-movement-editor"><div><strong>逐项微调</strong><small>修改后会重新验算容量、每日上限、目标和日期保护。</small></div><div className="proposal-movement-actions">{baselineTask?.scheduledDate && <button type="button" className="secondary-button" disabled={move.toDate === baselineTask.scheduledDate} onClick={() => onRevise({ assignmentId: move.assignmentId, date: baselineTask.scheduledDate, lock: false })}>保留原日期</button>}<input aria-label="自定义目标日期" type="date" min={baseline.settings.startDate} max={baseline.settings.endDate} value={move.toDate ?? ''} onChange={eventValue => onRevise({ assignmentId: move.assignmentId, date: eventValue.target.value || undefined, lock: Boolean(afterTask?.locked) })}/><label><input type="checkbox" checked={Boolean(afterTask?.locked)} onChange={eventValue => onRevise({ assignmentId: move.assignmentId, date: move.toDate, lock: eventValue.target.checked })}/><span>锁定这个结果</span></label></div></div>}
+          {!proposal.infeasible && <div className={`proposal-movement-editor ${tutorialMode ? 'tutorial-disabled-control' : ''}`}><div><strong>逐项微调</strong><small>{tutorialMode ? '教程中完整展示该功能，但本步固定使用推荐结果。' : '修改后会重新验算容量、每日上限、目标和日期保护。'}</small></div><div className="proposal-movement-actions">{baselineTask?.scheduledDate && <button type="button" className="secondary-button" disabled={tutorialMode || move.toDate === baselineTask.scheduledDate} onClick={() => onRevise({ assignmentId: move.assignmentId, date: baselineTask.scheduledDate, lock: false })}>保留原日期</button>}<input aria-label="自定义目标日期" type="date" min={baseline.settings.startDate} max={baseline.settings.endDate} value={move.toDate ?? ''} disabled={tutorialMode} onChange={eventValue => onRevise({ assignmentId: move.assignmentId, date: eventValue.target.value || undefined, lock: Boolean(afterTask?.locked) })}/><label><input type="checkbox" checked={Boolean(afterTask?.locked)} disabled={tutorialMode} onChange={eventValue => onRevise({ assignmentId: move.assignmentId, date: move.toDate, lock: eventValue.target.checked })}/><span>锁定这个结果</span></label></div></div>}
           {move.rejectedAlternatives.length > 0 && <details><summary>为什么没有安排到其他日期</summary>{move.rejectedAlternatives.map(item => <div className="rejected-date" key={item.date}><strong>{fmtDate(item.date)}</strong><ul>{item.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul></div>)}</details>}</article>
       })}
     </div></details>}

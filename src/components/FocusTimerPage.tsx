@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useApp } from '../AppContext'
 import { minutesText, timestampForDate, todayISO } from '../lib/date'
 import { uid } from '../lib/id'
+import { appendStatusEvent } from '../lib/execution'
+import { getTimerElapsedSeconds } from '../lib/timer'
 import { Modal } from './Modal'
 import { NumericInput } from './NumericInput'
 
@@ -12,12 +14,6 @@ function formatElapsed(totalSeconds: number) {
   const minutes = Math.floor((seconds % 3600) / 60)
   const remainingSeconds = seconds % 60
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`
-}
-
-export function getTimerElapsedSeconds(timer: { accumulatedSeconds: number; running: boolean; startedAt?: number }) {
-  return timer.accumulatedSeconds + (timer.running && timer.startedAt
-    ? Math.max(0, Math.floor((Date.now() - timer.startedAt) / 1000))
-    : 0)
 }
 
 export function FocusTimerPage({ onExit }: { onExit: () => void }) {
@@ -98,11 +94,14 @@ export function FocusTimerPage({ onExit }: { onExit: () => void }) {
         const item = draft.assignments.find(candidate => candidate.id === assignment.id)
         if (!item) return
         item.actualMinutes += minutes
-        item.timeEntries.push({ id: uid('time'), minutes, createdAt: timestampForDate(todayISO()), source: 'timer' })
+        const date = todayISO()
+        const changedAt = new Date().toISOString()
+        item.timeEntries.push({ id: uid('time'), minutes, date, createdAt: changedAt, source: 'timer' })
         item.progress = Math.max(1, Math.min(99, progress))
         item.remainingMinutes = Math.max(1, Math.round(item.estimatedMinutes * (1 - item.progress / 100)))
         item.status = 'partial'
         item.completedAt = undefined
+        appendStatusEvent(item, 'partial', item.progress, date, 'partial', changedAt)
         draft.timer = { accumulatedSeconds: 0, running: false }
       })
     }

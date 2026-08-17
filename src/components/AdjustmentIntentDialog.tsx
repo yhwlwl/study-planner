@@ -49,8 +49,9 @@ function inPlanDate(date: string, state: AppState) {
   return date < state.settings.startDate ? state.settings.startDate : date > state.settings.endDate ? state.settings.endDate : date
 }
 
-function ActionCard({ title, description, tone, onClick }: { title: string; description: string; tone?: 'attention' | 'secondary'; onClick: () => void }) {
-  return <button type="button" className={`adjustment-action-card ${tone ?? ''}`} onClick={onClick}>
+function ActionCard({ actionId, title, description, tone, blocked = false, onClick }: { actionId: string; title: string; description: string; tone?: 'attention' | 'secondary'; blocked?: boolean; onClick: () => void }) {
+  const tutorialTarget = actionId === 'current-conflicts' ? 'repair-current' : actionId === 'replan' ? 'future-replan' : undefined
+  return <button type="button" data-tutorial-target={tutorialTarget} data-tutorial-action={actionId} aria-disabled={blocked || undefined} className={`adjustment-action-card ${tone ?? ''} ${blocked ? 'tutorial-disabled-control' : ''}`} onClick={onClick}>
     <span className="adjustment-action-copy"><strong>{title}</strong><span>{description}</span></span>
     <ArrowUpRight size={18} aria-hidden="true" />
   </button>
@@ -68,7 +69,7 @@ function ActionHeader({ title, description, onBack }: { title: string; descripti
 
 export function AdjustmentIntentDialog({
   open, state, initialDate, initialReason = 'current-conflicts', onClose, onPrepared,
-  onOpenIntake, onOpenDeadline, onOpenBulkMove, onDurationSuggestion,
+  onOpenIntake, onOpenDeadline, onOpenBulkMove, onDurationSuggestion, tutorialMode, onTutorialBlocked,
 }: {
   open: boolean
   state: AppState
@@ -80,6 +81,8 @@ export function AdjustmentIntentDialog({
   onOpenDeadline?: () => void
   onOpenBulkMove?: () => void
   onDurationSuggestion?: (suggestion: DurationSuggestion) => void
+  tutorialMode?: 'repair' | 'future'
+  onTutorialBlocked?: (message?: string) => void
 }) {
   const today = todayISO()
   const defaultDate = inPlanDate(initialDate ?? today, state)
@@ -103,10 +106,17 @@ export function AdjustmentIntentDialog({
   const [todayMode, setTodayMode] = useState<'none' | '30' | '60' | 'custom'>('none')
   const [customMinutes, setCustomMinutes] = useState(30)
 
-  const currentIssues = useMemo(() => analyzePlan(state, today).filter(issue => issue.level === 'danger'), [state, today])
+  const overdueAssignments = useMemo(() => state.assignments
+    .filter(item => item.status !== 'done' && item.scheduledDate && item.scheduledDate < today), [state.assignments, today])
+  const currentIssues = useMemo(() => {
+    const hard = analyzePlan(state, today).filter(issue => issue.level === 'danger')
+    const overdue = overdueAssignments
+      .map(item => ({ level: 'danger' as const, date: item.scheduledDate, message: `“${item.title}”仍停留在过去日期，需要重新安排。` }))
+    return [...overdue, ...hard]
+  }, [state, today, overdueAssignments])
   const durationSuggestions = useMemo(() => allDurationSuggestions(state), [state])
   const subjects = useMemo(() => Array.from(new Set(state.taskGroups.map(group => group.subject))).sort(), [state.taskGroups])
-  const initialAction: ActiveAction = initialReason === 'too-tiring' ? 'load' : initialReason === 'future-replan' ? 'replan' : initialDate ? 'current-conflicts' : 'center'
+  const initialAction: ActiveAction = tutorialMode ? 'center' : initialReason === 'too-tiring' ? 'load' : initialReason === 'future-replan' ? 'replan' : initialDate ? 'current-conflicts' : 'center'
 
   useEffect(() => {
     if (!open) return
@@ -126,10 +136,10 @@ export function AdjustmentIntentDialog({
     setReplanStart(defaultDate)
     setIncludeToday(false)
     setReplanSubject('all')
-    setReplanOutcome('balanced')
+    setReplanOutcome(tutorialMode === 'future' ? 'goal' : 'balanced')
     setTodayMode('none')
     setCustomMinutes(30)
-  }, [open, initialAction, defaultDate, state])
+  }, [open, initialAction, defaultDate, state, tutorialMode])
 
   const backToCenter = () => setActiveAction('center')
   const todayExtraMinutes = todayMode === '30' ? 30 : todayMode === '60' ? 60 : todayMode === 'custom' ? Math.max(0, customMinutes) : 0
@@ -155,11 +165,18 @@ export function AdjustmentIntentDialog({
         metadata: { availabilityMode, capacityMinutes: availabilityMode === 'unavailable' ? 0 : availableMinutes, preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'] },
       }
     } else if (activeAction === 'current-conflicts') {
+      const affectedDates = currentIssues.flatMap(issue => issue.date ? [issue.date] : []).filter((date, index, values) => values.indexOf(date) === index)
+      const affectedAssignmentIds = Array.from(new Set([
+        ...overdueAssignments.map(item => item.id),
+        ...state.assignments.filter(item => item.status !== 'done' && item.scheduledDate && affectedDates.includes(item.scheduledDate)).map(item => item.id),
+      ]))
+      const affectedGroupIds = Array.from(new Set(state.assignments.filter(item => affectedAssignmentIds.includes(item.id)).map(item => item.groupId)))
+      const affectedGoalIds = state.goals.filter(goal => goal.linkedAssignmentIds.some(id => affectedAssignmentIds.includes(id)) || goal.linkedTaskGroupIds.some(id => affectedGroupIds.includes(id)) || goal.completionConditions.some(condition => affectedGroupIds.includes(condition.groupId))).map(goal => goal.id)
       event = {
         id: uid('event'), type: 'execution-difference', action: 'repair', title: '修复当前计划问题',
         description: `当前检测到 ${currentIssues.length} 个容量、期限或规则问题。只处理这些问题，不主动重写没有问题的未来安排。`,
-        affectedGoalIds: [], affectedGroupIds: [], affectedAssignmentIds: [],
-        affectedDates: currentIssues.flatMap(issue => issue.date ? [issue.date] : []).filter((date, index, values) => values.indexOf(date) === index), createdAt: now,
+        affectedGoalIds, affectedGroupIds, affectedAssignmentIds,
+        affectedDates, createdAt: now,
         metadata: { preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'], requestedOutcome: 'fix-current', sourceDate: initialDate ?? today },
       }
     } else if (activeAction === 'load') {
@@ -224,17 +241,21 @@ export function AdjustmentIntentDialog({
       {actionGroups.map(group => <section className="adjustment-action-group" key={group.title}>
         <header><div><strong>{group.title}</strong><span>{group.description}</span></div></header>
         <div className="adjustment-action-grid">
-          {group.items.map(item => <ActionCard key={item.id} title={item.title} description={item.id === 'current-conflicts' ? `${item.description} 当前 ${currentIssues.length} 个待处理问题。` : item.description} tone={item.tone} onClick={() => {
-            if (item.id === 'deadline') { onClose(); onOpenDeadline?.(); return }
-            if (item.id === 'bulk-move') { onClose(); onOpenBulkMove?.(); return }
-            setActiveAction(item.id)
-          }} />)}
+          {group.items.map(item => {
+            const allowedTutorialAction = !tutorialMode || item.id === (tutorialMode === 'repair' ? 'current-conflicts' : 'replan')
+            return <ActionCard key={item.id} actionId={item.id} title={item.title} description={item.id === 'current-conflicts' ? `${item.description} 当前 ${currentIssues.length} 个待处理问题。` : item.description} tone={item.tone} blocked={!allowedTutorialAction} onClick={() => {
+              if (!allowedTutorialAction) { onTutorialBlocked?.('教程中先完成高亮的调整动作'); return }
+              if (item.id === 'deadline') { onClose(); onOpenDeadline?.(); return }
+              if (item.id === 'bulk-move') { onClose(); onOpenBulkMove?.(); return }
+              setActiveAction(item.id)
+            }} />
+          })}
         </div>
       </section>)}
     </div>
     <section className="adjustment-related-entry">
       <div><strong>有新任务需要加入？</strong><span>先添加到录入，之后再统一安排，不会打乱当前正式计划。</span></div>
-      <button type="button" className="secondary-button" onClick={() => { onClose(); onOpenIntake?.() }}>打开录入 <ArrowUpRight size={15} /></button>
+      <button type="button" className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={Boolean(tutorialMode) || undefined} onClick={() => { if (tutorialMode) { onTutorialBlocked?.('教程中稍后会亲手体验录入'); return }; onClose(); onOpenIntake?.() }}>打开录入 <ArrowUpRight size={15} /></button>
     </section>
   </>
 
@@ -284,7 +305,7 @@ export function AdjustmentIntentDialog({
         <label className="field"><span>最多连续几个高负载日</span><NumericInput min={0} max={14} value={maxHighLoadStreak} onValueChange={setMaxHighLoadStreak} /></label>
         <label className="field"><span>每天最多几个长／高强度任务</span><NumericInput min={0} max={10} value={maxLongHighPerDay} onValueChange={setMaxLongHighPerDay} /></label>
       </div>
-      <fieldset className="adjustment-choice-fieldset"><legend>如果条件互相挤压，优先保留什么？</legend><div className="adjustment-preference-options">{(['rest', 'balanced', 'preserve', 'goal'] as LoadPreference[]).map(item => <button type="button" key={item} className={loadPreference === item ? 'selected' : ''} onClick={() => setLoadPreference(item)}><strong>{preferenceCopy[item].title}</strong><span>{preferenceCopy[item].description}</span></button>)}</div></fieldset>
+      <fieldset className="adjustment-choice-fieldset"><legend>如果条件互相挤压，优先保留什么？</legend><div className="adjustment-preference-options">{(['rest', 'balanced', 'preserve', 'goal'] as LoadPreference[]).map(item => { const selected = loadPreference === item; return <button type="button" key={item} aria-pressed={selected} className={selected ? 'selected' : ''} onClick={() => setLoadPreference(item)}><span className="choice-indicator">{selected ? '已选择' : '可选'}</span><strong>{preferenceCopy[item].title}</strong><span>{preferenceCopy[item].description}</span></button> })}</div></fieldset>
       <div className="adjustment-form-note"><Sparkles size={17} /><span>这些条件只用于本次减负预览；确认后，任务日期会按方案改变，原有历史记录和锁定内容保持不动。</span></div>
     </section>
   </>
@@ -295,13 +316,13 @@ export function AdjustmentIntentDialog({
       <ActionHeader title="重新安排剩余计划" description="保留历史、已完成和锁定内容，从指定日期开始重新计算未完成任务。" onBack={backToCenter} />
       <section className="adjustment-form-section">
         <div className="adjustment-form-grid">
-          <label className="field"><span>从哪天开始</span><input type="date" min={state.settings.startDate} max={state.settings.endDate} value={replanStart} onChange={event => setReplanStart(event.target.value)} /></label>
-          <label className="field"><span>调整哪些任务</span><select value={replanSubject} onChange={event => setReplanSubject(event.target.value)}><option value="all">全部未完成任务</option>{subjects.map(subject => <option value={subject} key={subject}>{subject}任务</option>)}</select></label>
+          <label className="field"><span>从哪天开始</span><input type="date" min={state.settings.startDate} max={state.settings.endDate} value={replanStart} disabled={tutorialMode === 'future'} onChange={event => setReplanStart(event.target.value)} /></label>
+          <label className="field"><span>调整哪些任务</span><select value={replanSubject} disabled={tutorialMode === 'future'} onChange={event => setReplanSubject(event.target.value)}><option value="all">全部未完成任务</option>{subjects.map(subject => <option value={subject} key={subject}>{subject}任务</option>)}</select></label>
         </div>
-        <label className="adjustment-check-row"><input type="checkbox" checked={includeToday && canIncludeToday} onChange={event => setIncludeToday(event.target.checked)} disabled={!canIncludeToday} /><span><strong>包含今天</strong><small>把今天尚未完成的任务也纳入重排；未来任务是否进入今天，仍需在下面明确开放额外分钟。</small></span></label>
+        <label className="adjustment-check-row"><input type="checkbox" checked={includeToday && canIncludeToday} onChange={event => setIncludeToday(event.target.checked)} disabled={!canIncludeToday || tutorialMode === 'future'} /><span><strong>包含今天</strong><small>把今天尚未完成的任务也纳入重排；未来任务是否进入今天，仍需在下面明确开放额外分钟。</small></span></label>
         {includeToday && canIncludeToday && <div className="adjustment-today-control compact">{(['none', '30', '60', 'custom'] as const).map(item => <button type="button" key={item} className={todayMode === item ? 'active' : ''} onClick={() => setTodayMode(item)}><strong>{item === 'none' ? '不再新增' : item === 'custom' ? '自定义' : `${item} 分钟`}</strong><span>{item === 'none' ? '今天保持现状' : '额外接收未来任务'}</span></button>)}</div>}
         {includeToday && todayMode === 'custom' && <label className="field compact-field"><span>今天额外可用分钟</span><NumericInput min={0} max={720} value={customMinutes} onValueChange={setCustomMinutes} /></label>}
-        <fieldset className="adjustment-choice-fieldset"><legend>这次重排采用什么取舍？</legend><div className="adjustment-preference-options">{(['preserve', 'balanced', 'goal', 'rest'] as ReplanOutcome[]).map(item => <button type="button" key={item} className={replanOutcome === item ? 'selected' : ''} onClick={() => setReplanOutcome(item)}><strong>{preferenceCopy[item].title}</strong><span>{preferenceCopy[item].description}</span></button>)}</div></fieldset>
+        <fieldset className="adjustment-choice-fieldset"><legend>这次重排采用什么取舍？</legend><div className="adjustment-preference-options">{(['preserve', 'balanced', 'goal', 'rest'] as ReplanOutcome[]).map(item => { const selected = replanOutcome === item; return <button type="button" key={item} aria-pressed={selected} className={selected ? 'selected' : ''} onClick={() => setReplanOutcome(item)}><span className="choice-indicator">{selected ? '已选择' : '可选'}</span><strong>{preferenceCopy[item].title}</strong><span>{preferenceCopy[item].description}</span></button> })}</div></fieldset>
         <div className="adjustment-form-note"><ListChecks size={17} /><span>已完成、部分执行记录、锁定和过去日期都会被保护；只会重新计算你选择范围内仍未完成的任务。</span></div>
       </section>
     </>
@@ -321,7 +342,7 @@ export function AdjustmentIntentDialog({
     <div className="adjustment-dialog-shell">
       {isCenter ? renderCenter() : activeAction === 'availability' ? renderAvailability() : activeAction === 'current-conflicts' ? renderCurrentConflicts() : activeAction === 'duration' ? renderDuration() : activeAction === 'load' ? renderLoad() : activeAction === 'replan' ? renderReplan() : renderCenter()}
       {!isCenter && activeAction !== 'duration' && <div className="adjustment-guarantees"><strong>系统始终保护</strong><span>过去日期、已完成任务、正在计时任务、锁定任务、目标最晚日期和受保护日期。手动安排不是锁定，但会被高权重保留。</span></div>}
-      {!isCenter && activeAction !== 'duration' && <div className="modal-actions adjustment-actions"><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={!canSubmit} onClick={submit}>{submitLabel}</button></div>}
+      {!isCenter && activeAction !== 'duration' && <div className="modal-actions adjustment-actions"><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" data-tutorial-target={activeAction === 'current-conflicts' ? 'repair-submit' : activeAction === 'replan' ? 'future-submit' : undefined} data-tutorial-action={activeAction === 'current-conflicts' ? 'submit-repair' : activeAction === 'replan' ? 'submit-future' : undefined} disabled={!canSubmit} onClick={submit}>{submitLabel}</button></div>}
     </div>
   </Modal>
 }

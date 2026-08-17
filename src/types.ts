@@ -1,5 +1,5 @@
 /** Study Planner v0.8 领域模型。保留少量 v0.7 兼容字段，仅用于确定性迁移与旧界面渐进改造。 */
-export const SCHEMA_VERSION = 10 as const
+export const SCHEMA_VERSION = 11 as const
 
 export type ISODate = string
 export type Priority = 0 | 1 | 2 | 3 | 5
@@ -105,6 +105,11 @@ export interface AppSettings {
   maxLoadChangeRatio: number
   customSubjects: string[]
   duration: DurationSettings
+  /** 首次建档的明确确认，不把“打开过设置页”误当成用户确认。 */
+  setupProgress?: {
+    currentStep?: 1 | 2 | 3 | 4
+    availabilityConfirmed?: boolean
+  }
 }
 
 export interface DayConfig {
@@ -163,11 +168,22 @@ export interface TaskGroup {
 export interface TimeEntry {
   id: string
   minutes: number
+  /** Natural day the learning belongs to. `createdAt` remains the audit timestamp. */
+  date?: ISODate
   createdAt: string
   source?: 'timer' | 'manual' | 'finish' | 'inferred'
   countInStatistics?: boolean
   updatedAt?: string
   originalCreatedAt?: string
+}
+
+export interface AssignmentStatusEvent {
+  id: string
+  date: ISODate
+  createdAt: string
+  status: TaskStatus
+  progress: number
+  source: 'completion' | 'partial' | 'reopen' | 'migration'
 }
 
 export interface Assignment {
@@ -184,6 +200,8 @@ export interface Assignment {
   completedAt?: string
   notes?: string
   timeEntries: TimeEntry[]
+  /** Append-only execution history used to reconstruct the state as of a past day. */
+  statusHistory?: AssignmentStatusEvent[]
   scheduleSource: ScheduleSource
   intentStrength: IntentStrength
   previousDate?: string
@@ -638,6 +656,8 @@ export interface IntakeBatch {
   createdAt: string
   updatedAt: string
   lastEditedItemId?: string
+  /** 中途关闭录入弹窗时保留的未提交表单。 */
+  formDraft?: Partial<TaskGroupDraft>
   archivedAt?: string
 }
 
@@ -646,6 +666,9 @@ export interface DailyPlanBaselineAssignment {
   groupId: string
   title: string
   estimatedMinutes: number
+  /** State when the baseline was captured; later events advance it without rewriting history. */
+  statusAtCapture?: TaskStatus
+  progressAtCapture?: number
 }
 
 export interface DailyPlanBaseline {
@@ -676,6 +699,8 @@ export interface CreateResult {
 export interface AppStatePortable {
   schemaVersion: number
   version: number
+  /** Local state revision. Cloud persistence uses its own atomic server revision. */
+  dataRevision?: number
   updatedAt: string
   settings: AppSettings
   dayConfigs: Record<string, DayConfig>
@@ -691,7 +716,7 @@ export interface AppStatePortable {
   dailyPlanBaselines: DailyPlanBaseline[]
   guestModified: boolean
   lastCloudSyncAt?: string
-  templateKind?: 'summer' | 'demo' | 'blank'
+  templateKind?: 'summer' | 'demo' | 'blank' | 'tutorial'
 }
 
 export interface ReplanAuditDecision {
@@ -844,6 +869,9 @@ export interface ReplanConstraintConflict {
   current: number
   limit: number
   suggestedLimit: number
+  /** 当前候选至少需要放宽多少，供用户用数字协商，而不是只给一个“接受/拒绝”。 */
+  deficit: number
+  minimumFeasibleLimit: number
   affectedAssignmentIds: string[]
   options: string[]
 }

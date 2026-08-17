@@ -20,9 +20,10 @@
     "test:visit-log": "node scripts/visit-log-v0815.mjs",
     "test:intake": "node scripts/runtime-intake-v09.mjs",
     "test:planner-performance": "node scripts/runtime-planner-performance.mjs",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "test:quality": "npm run typecheck && npm test && npm run test:planner-performance"
+    "test:bundle": "node scripts/check-bundle.mjs",
+    "test": "vitest run --pool=forks --maxWorkers=1",
+    "test:coverage": "vitest run --coverage --pool=threads --maxWorkers=1",
+    "test:quality": "npm run typecheck && npm test && npm run validate:v08 && npm run build && npm run test:bundle"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.52.1",

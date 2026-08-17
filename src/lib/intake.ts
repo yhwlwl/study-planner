@@ -217,7 +217,7 @@ export function parseCsvText(text: string): unknown[][] {
 
 function freeformDraft(line: string): TaskGroupDraft | undefined {
   const clean = line.replace(/^[-*•\d.、)）\s]+/, '').trim(); if (!clean) return undefined
-  const minutes = numberValue(clean.match(/(?:每(?:套|项|次)?|单次)?\s*(\d+)\s*分钟/)?.[1], 30)
+  const minutes = numberValue(clean.match(/(?:每(?:套|项|次|张|篇|份|个|章|节|组)?|单次)?\s*(\d+)\s*分钟/)?.[1], 30)
   const quantityMatch = clean.match(/(\d+)\s*(?:项|次|份|套|个|篇|章|节|张|组)/); const quantity = quantityMatch ? numberValue(quantityMatch[1], 1) : 1
   const recurring = /每天|每日|天天/.test(clean); const dateToken = '(?:今天|明天|后天|\\d{4}[./年-]\\d{1,2}[./月-]\\d{1,2}日?|\\d{1,2}[./月-]\\d{1,2}日?)'
   const latestDateText = clean.match(new RegExp(`(?:最晚|截止|期限|到)?\\s*(${dateToken})(?:前|之前)`))?.[1] ?? clean.match(new RegExp(`(?:最晚|截止|期限|到)\\s*(${dateToken})`))?.[1]
@@ -226,10 +226,10 @@ function freeformDraft(line: string): TaskGroupDraft | undefined {
   const fixedDateText = clean.match(new RegExp(`(?:固定|必须|锁定)\\s*(?:安排在)?\\s*(${dateToken})`))?.[1]
   const desiredDate = dateValue(desiredDateText); const latestDate = dateValue(latestDateText); const preferredDate = dateValue(preferredDateText); const fixedDate = dateValue(fixedDateText)
   const subject = ['语文', '数学', '英语', '物理', '化学', '生物', '政治', '历史', '地理'].find(item => clean.includes(item)) ?? '其他'
-  const title = clean.replace(/(?:每(?:套|项|次)?|单次)?\s*\d+\s*分钟/g, '').replace(/\d+\s*(?:项|次|份|套|个|篇|章|节|张|组)/g, '')
+  const title = clean.replace(/(?:每(?:套|项|次|张|篇|份|个|章|节|组)?|单次)?\s*\d+\s*分钟/g, '').replace(/\d+\s*(?:项|次|份|套|个|篇|章|节|张|组)/g, '')
     .replace(/(?:最晚|截止|期限|持续|期望|希望|目标|偏好|优先|最好|固定|必须|锁定|安排在|到)?\s*(?:\d{4}[./年-])?\d{1,2}[./月-]\d{1,2}日?(?:前|之前)?/g, '')
     .replace(/(?:最晚|截止|期限|持续|期望|希望|目标|偏好|优先|最好|固定|必须|锁定|安排在|到)?\s*(?:今天|明天|后天)(?:前|之前)?/g, '')
-    .replace(/每天|每日|天天/g, '').replace(/[，,；;]+/g, ' ').replace(/\s+/g, ' ').trim()
+    .replace(/每天|每日|天天/g, '').replace(/(?:前)?完成$/g, '').replace(/[，,；;]+/g, ' ').replace(/\s+/g, ' ').trim()
   if (!title) return undefined
   return { title, subject, priority: 3, unitMinutes: minutes, activityType: recurring ? 'recurring' : 'normal', highIntensity: false, countInStats: !recurring, quantity, goalIds: [], recurring, desiredDate, latestDate: latestDate ?? desiredDate, preferredDate, fixedDate, allowSplit: false, prerequisiteGroupIds: [] }
 }

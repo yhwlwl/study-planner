@@ -1,5 +1,6 @@
 import type { Assignment, DailyPlanBaseline, TaskGroup, TimeEntry } from '../types'
 import { nowDate } from './date'
+import { assignmentStateAtDate, isInferredTimeEntry, timeEntryDate } from './execution'
 
 type EntrySource = NonNullable<TimeEntry['source']> | 'legacy'
 
@@ -32,6 +33,7 @@ export interface DailyRow {
   shortLabel: string
   planned: number
   actual: number
+  inferred: number
   extraActual: number
   timerActual: number
   manualActual: number
@@ -45,6 +47,7 @@ export interface DailyRow {
   workloadCompletion: number
   lateTasks: number
   focusSessions: number
+  estimatedStatusTasks: number
 }
 
 function safeDate(value?: string) {
@@ -53,9 +56,9 @@ function safeDate(value?: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : undefined
 }
 
-function progressFraction(assignment: Assignment) {
-  if (assignment.status === 'done') return 1
-  if (assignment.status === 'partial') return Math.max(0, Math.min(1, assignment.progress / 100))
+function historicalProgress(status: Assignment['status'], progress: number) {
+  if (status === 'done') return 1
+  if (status === 'partial') return Math.max(0, Math.min(1, progress / 100))
   return 0
 }
 
@@ -92,6 +95,7 @@ export function aggregateDaily(
       shortLabel: date.slice(5).replace('-', '.'),
       planned: 0,
       actual: 0,
+      inferred: 0,
       extraActual: 0,
       timerActual: 0,
       manualActual: 0,
@@ -104,7 +108,8 @@ export function aggregateDaily(
       taskCompletion: 0,
       workloadCompletion: 0,
       lateTasks: 0,
-      focusSessions: 0
+      focusSessions: 0,
+      estimatedStatusTasks: 0
     })
   }
 
@@ -118,6 +123,10 @@ export function aggregateDaily(
     if (!date || minutes <= 0 || !within(date, start, end)) return
     const row = rows.get(date)
     if (!row) return
+    if (source === 'inferred') {
+      row.inferred += minutes
+      return
+    }
     if (!counted) {
       row.extraActual += minutes
       return
@@ -140,23 +149,26 @@ export function aggregateDaily(
     const scheduled = assignment.scheduledDate
     if (scheduled && within(scheduled, start, end) && !baselineByDate.has(scheduled)) {
       const row = rows.get(scheduled)!
+      const historical = assignmentStateAtDate(assignment, scheduled)
+      const historicalFraction = historicalProgress(historical.status, historical.progress)
       row.plannedTasks += 1
-      row.completedEquivalent += progressFraction(assignment)
-      if (assignment.status === 'done') row.doneTasks += 1
-      if (assignment.status === 'partial') row.partialTasks += 1
-      if (scheduled < today && assignment.status !== 'done') row.lateTasks += 1
+      row.completedEquivalent += historicalFraction
+      if (historical.status === 'done') row.doneTasks += 1
+      if (historical.status === 'partial') row.partialTasks += 1
+      if (!historical.exact) row.estimatedStatusTasks += 1
+      if (scheduled < today && historical.status !== 'done') row.lateTasks += 1
       if (counted) {
         row.planned += assignment.estimatedMinutes
         plannedWork.set(scheduled, (plannedWork.get(scheduled) ?? 0) + assignment.estimatedMinutes)
-        completedWork.set(scheduled, (completedWork.get(scheduled) ?? 0) + assignment.estimatedMinutes * progressFraction(assignment))
+        completedWork.set(scheduled, (completedWork.get(scheduled) ?? 0) + assignment.estimatedMinutes * historicalFraction)
       }
     }
 
     let recorded = 0
     for (const entry of assignment.timeEntries ?? []) {
       const minutes = Math.max(0, Number(entry.minutes) || 0)
-      recorded += minutes
-      addActual(safeDate(entry.createdAt), minutes, counted, entry.source ?? 'legacy')
+      if (!isInferredTimeEntry(entry)) recorded += minutes
+      addActual(timeEntryDate(entry), minutes, counted, entry.source ?? 'legacy')
     }
     const residual = Math.max(0, assignment.actualMinutes - recorded)
     if (residual > 0) addActual(safeDate(assignment.completedAt) ?? scheduled, residual, counted, 'legacy')
@@ -176,11 +188,13 @@ export function aggregateDaily(
     for (const planned of baseline.assignments) {
       const assignment = assignmentById.get(planned.assignmentId)
       const group = groups.get(planned.groupId)
-      const progress = assignment ? progressFraction(assignment) : 0
+      const historical = assignmentStateAtDate(assignment, baseline.date, planned)
+      const progress = historicalProgress(historical.status, historical.progress)
       row.completedEquivalent += progress
-      if (assignment?.status === 'done') row.doneTasks += 1
-      if (assignment?.status === 'partial') row.partialTasks += 1
-      if (baseline.date < today && assignment?.status !== 'done') row.lateTasks += 1
+      if (historical.status === 'done') row.doneTasks += 1
+      if (historical.status === 'partial') row.partialTasks += 1
+      if (!historical.exact) row.estimatedStatusTasks += 1
+      if (baseline.date < today && historical.status !== 'done') row.lateTasks += 1
       if (!isCountedGroup(group, countWordsTime)) continue
       row.planned += planned.estimatedMinutes
       plannedWork.set(baseline.date, (plannedWork.get(baseline.date) ?? 0) + planned.estimatedMinutes)

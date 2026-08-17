@@ -3,7 +3,12 @@ declare const process: { env: Record<string, string | undefined> }
 type VisitPayload = {
   eventId?: unknown
   sessionId?: unknown
+  visitorId?: unknown
   eventType?: unknown
+  appPage?: unknown
+  utmSource?: unknown
+  utmCampaign?: unknown
+  firstReferrer?: unknown
   pathname?: unknown
   referrerOrigin?: unknown
   clientTime?: unknown
@@ -25,10 +30,13 @@ type ServerConfig = {
   countOffset: number
 }
 
-const API_VERSION = '0.8.0'
+const API_VERSION = '0.9.0'
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const LEGACY_JWT_RE = /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/
-const ALLOWED_EVENT_TYPES = new Set(['page_view'])
+const ALLOWED_EVENT_TYPES = new Set([
+  'page_view', 'app_page_view', 'signup_started', 'signup_confirmed', 'intake_started',
+  'natural_language_parsed', 'first_plan_applied', 'first_task_completed', 'review_completed', 'schedule_repair_applied'
+])
 
 function text(value: unknown, maxLength: number): string | null {
   if (typeof value !== 'string') return null
@@ -45,6 +53,19 @@ function integer(value: unknown, min: number, max: number): number | null {
 function nonNegativeInteger(value: string | undefined, fallback = 0): number {
   if (!value || !/^\d+$/.test(value.trim())) return fallback
   return Math.min(1_000_000_000, Number.parseInt(value, 10))
+}
+
+function safeMetadata(value: unknown): Record<string, string | number | boolean | null> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const output: Record<string, string | number | boolean | null> = {}
+  for (const [rawKey, rawValue] of Object.entries(value).slice(0, 30)) {
+    const key = rawKey.trim().slice(0, 80)
+    if (!key) continue
+    if (typeof rawValue === 'string') output[key] = rawValue.slice(0, 300)
+    else if (typeof rawValue === 'number' && Number.isFinite(rawValue)) output[key] = rawValue
+    else if (typeof rawValue === 'boolean' || rawValue === null) output[key] = rawValue
+  }
+  return output
 }
 
 function decodeHeader(value: string | null): string | null {
@@ -297,18 +318,22 @@ async function insertVisit(request: Request, config: ServerConfig): Promise<Resp
 
   const eventId = text(payload.eventId, 36)
   const sessionId = text(payload.sessionId, 36)
+  const visitorId = text(payload.visitorId, 36)
   if (!eventId || !sessionId || !UUID_RE.test(eventId) || !UUID_RE.test(sessionId)) {
     return json(request, { ok: false, code: 'invalid_event_or_session_id' }, 400)
   }
+  // visitor_id is optional only for cached clients deployed before this analytics upgrade.
+  if (visitorId && !UUID_RE.test(visitorId)) return json(request, { ok: false, code: 'invalid_visitor_id' }, 400)
 
-  const eventTypeCandidate = text(payload.eventType, 32) ?? 'page_view'
-  const eventType = ALLOWED_EVENT_TYPES.has(eventTypeCandidate) ? eventTypeCandidate : 'page_view'
+  const eventType = text(payload.eventType, 32) ?? 'page_view'
+  if (!ALLOWED_EVENT_TYPES.has(eventType)) return json(request, { ok: false, code: 'unsupported_event_type' }, 400)
   const userId = await verifiedUserId(request, config)
   const headers = request.headers
 
   const record = {
     event_id: eventId,
     session_id: sessionId,
+    visitor_id: visitorId,
     event_type: eventType,
     user_id: userId,
     ip_address: requestIp(headers),
@@ -318,7 +343,11 @@ async function insertVisit(request: Request, config: ServerConfig): Promise<Resp
     ip_timezone: text(headers.get('x-vercel-ip-timezone'), 80),
     edge_region: text(process.env.VERCEL_REGION, 20),
     pathname: text(payload.pathname, 300),
+    app_page: text(payload.appPage, 80),
     referrer_origin: text(payload.referrerOrigin, 300),
+    utm_source: text(payload.utmSource, 160),
+    utm_campaign: text(payload.utmCampaign, 160),
+    first_referrer: text(payload.firstReferrer, 300),
     user_agent: text(headers.get('user-agent'), 600),
     browser_language: text(payload.language, 40),
     client_timezone: text(payload.clientTimezone, 80),
@@ -327,12 +356,10 @@ async function insertVisit(request: Request, config: ServerConfig): Promise<Resp
     screen_height: integer(payload.screenHeight, 0, 10000),
     viewport_width: integer(payload.viewportWidth, 0, 10000),
     viewport_height: integer(payload.viewportHeight, 0, 10000),
-    account_mode: payload.accountMode === 'account' ? 'account' : 'guest',
+    account_mode: userId ? 'account' : 'guest',
     is_pwa: payload.isPwa === true,
     app_version: text(payload.appVersion, 30),
-    metadata: payload.metadata && typeof payload.metadata === 'object' && !Array.isArray(payload.metadata)
-      ? payload.metadata
-      : {}
+    metadata: safeMetadata(payload.metadata)
   }
 
   try {

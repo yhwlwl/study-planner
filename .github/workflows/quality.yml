@@ -14,9 +14,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm test -- --reporter=dot
-      - run: npm run build
-      - run: npm run test:planner-performance
+      - run: npm run test:quality
         env:
           PLANNER_P95_500_MS: 1500

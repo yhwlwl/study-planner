@@ -19,6 +19,10 @@
 .modal-backdrop{position:fixed;inset:0;background:rgba(20,29,45,.35);backdrop-filter:blur(4px);display:grid;place-items:center;padding:18px;z-index:100}.modal-card{width:min(520px,100%);max-height:min(86vh,900px);background:#fff;border-radius:20px;box-shadow:0 30px 90px rgba(16,25,40,.25);overflow:auto}.modal-wide{width:min(840px,100%)}.modal-header{position:sticky;top:0;background:rgba(255,255,255,.95);backdrop-filter:blur(14px);display:flex;justify-content:space-between;align-items:center;padding:17px 19px;border-bottom:1px solid var(--line);z-index:2}.modal-header h2{font-size:17px;margin:0}.modal-body{padding:18px}.modal-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:18px}.form-stack{display:flex;flex-direction:column;gap:12px}.warning-list{display:flex;flex-direction:column;gap:7px;margin:14px 0}.warning-item{background:#fff8e8;color:#915600;border:1px solid #ffe5af;border-radius:10px;padding:10px 12px;font-size:13px}.move-list{border:1px solid var(--line);border-radius:12px;max-height:260px;overflow:auto}.move-list>div{display:grid;grid-template-columns:1fr auto 1fr;gap:12px;padding:9px 12px;border-bottom:1px solid var(--line);font-size:13px}.move-list>div:last-child{border-bottom:0}.empty-state{text-align:center;padding:44px 20px;color:var(--muted);background:#fff;border:1px dashed #ccd5e2;border-radius:16px}.empty-state h3{color:var(--text);margin:10px 0 5px}.empty-state p{margin:0;font-size:13px}.loading-screen{min-height:100vh;display:grid;place-content:center;text-align:center;color:var(--muted)}.spinner{width:34px;height:34px;border:3px solid #dbe4f5;border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite;margin:auto}.mobile-overlay{display:none}@keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:1050px){.summary-grid,.compact-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.chart-grid{grid-template-columns:1fr}.settings-section{grid-template-columns:1fr}.calendar-cell{min-height:145px}.auth-form{grid-template-columns:1fr 1fr}.auth-form button{width:100%}}
 @media(max-width:760px){.app-shell,.sidebar-collapsed{grid-template-columns:1fr}.sidebar{position:fixed;left:0;top:0;transform:translateX(-105%);width:278px;box-shadow:0 0 60px rgba(0,0,0,.16)}.sidebar.sidebar-mobile-open{transform:translateX(0)}.sidebar-collapsed .brand>div:last-child,.sidebar-collapsed .sidebar nav span,.sidebar-collapsed .sidebar-bottom span{display:block}.sidebar-collapsed .brand{justify-content:flex-start}.sidebar-collapsed .sidebar nav button,.sidebar-collapsed .collapse-button{justify-content:flex-start}.collapse-button{display:none}.mobile-overlay{display:block;position:fixed;inset:0;background:rgba(0,0,0,.25);border:0;z-index:25}.mobile-menu{display:inline-flex!important}.topbar{padding:0 16px;height:66px}.page-heading span{display:none}.topbar-actions .secondary-button span{display:none}.page-content{padding:16px}.today-hero,.calendar-toolbar,.tasks-toolbar{padding:17px;align-items:flex-start}.today-hero,.calendar-toolbar{flex-direction:column}.today-hero h2,.calendar-toolbar h2{font-size:22px}.compact-metrics,.summary-grid{grid-template-columns:1fr 1fr;gap:9px}.compact-metrics>div,.metric-card{padding:13px}.task-card{grid-template-columns:auto 1fr}.task-actions{grid-column:2;justify-content:flex-start;flex-wrap:wrap}.calendar-card{overflow:auto}.weekday-row,.calendar-grid{min-width:760px}.tasks-toolbar{top:78px}.tasks-toolbar>*{flex:1 1 140px}.search-box{min-width:100%;}.tasks-toolbar .primary-button{margin-left:0}.group-card-head{flex-direction:column}.group-actions{flex-wrap:wrap}.form-grid,.form-grid.three{grid-template-columns:1fr}.span-2{grid-column:span 1}.settings-section{padding:17px}.auth-form{grid-template-columns:1fr}.day-settings-row{flex-direction:column;align-items:stretch}.day-settings-row .field{width:100%}.chart-card{padding:12px}.modal-backdrop{padding:8px;align-items:end}.modal-card{max-height:92vh;border-radius:20px 20px 0 0}.summary-grid.two{grid-template-columns:1fr 1fr}}
+
+/* Mobile keeps vertical scrolling; there is no gesture-based page switching. */
+.page-content{touch-action:pan-y}.calendar-card,.calendar-week-list{touch-action:pan-y}.setup-confirmation,.list-pagination,.intake-import-pagination{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 14px;margin-top:14px;border:1px solid var(--line);border-radius:12px;background:#f7f9fc}.setup-confirmation>div,.list-pagination>span,.intake-import-pagination>span{display:flex;flex-direction:column;gap:4px;color:var(--muted);font-size:12px}.setup-confirmation strong{color:var(--text);font-size:14px}.intake-import-pagination{margin:12px 0 0}.list-pagination{justify-content:center;flex-wrap:wrap}
+.quantified-negotiation{display:grid;grid-template-columns:auto 1fr minmax(120px,180px);gap:10px;align-items:center;margin:12px 0;padding:10px;border:1px solid #dbe7ff;border-radius:10px;background:#f5f8ff;color:var(--muted);font-size:12px}.quantified-negotiation>strong{color:var(--text)}.quantified-negotiation label{display:flex;align-items:center;gap:8px}.quantified-negotiation .numeric-input{width:100%}
 @media print{.sidebar,.topbar,.tasks-toolbar button,.topbar-actions{display:none!important}.app-shell{display:block}.page-content{padding:0}.chart-card,.settings-section,.calendar-card{box-shadow:none}.modal-backdrop{display:none}}
 
 /* V1.2 可解释重排与数据空间 */
@@ -2397,3 +2401,82 @@ body{
   .stats-heatmap-shell .stats-heatmap button{width:22px;height:22px;min-width:22px}
 }
 .export-section-picker{padding:18px 20px;border:1px solid #d8e4f4;border-radius:17px;background:#f8fbff}.export-section-picker-header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}.export-section-picker-header h3{margin:0 0 5px;font-size:15px}.export-section-picker-header p{max-width:760px;margin:0;color:var(--muted);font-size:12px;line-height:1.65}.export-section-picker-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;white-space:nowrap}.export-section-picker-actions>span{color:var(--muted);font-size:11px}.export-section-picker-actions .text-button{padding:4px 2px;color:var(--primary);font-size:11px;font-weight:750}.export-section-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:15px}.export-section-choice{display:flex;align-items:flex-start;gap:8px;min-width:0;padding:11px 12px;border:1px solid #dfe7f1;border-radius:11px;background:#fff;cursor:pointer;transition:border-color .16s ease,background .16s ease}.export-section-choice:hover{border-color:#9dbaf0;background:#fbfdff}.export-section-choice:has(input:checked){border-color:#9ebcf1;background:#f2f7ff}.export-section-choice input{margin:3px 0 0;accent-color:var(--primary);flex:none}.export-section-choice span{display:flex;flex-direction:column;gap:3px;min-width:0}.export-section-choice strong{font-size:12px;line-height:1.35}.export-section-choice small{color:var(--muted);font-size:10px;line-height:1.45}@media(max-width:1050px){.export-section-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:760px){.export-section-picker{padding:16px 15px}.export-section-picker-header{align-items:stretch;flex-direction:column;gap:11px}.export-section-picker-actions{justify-content:flex-start}.export-section-grid{grid-template-columns:1fr;margin-top:12px}.export-section-choice{min-height:44px}}
+.pwa-update-prompt {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1200;
+  display: grid;
+  grid-template-columns: auto minmax(220px, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  width: min(680px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid #bfd2ff;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface, #fff) 96%, #eaf1ff);
+  box-shadow: 0 18px 50px rgba(24, 45, 84, .2);
+}
+.pwa-update-prompt > div { display: grid; gap: 3px; }
+.pwa-update-prompt span { color: var(--muted, #68758a); font-size: 13px; }
+.fatal-error-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #f5f7fb; color: #172033; }
+.fatal-error-page > section { width: min(680px, 100%); padding: 36px; border: 1px solid #dfe6ef; border-radius: 24px; background: #fff; box-shadow: 0 20px 60px rgba(26, 42, 70, .12); }
+.fatal-error-page > section > span { display: block; margin-top: 16px; color: #b45309; font-weight: 700; }
+.fatal-error-page h1 { margin: 8px 0 12px; }
+.fatal-error-page p { color: #66758b; line-height: 1.7; }
+.fatal-error-page pre { max-height: 180px; overflow: auto; white-space: pre-wrap; }
+.recovery-list .history-row { align-items: flex-start; }
+@media (max-width: 680px) {
+  .pwa-update-prompt { right: 12px; bottom: 12px; grid-template-columns: auto 1fr; }
+  .pwa-update-prompt button { min-height: 44px; }
+  .pwa-update-prompt > button { grid-row: 2; }
+}
+
+/* 任务页批量操作：选择是高频动作，归档仍明确说明会作用于所属任务组。 */
+.task-bulk-bar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:11px 0;padding:10px 12px;border:1px solid #d8e4f4;border-radius:12px;background:#f7faff;color:var(--muted);font-size:12px}.task-bulk-bar strong{color:var(--text);font-size:12px}.task-bulk-bar button{min-height:36px}.task-bulk-select{display:inline-flex;align-items:center;gap:7px;margin-right:3px;color:var(--text);font-size:12px}.task-bulk-select input,.assignment-select-checkbox input{accent-color:var(--primary)}.assignment-list-card{grid-template-columns:auto minmax(0,1fr) auto}.assignment-list-card.selected{border-color:#8eb2f0;background:#f7faff}.assignment-select-checkbox{display:flex;align-items:flex-start;padding:4px 0 0 2px;cursor:pointer}.assignment-select-checkbox input{width:17px;height:17px;margin:0}
+.adjustment-preference-options button{position:relative}.adjustment-preference-options .choice-indicator{position:absolute;right:8px;top:7px;color:var(--muted);background:#edf1f6;border-radius:999px;padding:3px 6px;font-size:9px;font-weight:800;line-height:1}.adjustment-preference-options button.selected .choice-indicator{color:var(--primary);background:#dceaff}
+@media(max-width:760px){.task-bulk-bar{align-items:flex-start}.task-bulk-bar .task-bulk-select{width:100%;margin-bottom:2px}.task-bulk-bar button{flex:1 1 auto;min-width:0}.assignment-list-card{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start}.assignment-list-actions{grid-column:2;justify-content:flex-start}}
+
+/* v0.9 tutorial: visible viewport modal guarantee */
+@media(max-width:760px){
+  .modal-backdrop:has(.modal-mobile-fullscreen){
+    align-items:flex-start!important;
+    place-items:start stretch!important;
+    overflow:hidden!important;
+  }
+  .modal-card.modal-mobile-fullscreen{
+    height:var(--modal-visible-height,100svh)!important;
+    max-height:var(--modal-visible-height,100svh)!important;
+    min-height:0!important;
+    display:flex!important;
+    flex-direction:column!important;
+    overflow:hidden!important;
+  }
+  .modal-card.modal-mobile-fullscreen .modal-header{flex:0 0 auto!important}
+  .modal-card.modal-mobile-fullscreen .modal-body{
+    flex:1 1 0!important;
+    min-height:0!important;
+    overflow-y:auto!important;
+    overscroll-behavior:contain;
+    -webkit-overflow-scrolling:touch;
+  }
+  .modal-card.modal-mobile-fullscreen .modal-footer{
+    position:relative!important;
+    inset:auto!important;
+    flex:0 0 auto!important;
+    z-index:10!important;
+  }
+}
+
+/* sidebar app version */
+.sidebar-version {
+  display: block;
+  padding: 2px 8px 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.2;
+  letter-spacing: .02em;
+  text-align: center;
+  user-select: none;
+}
+.sidebar-collapsed .sidebar-version { padding-inline: 0; font-size: 9px; }

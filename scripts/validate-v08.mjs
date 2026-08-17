@@ -13,12 +13,12 @@ const source = {
   seed: read('src/lib/seed.ts'), state: read('src/lib/state.ts'), db: read('src/lib/db.ts'), supabase: read('src/lib/supabase.ts'),
   goals: read('src/lib/goals.ts'), styles: read('src/styles.css'), stats: read('src/components/StatsPage.tsx'),
   proposal: read('src/components/ProposalDialog.tsx'), review: read('src/components/ReviewDialog.tsx'), constraints: read('src/components/CalendarConstraintManager.tsx'), adjustment: read('src/components/AdjustmentIntentDialog.tsx'), adjustmentPolicy: read('src/lib/adjustment.ts'), taskCard: read('src/components/TaskCard.tsx'),
-  single: read('src/components/SingleTaskDialog.tsx'), group: read('src/components/TaskGroupDialog.tsx'), versions: read('src/lib/versions.ts'), conflicts: read('src/lib/conflicts.ts'),
+  single: read('src/components/SingleTaskDialog.tsx'), group: read('src/components/TaskGroupDialog.tsx'), addTask: read('src/components/AddTaskDialog.tsx'), versions: read('src/lib/versions.ts'), conflicts: read('src/lib/conflicts.ts'),
 }
 const pkg = JSON.parse(read('package.json'))
 const releaseVersion = `v${pkg.version}`
 add('版本与迁移', '发布版本为 0.9.0', pkg.version === '0.9.0', `package.json: ${pkg.version}`)
-add('版本与迁移', '状态架构版本已提升（当前为 10）', /SCHEMA_VERSION\s*=\s*10/.test(source.types), 'src/types.ts')
+add('版本与迁移', '状态架构版本已提升（当前为 11）', /SCHEMA_VERSION\s*=\s*11/.test(source.types), 'src/types.ts；执行账本与历史状态事件使用独立版本迁移')
 add('版本与迁移', '存在确定性 v0.7→v0.8 迁移', /migrat|迁移/.test(source.seed) && /coreTargetDate/.test(source.seed) && /calendarConstraints/.test(source.seed), 'src/lib/seed.ts')
 add('版本与迁移', '旧全局目标日期不再出现在当前界面与当前调度计算', !/settings\.coreTargetDate|settings\.chemistryTargetDate/.test(source.app + source.stats + source.planner), '仅 seed/types 保留迁移兼容字段')
 add('领域模型', 'Goal 与三种完成条件', /interface Goal\b/.test(source.types) && /'all'\s*\|\s*'percentage'\s*\|\s*'count'/.test(source.types), 'src/types.ts')
@@ -26,7 +26,7 @@ add('领域模型', '多目标关联与直接任务关联', /linkedTaskGroupIds/
 add('领域模型', '没有独立 Milestone 实体', !/interface\s+Milestone|type\s+Milestone|class\s+Milestone/.test(Object.values(source).join('\n')), 'src 全量扫描')
 add('领域模型', '统一 CalendarConstraint 支持范围', /interface CalendarConstraint/.test(source.types) && /startDate/.test(source.constraints) && /endDate/.test(source.constraints), 'types + CalendarConstraintManager')
 add('领域模型', '变化事件、方案、计划版本齐全', /interface PlanChangeEvent/.test(source.types) && /interface SchedulingProposal/.test(source.types) && /interface PlanVersion/.test(source.types), 'src/types.ts')
-add('创建系统', '单项任务与任务组入口分离', /添加单项任务/.test(source.app) && /创建并安排/.test(source.app) && /批量录入/.test(source.app) && exists('src/components/SingleTaskDialog.tsx'), 'App + dialogs')
+add('创建系统', '统一添加任务入口支持独立任务与任务组', /TaskCreationMode/.test(source.addTask) && /TaskCreationKind/.test(source.addTask) && /添加到录入，暂不安排/.test(source.addTask) && /添加任务并安排/.test(source.addTask) && /选择任务类型/.test(source.addTask) && exists('src/components/SingleTaskDialog.tsx') && exists('src/components/TaskGroupDialog.tsx'), 'AddTaskDialog + task dialogs')
 add('创建系统', '单项任务支持归组、独立、系统/偏好/锁定日期', /standalone/.test(source.single) && /system/.test(source.single) && /prefer-date/.test(source.single) && /lock-date/.test(source.single), 'SingleTaskDialog')
 add('创建系统', '任务创建先准备再预览', /prepareSingleAssignment/.test(source.context) && /prepareTaskGroup/.test(source.context) && /openPrepared/.test(source.app), 'AppContext + App')
 add('创建系统', '任务组增减保护已完成/有记录/锁定/计时任务', /prepareTaskGroupEdit/.test(source.context) && /protectedIds/.test(source.context) && /actualMinutes === 0/.test(source.context), 'AppContext')
@@ -69,7 +69,7 @@ add('移动端/PWA', 'Today 浮动按钮与快捷面板已移除', !/mobile-quic
 add('移动端/PWA', '安全区、100dvh、无横向溢出规则', /safe-area-inset-bottom/.test(source.styles) && /100dvh/.test(source.styles) && /overflow-x:hidden/.test(source.styles), 'styles.css')
 add('移动端/PWA', '月历移动端保留七列', /repeat\(7/.test(source.styles), 'styles.css')
 add('移动端/PWA', '复杂预览采用 100dvh 弹性全屏且正文独立滚动', /modal-mobile-fullscreen/.test(source.styles) && /height:100dvh/.test(source.styles) && /\.modal-body\{[^}]*overflow-y:auto/.test(source.styles), 'styles.css')
-add('移动端/PWA', '选择状态具有明显视觉反馈', /choice-indicator/.test(source.adjustment) && /\.adjustment-outcome-grid button\.selected/.test(source.styles) && /\.proposal-choice\.selected/.test(source.styles), 'dialogs + styles')
+add('移动端/PWA', '选择状态具有明显视觉反馈', /choice-indicator/.test(source.adjustment) && /aria-pressed/.test(source.adjustment) && /\.adjustment-preference-options button\.selected/.test(source.styles) && /\.proposal-choice\.selected/.test(source.styles), 'dialogs + styles')
 add('移动端/PWA', 'Today 头部手机端按内容高度布局', /today-hero-main/.test(source.app) && /\.today-hero\{display:grid!important/.test(source.styles) && /height:auto!important;min-height:0!important/.test(source.styles) && /flex:none!important/.test(source.styles), 'App + styles')
 add('冲突决策', '硬冲突可逐项查看并选择处理方式', /ConflictDecisionPanel/.test(source.proposal) && /conflictProfile/.test(source.conflicts) && /allowedResolutions/.test(source.types), 'ProposalDialog + conflicts')
 add('冲突决策', '换日、修改条件和撤销调整按用途分层', /处理当前任务/.test(source.proposal) && /修改产生冲突的条件/.test(source.proposal) && /不继续这部分调整/.test(source.proposal), 'ProposalDialog')
@@ -84,8 +84,8 @@ add('未来边界', 'AI 仅保留解析接口，没有实现功能', exists('src
 add('典型场景', '目标事件日期不再误作调度起点', /function proposalPlanningStart/.test(source.planner) && /state\.settings\.startDate/.test(source.planner) && /const today = todayISO\(\)/.test(source.planner), 'goal/trip/new task can use current future window')
 add('典型场景', '部分目标只约束满足条件所需任务', /conditionCountedAssignmentIds/.test(source.goals) && /goalAppliesToAssignment/.test(source.goals), '50% teacher check does not pull the other 50% forward')
 add('典型场景', '目标变更事件只纳入条件实际计数任务', /goalProgress\(before, existing\)/.test(source.context) && /goalProgress\(next, goal\)/.test(source.context) && /affectedAssignmentIds/.test(source.context), 'partial Goal edits do not nominate the whole linked group for movement')
-add('典型场景', '计划太累转化为具体减负结果', /load-preference-change/.test(source.adjustment) && /每天少安排一些/.test(source.adjustment) && /避免连续高负载/.test(source.adjustment) && /exploratory-optimization/.test(source.adjustmentPolicy), 'AdjustmentIntentDialog + orchestration policy')
-add('交互融合', '结束今天与复盘已合并为单一入口', (source.app.match(/结束今天并复盘/g) ?? []).length === 1 && /completeReview/.test(source.context) && /处理未完成任务/.test(source.review), 'Today + ReviewDialog')
+add('典型场景', '计划太累转化为具体减负结果', /load-preference-change/.test(source.adjustment) && /每天最多安排（分钟）/.test(source.adjustment) && /最多连续几个高负载日/.test(source.adjustment) && /exploratory-optimization/.test(source.adjustmentPolicy), 'AdjustmentIntentDialog + orchestration policy')
+add('交互融合', '结束今天与复盘已合并为单一入口', (source.app.match(/\{isToday \? '结束今天并复盘'/g) ?? []).length === 1 && /completeReview/.test(source.context) && /处理未完成任务/.test(source.review), 'Today + ReviewDialog')
 add('交互融合', '完成任务更多按钮使用固定横向图形', /Ellipsis/.test(source.taskCard) && !/more-dots[^>]*>···/.test(source.taskCard), 'TaskCard')
 add('交互融合', '桌面日期与操作不再被单字拆行', /date-switcher h2\{white-space:nowrap/.test(source.styles) && /today-hero-actions button\{white-space:nowrap/.test(source.styles), 'styles.css')
 add('交互融合', '复盘具有视觉摘要、任务决策卡与按需图表', /review-progress-ring/.test(source.review) && /review-task-decision/.test(source.review) && /review-charts/.test(source.review), 'ReviewDialog + styles')

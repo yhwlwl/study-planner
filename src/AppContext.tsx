@@ -17,7 +17,9 @@ import { createPlanVersion, createVersionFromProposal, previewVersionDiff, resto
 import { dateRange, getCapacity, timestampForDate, todayISO } from './lib/date'
 import { appendIntakeDraft, createIntakeBatchRecord } from './lib/intake-batches'
 import { splitSessionCount } from './lib/intake'
+import { TUTORIAL_NAMESPACE, readTutorialSession, tutorialAllowsCommit } from './lib/tutorial'
 import { dependencyCycleLabels } from './lib/dependencies'
+import { addInferredCompletionEntry, appendStatusEvent, isInferredTimeEntry, timeEntryDate } from './lib/execution'
 
 type Recipe = (draft: AppState) => void
 
@@ -29,7 +31,7 @@ interface AppContextValue {
   ready: boolean
   loadedFromStorage: boolean
   canUndo: boolean
-  commit: (recipe: Recipe, options?: { history?: boolean; markGuestModified?: boolean }) => void
+  commit: (recipe: Recipe, options?: { history?: boolean; markGuestModified?: boolean; tutorialAction?: string; tutorialTargetId?: string }) => void
   replaceState: (state: AppState, history?: boolean) => void
   loadDataSpace: (namespace: string, fallback?: AppState) => Promise<AppState>
   setDataSpace: (namespace: string, state: AppState, history?: boolean) => Promise<void>
@@ -56,7 +58,7 @@ interface AppContextValue {
   prepareTaskGroup: (draft: TaskGroupDraft) => CreateResult
   createIntakeBatch: (name?: string) => string
   duplicateIntakeBatch: (batchId: string) => string
-  updateIntakeBatch: (id: string, patch: Partial<Pick<IntakeBatch, 'name' | 'status' | 'lastEditedItemId'>>) => void
+  updateIntakeBatch: (id: string, patch: Partial<Pick<IntakeBatch, 'name' | 'status' | 'lastEditedItemId' | 'formDraft'>>) => void
   addIntakeSingleTask: (batchId: string, draft: NewTaskDraft) => string
   addIntakeTaskGroup: (batchId: string, draft: TaskGroupDraft, source?: Exclude<IntakeBatchSource, 'mixed'>) => string
   updateIntakeSingleTask: (batchId: string, itemId: string, draft: NewTaskDraft) => void
@@ -105,6 +107,12 @@ function templateState(kind: 'demo' | 'blank') {
 }
 
 function nowISO() { return new Date().toISOString() }
+
+function guidedTutorialMutationBlocked(namespace: string) {
+  if (namespace !== TUTORIAL_NAMESPACE) return false
+  const session = readTutorialSession()
+  return !session || session.step !== 'free'
+}
 
 function planEvent(input: Omit<PlanChangeEvent, 'id' | 'createdAt'>): PlanChangeEvent {
   return { id: uid('event'), createdAt: nowISO(), ...input }
@@ -251,6 +259,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const currentAssignments = new Map(state.assignments.map(item => [item.id, { groupId: item.groupId, scheduledDate: item.scheduledDate }]))
     const previous = previousScheduleRef.current
     previousScheduleRef.current = { namespace, assignments: currentAssignments }
+    if (namespace === TUTORIAL_NAMESPACE) { setSequenceRenumberSuggestion(undefined); return }
     if (!ready || !previous || previous.namespace !== namespace) return
     const changedGroupIds = new Set<string>()
     const changedSources = new Set<'manual' | 'automatic'>()
@@ -283,19 +292,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const replaceState = useCallback((nextInput: AppState, pushHistory = true) => {
     setState(previous => {
+      if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
       if (pushHistory) history.current = [...history.current.slice(-29), previous]
       const next = normalizeState(nextInput)
+      next.dataRevision = Math.max(previous.dataRevision ?? 1, next.dataRevision ?? 1) + 1
       next.updatedAt = nowISO()
       if (namespaceRef.current === 'guest') next.guestModified = true
       return next
     })
   }, [])
 
-  const commit = useCallback((recipe: Recipe, options?: { history?: boolean; markGuestModified?: boolean }) => {
+  const commit = useCallback((recipe: Recipe, options?: { history?: boolean; markGuestModified?: boolean; tutorialAction?: string; tutorialTargetId?: string }) => {
     setState(previous => {
+      if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession(), options?.tutorialAction, options?.tutorialTargetId)) return previous
       if (options?.history !== false) history.current = [...history.current.slice(-29), previous]
       let next = cloneForMutation(previous)
       recipe(next)
+      next.dataRevision = (previous.dataRevision ?? 1) + 1
       next.updatedAt = nowISO()
       if ((options?.markGuestModified ?? true) && namespaceRef.current === 'guest') next.guestModified = true
       next = updateGoalAndGroupLifecycle(next)
@@ -326,6 +339,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const clearDataSpace = useCallback(async (targetNamespace: string) => clearLocalState(targetNamespace), [])
 
   const undo = useCallback(() => {
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return
     const previous = history.current.pop()
     if (previous) setState(previous)
   }, [])
@@ -346,10 +360,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateAssignment = useCallback((id: string, patch: Partial<Assignment>) => commit(draft => {
     const item = draft.assignments.find(candidate => candidate.id === id)
     if (!item) return
+    const previousStatus = item.status
+    const previousProgress = item.progress
     const oldDate = item.scheduledDate
     const moving = Object.prototype.hasOwnProperty.call(patch, 'scheduledDate') && patch.scheduledDate !== oldDate
     Object.assign(item, patch)
     item.updatedAt = nowISO()
+    if (item.status !== previousStatus || item.progress !== previousProgress) {
+      const date = item.status === 'done' ? todayISO() : todayISO()
+      appendStatusEvent(item, item.status, item.progress, date, item.status === 'done' ? 'completion' : item.status === 'partial' ? 'partial' : 'reopen', item.updatedAt)
+      if (item.status === 'done' && item.actualMinutes <= 0) addInferredCompletionEntry(item, date, item.updatedAt)
+    }
     if (moving) {
       item.previousDate = oldDate
       item.lastManualMoveAt = nowISO()
@@ -381,7 +402,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const item = draft.assignments.find(candidate => candidate.id === id)
     if (!item || minutes <= 0) return
     item.actualMinutes += minutes
-    item.timeEntries.push({ id: uid('time'), minutes, createdAt: timestampForDate(todayISO()), source })
+    const date = todayISO()
+    item.timeEntries.push({ id: uid('time'), minutes, date, createdAt: nowISO(), source })
     item.updatedAt = nowISO()
   }), [commit])
 
@@ -390,20 +412,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const entry = assignment?.timeEntries.find(item => item.id === entryId)
     if (!assignment || !entry) return
     const previousMinutes = Math.max(0, Number(entry.minutes) || 0)
-    const previousDate = entry.createdAt.slice(0, 10)
+    const previousDate = timeEntryDate(entry) ?? todayISO()
+    const wasInferred = isInferredTimeEntry(entry)
     if (patch.minutes !== undefined) {
       const nextMinutes = Math.max(0, Math.round(patch.minutes))
       entry.minutes = nextMinutes
-      assignment.actualMinutes = Math.max(0, assignment.actualMinutes + nextMinutes - previousMinutes)
+      assignment.actualMinutes = Math.max(0, assignment.actualMinutes + nextMinutes - (wasInferred ? 0 : previousMinutes))
+      if (wasInferred) {
+        entry.source = 'manual'
+        entry.countInStatistics = true
+      }
     }
     if (patch.date) {
       entry.originalCreatedAt = entry.originalCreatedAt ?? entry.createdAt
-      entry.createdAt = timestampForDate(patch.date)
+      entry.date = patch.date
     }
     const changedAt = nowISO()
     entry.updatedAt = changedAt
     assignment.updatedAt = changedAt
-    const nextDate = entry.createdAt.slice(0, 10)
+    const nextDate = timeEntryDate(entry) ?? previousDate
     const auditEvent: PlanChangeEvent = {
       id: uid('event'), type: 'time-entry-change', action: 'repair', title: `修改“${assignment.title}”的时间记录`,
       description: `时间流水由 ${previousDate} 的 ${previousMinutes} 分钟修改为 ${nextDate} 的 ${entry.minutes} 分钟。`,
@@ -419,9 +446,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const entry = assignment?.timeEntries.find(item => item.id === entryId)
     if (!assignment || !entry) return
     const deletedAt = nowISO()
-    const entryDate = entry.createdAt.slice(0, 10)
+    const entryDate = timeEntryDate(entry) ?? todayISO()
     assignment.timeEntries = assignment.timeEntries.filter(item => item.id !== entryId)
-    assignment.actualMinutes = Math.max(0, assignment.actualMinutes - Math.max(0, Number(entry.minutes) || 0))
+    if (!isInferredTimeEntry(entry)) assignment.actualMinutes = Math.max(0, assignment.actualMinutes - Math.max(0, Number(entry.minutes) || 0))
     assignment.updatedAt = deletedAt
     const auditEvent: PlanChangeEvent = {
       id: uid('event'), type: 'time-entry-change', action: 'repair', title: `删除“${assignment.title}”的时间记录`,
@@ -437,22 +464,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (draft.dailyPlanBaselines.some(item => item.date === date)) return
     const assignments = draft.assignments
       .filter(item => item.scheduledDate === date)
-      .map(item => ({ assignmentId: item.id, groupId: item.groupId, title: item.title, estimatedMinutes: item.estimatedMinutes }))
+      .map(item => ({ assignmentId: item.id, groupId: item.groupId, title: item.title, estimatedMinutes: item.estimatedMinutes, statusAtCapture: item.status, progressAtCapture: item.progress }))
     draft.dailyPlanBaselines = [...draft.dailyPlanBaselines, { id: uid('baseline'), date, capturedAt: nowISO(), assignments }].slice(-400)
   }, { history: false, markGuestModified: false }), [commit])
 
   const finishAssignment = useCallback((id: string, actualMinutes?: number, source: 'timer' | 'manual' | 'finish' = 'finish') => commit(draft => {
     const item = draft.assignments.find(candidate => candidate.id === id)
     if (!item) return
+    const date = todayISO()
+    const changedAt = nowISO()
     if (actualMinutes && actualMinutes > 0) {
       item.actualMinutes += actualMinutes
-      item.timeEntries.push({ id: uid('time'), minutes: actualMinutes, createdAt: timestampForDate(todayISO()), source })
-    }
+      item.timeEntries.push({ id: uid('time'), minutes: actualMinutes, date, createdAt: changedAt, source })
+    } else if (item.actualMinutes <= 0) addInferredCompletionEntry(item, date, changedAt)
     item.progress = 100
     item.remainingMinutes = 0
     item.status = 'done'
-    item.completedAt = timestampForDate(todayISO())
-    item.updatedAt = nowISO()
+    item.completedAt = timestampForDate(date)
+    item.updatedAt = changedAt
+    appendStatusEvent(item, 'done', 100, date, 'completion', changedAt)
     if (draft.timer.assignmentId === id) draft.timer = { accumulatedSeconds: 0, running: false }
   }), [commit])
 
@@ -464,6 +494,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     item.completedAt = undefined
     item.remainingMinutes = Math.max(1, item.estimatedMinutes - item.actualMinutes)
     item.updatedAt = nowISO()
+    appendStatusEvent(item, item.status, item.progress, todayISO(), 'reopen', item.updatedAt)
   }), [commit])
 
   /** 旧调用兼容；新版界面改用 prepareTaskGroup + 方案预览。 */
@@ -532,6 +563,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const deleteTaskGroup = useCallback((id: string) => setState(previous => {
+    if (guidedTutorialMutationBlocked(namespaceRef.current)) return previous
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
     const group = previous.taskGroups.find(item => item.id === id)
     if (!group) return previous
     history.current = [...history.current.slice(-29), previous]
@@ -585,6 +618,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const removeAssignment = useCallback((id: string) => setState(previous => {
+    if (guidedTutorialMutationBlocked(namespaceRef.current)) return previous
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
     const target = previous.assignments.find(item => item.id === id)
     if (!target) return previous
     history.current = [...history.current.slice(-29), previous]
@@ -761,6 +796,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const createIntakeBatch = useCallback((name?: string) => {
+    const resumableEmpty = stateRef.current.intakeBatches.find(item => item.status !== 'archived' && item.taskGroups.length === 0)
+    if (resumableEmpty) return resumableEmpty.id
     const id = uid('intake')
     const now = nowISO()
     commit(draft => {
@@ -798,7 +835,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return id
   }, [commit])
 
-  const updateIntakeBatch = useCallback((id: string, patch: Partial<Pick<IntakeBatch, 'name' | 'status' | 'lastEditedItemId'>>) => commit(draft => {
+  const updateIntakeBatch = useCallback((id: string, patch: Partial<Pick<IntakeBatch, 'name' | 'status' | 'lastEditedItemId' | 'formDraft'>>) => commit(draft => {
     const batch = draft.intakeBatches.find(item => item.id === id)
     if (!batch) return
     if (patch.name !== undefined) batch.name = patch.name.trim() || batch.name
@@ -807,6 +844,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       batch.archivedAt = patch.status === 'archived' ? nowISO() : undefined
     }
     if (patch.lastEditedItemId !== undefined) batch.lastEditedItemId = patch.lastEditedItemId
+    if ('formDraft' in patch) batch.formDraft = patch.formDraft ? structuredClone(patch.formDraft) : undefined
     batch.updatedAt = nowISO()
   }, { history: false }), [commit])
 
@@ -817,7 +855,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const batch = stateDraft.intakeBatches.find(item => item.id === batchId)
       if (!batch) return
       appendIntakeDraft(batch, draft, source, now, id)
-    }, { history: false })
+    }, { history: false, tutorialAction: 'intake-import' })
     return id
   }, [commit])
 
@@ -828,7 +866,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const batch = stateDraft.intakeBatches.find(item => item.id === batchId)
       if (!batch) return
       appendIntakeDraft(batch, taskGroupDraftFromSingleTask(draft), 'manual', now, id, 'single')
-    }, { history: false })
+    }, { history: false, tutorialAction: 'intake-import' })
     return id
   }, [commit])
 
@@ -1299,6 +1337,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const applySchedulingProposal = useCallback((proposal: SchedulingProposal, event: PlanChangeEvent) => setState(previous => {
+    if (guidedTutorialMutationBlocked(namespaceRef.current)) return previous
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
     history.current = [...history.current.slice(-29), previous]
     let next = hydratePortableState(proposal.stateAfter, { replanHistory: previous.replanHistory, conflictBackups: previous.conflictBackups, planVersions: previous.planVersions })
     next = normalizeState(next)
@@ -1317,6 +1357,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }), [])
 
   const applyPreparedWithoutScheduling = useCallback((preparedState: AppState, event: PlanChangeEvent, reason = '保留为未安排任务') => setState(previous => {
+    if (guidedTutorialMutationBlocked(namespaceRef.current)) return previous
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
     history.current = [...history.current.slice(-29), previous]
     const draft = cloneActiveState(preparedState)
     // “保留为未安排”必须真正清空本次新增任务的草稿日期；不能把一个已经
@@ -1346,6 +1388,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 
   const restoreReplanHistory = useCallback((id: string) => setState(previous => {
+    if (guidedTutorialMutationBlocked(namespaceRef.current)) return previous
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
     const entry = previous.replanHistory.find(item => item.id === id)
     if (!entry) return previous
     history.current = [...history.current.slice(-29), previous]
@@ -1370,6 +1414,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const completeReview = useCallback((date: string): ReviewRecord => {
     const record = reviewRecordFor(stateRef.current, date)
     setState(previous => {
+      if (guidedTutorialMutationBlocked(namespaceRef.current)) return previous
+      if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
       history.current = [...history.current.slice(-29), previous]
       const next = cloneForMutation(previous)
       next.reviewRecords = [...next.reviewRecords.filter(item => item.date !== date), record].slice(-120)
@@ -1386,6 +1432,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const restorePlanVersion = useCallback((id: string, side: 'before' | 'after' = 'after') => setState(previous => {
+    if (guidedTutorialMutationBlocked(namespaceRef.current)) return previous
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
     const version = previous.planVersions.find(item => item.id === id)
     if (!version) return previous
     history.current = [...history.current.slice(-29), previous]
@@ -1434,6 +1482,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [commit, sequenceRenumberSuggestion])
 
   const resetAll = useCallback(async (kind: 'demo' | 'blank' = namespaceRef.current === 'guest' ? 'demo' : 'blank') => {
+    if (guidedTutorialMutationBlocked(namespaceRef.current)) return
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return
     const next = templateState(kind)
     await clearLocalState(namespaceRef.current)
     history.current = []

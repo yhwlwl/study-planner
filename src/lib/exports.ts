@@ -3,6 +3,7 @@ import { dateRange, dayTypeLabel, fmtDate, fmtWeekday, getCapacity, getDayConfig
 import { aggregateDaily } from './stats'
 import { allGoalProgress } from './goals'
 import { allDurationSuggestions } from './planner'
+import { isInferredTimeEntry, timeEntryDate } from './execution'
 
 export interface ExportRange {
   start: string
@@ -234,7 +235,7 @@ export function buildTaskTableSvg(state: AppState, range: ExportRange, columns: 
     if (column === 'subject') return group?.subject ?? '其他'
     if (column === 'group') return shortText(group?.title ?? '', maxCharacters)
     if (column === 'estimated') return `${assignment.estimatedMinutes} 分`
-    if (column === 'actual') return `${assignment.actualMinutes} 分`
+    if (column === 'actual') return `${realMinutesInRange(assignment, range)} 分`
     if (column === 'progress') return `${Math.round(assignment.progress)}%`
     return taskStatusLabel[assignment.status]
   }
@@ -432,12 +433,13 @@ export function buildStatisticsCsv(state: AppState, range: ExportRange) {
   const groups = activeGroupMap(state)
   const rows = aggregateDaily(state.assignments, groups, state.settings.countWordsTime, range.start, range.end, state.dailyPlanBaselines)
   return toCsv([
-    ['日期', '星期', '原计划分钟', '实际分钟', '计划外实际分钟', '计时器分钟', '手动记录分钟', '计划任务数', '完成任务数', '部分完成数', '任务完成率', '工作量完成率', '逾期任务数', '专注次数', '7日实际均值'],
+    ['日期', '星期', '原计划分钟', '真实实际分钟', '推断时间分钟', '计划外真实分钟', '计时器分钟', '手动记录分钟', '计划任务数', '完成任务数', '部分完成数', '任务完成率', '工作量完成率', '逾期任务数', '状态估算任务数', '专注次数', '7日真实均值'],
     ...rows.map(row => [
       row.date,
       fmtWeekday(row.date),
       row.planned,
       row.actual,
+      row.inferred,
       row.extraActual,
       row.timerActual,
       row.manualActual,
@@ -447,6 +449,7 @@ export function buildStatisticsCsv(state: AppState, range: ExportRange) {
       `${Math.round(row.taskCompletion * 10) / 10}%`,
       `${Math.round(row.workloadCompletion * 10) / 10}%`,
       row.lateTasks,
+      row.estimatedStatusTasks,
       row.focusSessions,
       row.movingAverage,
     ]),
@@ -470,9 +473,9 @@ export function buildTimeLedgerCsv(state: AppState, range: ExportRange) {
     if (!group) continue
     let recorded = 0
     for (const entry of assignment.timeEntries ?? []) {
-      const date = entryDate(entry.createdAt)
+      const date = timeEntryDate(entry)
       const minutes = Math.max(0, Number(entry.minutes) || 0)
-      recorded += minutes
+      if (!isInferredTimeEntry(entry)) recorded += minutes
       if (!date || date < range.start || date > range.end || minutes <= 0) continue
       rows.push([date, assignment.title, group.title, group.subject, minutes, sourceLabel(entry.source), entry.originalCreatedAt ?? entry.createdAt, entry.updatedAt ?? '', entry.id])
     }
@@ -516,6 +519,33 @@ function progressForExport(assignment?: Assignment) {
   if (assignment.status === 'done') return 1
   if (assignment.status === 'partial') return Math.max(0, Math.min(1, assignment.progress / 100))
   return 0
+}
+
+function assignmentTimeEvidence(assignment: Assignment) {
+  const realEntries = (assignment.timeEntries ?? []).filter(entry => !isInferredTimeEntry(entry) && Math.max(0, Number(entry.minutes) || 0) > 0)
+  const inferredEntries = (assignment.timeEntries ?? []).filter(entry => isInferredTimeEntry(entry) && Math.max(0, Number(entry.minutes) || 0) > 0)
+  const realMinutes = realEntries.reduce((sum, entry) => sum + Math.max(0, Number(entry.minutes) || 0), 0)
+  const inferredMinutes = inferredEntries.reduce((sum, entry) => sum + Math.max(0, Number(entry.minutes) || 0), 0)
+  if (assignment.status === 'done' && realMinutes <= 0 && inferredMinutes <= 0 && assignment.actualMinutes <= 0) return '无记录完成'
+  if (realMinutes <= 0 && inferredMinutes > 0) return '推断完成'
+  if (realMinutes > 0 && inferredMinutes > 0) return '真实 + 推断'
+  if (realMinutes > 0 || assignment.actualMinutes > 0) return '有真实记录'
+  return '无时间记录'
+}
+
+function realMinutesInRange(assignment: Assignment, range: ExportRange) {
+  let recorded = 0
+  let inRange = 0
+  for (const entry of assignment.timeEntries ?? []) {
+    const minutes = Math.max(0, Number(entry.minutes) || 0)
+    if (isInferredTimeEntry(entry)) continue
+    recorded += minutes
+    const date = timeEntryDate(entry)
+    if (date && date >= range.start && date <= range.end) inRange += minutes
+  }
+  const residual = Math.max(0, assignment.actualMinutes - recorded)
+  const residualDate = entryDate(assignment.completedAt) ?? assignment.scheduledDate
+  return inRange + (residual > 0 && residualDate && residualDate >= range.start && residualDate <= range.end ? residual : 0)
 }
 
 function isCountedForExport(group: TaskGroup | undefined, countWordsTime: boolean) {
@@ -578,8 +608,9 @@ function subjectSummaryForExport(state: AppState, range: ExportRange) {
     if (!isCountedForExport(group, state.settings.countWordsTime)) continue
     let recorded = 0
     for (const entry of assignment.timeEntries ?? []) {
-      const date = entryDate(entry.createdAt)
+      const date = timeEntryDate(entry)
       const minutes = Math.max(0, Number(entry.minutes) || 0)
+      if (isInferredTimeEntry(entry)) continue
       recorded += minutes
       if (date && date >= range.start && date <= range.end) {
         ensure(group!.subject).actual += minutes
@@ -793,9 +824,9 @@ function ledgerRowsForExport(state: AppState, range: ExportRange): ExportLedgerR
     if (!group) continue
     let recorded = 0
     for (const entry of assignment.timeEntries ?? []) {
-      const date = entryDate(entry.createdAt)
+      const date = timeEntryDate(entry)
       const minutes = Math.max(0, Number(entry.minutes) || 0)
-      recorded += minutes
+      if (!isInferredTimeEntry(entry)) recorded += minutes
       if (!date || date < range.start || date > range.end || minutes <= 0) continue
       rows.push({ date, title: assignment.title, group: group.title, subject: group.subject, minutes, source: sourceLabel(entry.source), createdAt: entry.originalCreatedAt ?? entry.createdAt })
     }
@@ -831,6 +862,7 @@ export function buildStatisticsReportHtml(state: AppState, range: ExportRange, r
   const planned = daily.reduce((sum, row) => sum + row.planned, 0)
   const actual = daily.reduce((sum, row) => sum + row.actual, 0)
   const extra = daily.reduce((sum, row) => sum + row.extraActual, 0)
+  const inferred = daily.reduce((sum, row) => sum + row.inferred, 0)
   const timer = daily.reduce((sum, row) => sum + row.timerActual, 0)
   const manual = daily.reduce((sum, row) => sum + row.manualActual, 0)
   const legacy = daily.reduce((sum, row) => sum + row.legacyActual, 0)
@@ -838,6 +870,8 @@ export function buildStatisticsReportHtml(state: AppState, range: ExportRange, r
   const completedEquivalent = daily.reduce((sum, row) => sum + row.completedEquivalent, 0)
   const taskCompletion = taskCount ? completedEquivalent / taskCount * 100 : 0
   const workloadCompletion = planned ? daily.reduce((sum, row) => sum + row.planned * row.workloadCompletion / 100, 0) / planned * 100 : 0
+  const estimatedStatusTasks = daily.reduce((sum, row) => sum + row.estimatedStatusTasks, 0)
+  const noRecordCompleted = assignments.filter(item => assignmentTimeEvidence(item) === '无记录完成').length
   const activeDays = daily.filter(row => row.actual > 0).length
   const average = activeDays ? Math.round(actual / activeDays) : 0
   const focusSessions = daily.reduce((sum, row) => sum + row.focusSessions, 0)
@@ -871,12 +905,12 @@ export function buildStatisticsReportHtml(state: AppState, range: ExportRange, r
     currentLate > 0 ? { tone: 'warning', title: `当前有 ${currentLate} 项任务超过原定日期`, detail: '延期统计按当前任务日期计算，不会把已经归档的任务混入。' } : undefined,
     durationSuggestions.length ? { tone: 'neutral', title: `有 ${durationSuggestions.length} 个任务组出现稳定时长偏差`, detail: '报告只展示建议，不会在导出时修改预计时长或计划。' } : undefined,
   ].filter(Boolean) as Array<{ tone: string; title: string; detail: string }>
-  const dailyRows = daily.map(row => `<tr><td>${html(row.date)}</td><td>${html(fmtWeekday(row.date))}</td><td>${row.planned}</td><td>${row.actual}</td><td>${row.extraActual}</td><td>${row.timerActual}</td><td>${row.manualActual}</td><td>${row.plannedTasks}</td><td>${row.doneTasks}</td><td>${row.partialTasks}</td><td>${Math.round(row.taskCompletion)}%</td><td>${Math.round(row.workloadCompletion)}%</td><td>${row.lateTasks}</td><td>${row.focusSessions}</td></tr>`).join('')
+  const dailyRows = daily.map(row => `<tr><td>${html(row.date)}</td><td>${html(fmtWeekday(row.date))}</td><td>${row.planned}</td><td>${row.actual}</td><td>${row.inferred}</td><td>${row.extraActual}</td><td>${row.timerActual}</td><td>${row.manualActual}</td><td>${row.plannedTasks}</td><td>${row.doneTasks}</td><td>${row.partialTasks}</td><td>${Math.round(row.taskCompletion)}%</td><td>${Math.round(row.workloadCompletion)}%</td><td>${row.lateTasks}</td><td>${row.estimatedStatusTasks}</td><td>${row.focusSessions}</td></tr>`).join('')
   const subjectRows = subjects.map(row => `<tr><td>${html(row.subject)}</td><td>${row.planned}</td><td>${row.actual}</td><td>${row.total}</td><td>${row.done}</td><td>${Math.round(row.completedEquivalent / Math.max(row.total, 1) * 100)}%</td><td>${html(accuracyLabel(row.accuracy))}</td><td>${row.sampleSize || '—'}</td></tr>`).join('')
   const subjectGroupRows = subjects.flatMap(subject => subject.groups.filter(group => group.total > 0 || group.planned > 0 || group.actual > 0).map(group => `<tr><td>${html(subject.subject)}</td><td>${html(group.title)}</td><td>${group.planned}</td><td>${group.actual}</td><td>${group.done}/${group.total}</td><td>${html(accuracyLabel(group.accuracy))}</td></tr>`)).join('')
   const taskRows = assignments.map(item => {
     const group = groups.get(item.groupId)
-    return `<tr><td>${html(item.scheduledDate)}</td><td>${html(item.title)}</td><td>${html(group?.subject ?? '其他')}</td><td>${item.estimatedMinutes}</td><td>${item.actualMinutes}</td><td>${Math.round(item.progress)}%</td><td>${html(taskStatusLabel[item.status])}</td></tr>`
+    return `<tr><td>${html(item.scheduledDate)}</td><td>${html(item.title)}</td><td>${html(group?.subject ?? '其他')}</td><td>${item.estimatedMinutes}</td><td>${item.actualMinutes}</td><td>${Math.round(item.progress)}%</td><td>${html(taskStatusLabel[item.status])}</td><td>${html(assignmentTimeEvidence(item))}</td></tr>`
   }).join('')
   const tasksByDate = new Map<string, Assignment[]>()
   for (const assignment of assignments) {
@@ -898,6 +932,7 @@ export function buildStatisticsReportHtml(state: AppState, range: ExportRange, r
   const ledgerSummary = [
     ['计时器', timer],
     ['手动补录', manual],
+    ['推断时间', inferred],
     ['旧数据折算', legacy],
     ['计划外学习', extra],
   ].map(([label, value]) => `<div class="report-stat"><span>${label}</span><strong>${minutesText(Number(value))}</strong></div>`).join('')
@@ -916,7 +951,7 @@ export function buildStatisticsReportHtml(state: AppState, range: ExportRange, r
   const ledgerDetailRows = ledgerRows.map(row => `<tr><td>${html(row.date)}</td><td>${html(row.title)}</td><td>${html(row.group)}</td><td>${html(row.subject)}</td><td>${row.minutes}</td><td>${html(row.source)}</td><td>${html(row.createdAt)}</td></tr>`).join('')
   const generatedAt = new Date().toLocaleString('zh-CN')
   const empty = (columns: number, message: string) => `<tr><td colspan="${columns}">${html(message)}</td></tr>`
-  const overviewHtml = `<div class="report-stat-grid"><div class="report-stat"><span>范围内实际</span><strong>${minutesText(actual)}</strong></div><div class="report-stat"><span>原计划</span><strong>${minutesText(planned)}</strong></div><div class="report-stat"><span>实际学习天数 · 日均</span><strong>${activeDays} 天 · ${minutesText(average)}</strong></div><div class="report-stat"><span>任务完成率</span><strong>${Math.round(taskCompletion)}%</strong></div><div class="report-stat"><span>工作量完成率</span><strong>${Math.round(workloadCompletion)}%</strong></div><div class="report-stat"><span>计划外学习</span><strong>${minutesText(extra)}</strong></div><div class="report-stat"><span>有效专注</span><strong>${focusSessions} 次</strong></div><div class="report-stat"><span>平均每次专注</span><strong>${minutesText(averageFocus)}</strong></div></div><div class="report-note"><strong>统计范围：</strong>${html(range.start)} 至 ${html(range.end)}。实际时间按时间记录发生日期归属；计划外学习单独展示，不会混入原计划完成率。</div>`
+  const overviewHtml = `<div class="report-stat-grid"><div class="report-stat"><span>范围内真实实际</span><strong>${minutesText(actual)}</strong></div><div class="report-stat"><span>原计划</span><strong>${minutesText(planned)}</strong></div><div class="report-stat"><span>实际学习天数 · 日均</span><strong>${activeDays} 天 · ${minutesText(average)}</strong></div><div class="report-stat"><span>任务完成率</span><strong>${Math.round(taskCompletion)}%</strong></div><div class="report-stat"><span>工作量完成率</span><strong>${Math.round(workloadCompletion)}%</strong></div><div class="report-stat"><span>计划外真实学习</span><strong>${minutesText(extra)}</strong></div><div class="report-stat"><span>推断时间</span><strong>${minutesText(inferred)}</strong></div><div class="report-stat"><span>无记录完成</span><strong>${noRecordCompleted} 项</strong></div><div class="report-stat"><span>有效专注</span><strong>${focusSessions} 次</strong></div><div class="report-stat"><span>平均每次专注</span><strong>${minutesText(averageFocus)}</strong></div></div><div class="report-note"><strong>统计范围：</strong>${html(range.start)} 至 ${html(range.end)}。真实时间按时间记录发生日期归属；推断时间和无记录完成单独展示，不会伪装成真实学习分钟。</div>`
   const dailyHtml = `<div class="chart">${dailyChartSvg(daily)}</div>`
   const completionHtml = `<div class="chart">${completionChartSvg(daily)}</div>`
   const focusHtml = `<div class="chart">${focusChartSvg(daily)}</div><div class="report-stat-grid report-stat-grid-four">${ledgerSummary}<div class="report-stat"><span>最长一次专注</span><strong>${minutesText(longestFocus)}</strong></div></div>`
@@ -925,7 +960,7 @@ export function buildStatisticsReportHtml(state: AppState, range: ExportRange, r
   const goalsHtml = `<div class="two-column"><div><h3>当前目标</h3><div class="table-wrap"><table><thead><tr><th>目标</th><th>完成</th><th>进度</th><th>预计完成</th><th>风险</th><th>剩余</th></tr></thead><tbody>${goalTable || empty(6, '暂无目标。')}</tbody></table></div></div><div><h3>历史计划版本</h3><div class="table-wrap"><table><thead><tr><th>时间</th><th>原因</th><th>目标</th><th>任务组</th><th>任务</th><th>完成</th><th>移动</th><th>负载</th></tr></thead><tbody>${versionRows || empty(8, '尚无重大计划版本。')}</tbody></table></div></div></div>`
   const qualityHtml = `<div class="report-stat-grid report-stat-grid-four"><div class="report-stat"><span>按期完成率</span><strong>${Math.round(onTimeRate)}%</strong><small>${onTime}/${completedCounted.length} 个可判断任务</small></div><div class="report-stat"><span>当前延期</span><strong>${currentLate} 项</strong></div><div class="report-stat"><span>顺延任务</span><strong>${carryovers} 项</strong></div><div class="report-stat"><span>计划变更率</span><strong>${activeTasks ? Math.round(changedTasks / activeTasks * 100) : 0}%</strong><small>${changedTasks}/${activeTasks} 项保留最近原日期</small></div></div><h3 class="subheading">优先级完成进度</h3><div class="table-wrap"><table><thead><tr><th>优先级</th><th>任务数</th><th>完成进度</th></tr></thead><tbody>${priorityRows.map(row => `<tr><td>${row.label}</td><td>${row.total}</td><td>${Math.round(row.completion)}%</td></tr>`).join('') || empty(3, '暂无优先级任务。')}</tbody></table></div><p class="report-note">计划变更率依据任务当前保留的最近一次原日期；旧数据可能没有完整的改期历史。顺延任务按系统记录的顺延来源统计。</p>`
   const emptyTaskDays = Math.max(0, daily.length - taskDates.length)
-  const detailsHtml = `<h3>每天任务清单</h3><p class="muted">按日期列出范围内有任务的全部日期。绿色表示已完成，橙色表示部分完成，灰色表示未完成；另有 ${emptyTaskDays} 天没有已排任务，已省略空白卡片。</p><div class="day-task-grid">${dailyTaskCards || '<article class="day-task-card"><p class="day-task-empty">这个范围没有已排任务。</p></article>'}</div><h3 class="subheading">每日统计明细</h3><div class="table-wrap"><table class="wide-table"><thead><tr><th>日期</th><th>星期</th><th>原计划</th><th>实际</th><th>计划外</th><th>计时器</th><th>手动</th><th>任务数</th><th>完成</th><th>部分完成</th><th>任务完成</th><th>工作量完成</th><th>逾期</th><th>专注次数</th></tr></thead><tbody>${dailyRows || empty(14, '没有每日数据。')}</tbody></table></div><h3 class="subheading">任务明细</h3><div class="table-wrap"><table><thead><tr><th>日期</th><th>任务</th><th>科目</th><th>预计</th><th>实际累计</th><th>进度</th><th>状态</th></tr></thead><tbody>${taskRows || empty(7, '这个范围没有已排期任务。')}</tbody></table></div>`
+  const detailsHtml = `<h3>每天任务清单</h3><p class="muted">按日期列出范围内有任务的全部日期。绿色表示已完成，橙色表示部分完成，灰色表示未完成；另有 ${emptyTaskDays} 天没有已排任务，已省略空白卡片。</p><div class="day-task-grid">${dailyTaskCards || '<article class="day-task-card"><p class="day-task-empty">这个范围没有已排任务。</p></article>'}</div><h3 class="subheading">每日统计明细</h3><div class="table-wrap"><table class="wide-table"><thead><tr><th>日期</th><th>星期</th><th>原计划</th><th>真实实际</th><th>推断</th><th>计划外真实</th><th>计时器</th><th>手动</th><th>任务数</th><th>完成</th><th>部分完成</th><th>任务完成</th><th>工作量完成</th><th>逾期</th><th>状态估算</th><th>专注次数</th></tr></thead><tbody>${dailyRows || empty(16, '没有每日数据。')}</tbody></table></div><h3 class="subheading">任务明细</h3><div class="table-wrap"><table><thead><tr><th>日期</th><th>任务</th><th>科目</th><th>预计</th><th>实际累计</th><th>进度</th><th>状态</th><th>时间口径</th></tr></thead><tbody>${taskRows || empty(8, '这个范围没有已排期任务。')}</tbody></table></div>`
   const ledgerHtml = `<p class="muted">时间流水按实际发生日期列出，共 ${ledgerRows.length} 条；修改任务日期不会重写这些记录。</p><div class="table-wrap"><table><thead><tr><th>归属日期</th><th>任务</th><th>任务组</th><th>科目</th><th>分钟</th><th>来源</th><th>创建时间</th></tr></thead><tbody>${ledgerDetailRows || empty(7, '这个范围还没有时间流水。')}</tbody></table></div>`
   const selectedCount = Object.values(sections).filter(Boolean).length
   const body = selectedCount === 0 ? '<div class="report-note">未选择报告内容，请回到导出页面至少选择一个模块。</div>' : [
@@ -1032,7 +1067,7 @@ export function exportRangeSummary(state: AppState, range: ExportRange) {
     plannedMinutes: daily.reduce((sum, row) => sum + row.planned, 0),
     actualMinutes: daily.reduce((sum, row) => sum + row.actual, 0),
     timeEntries: state.assignments.reduce((sum, assignment) => sum + (assignment.timeEntries ?? []).filter(entry => {
-      const date = entryDate(entry.createdAt)
+      const date = timeEntryDate(entry)
       return Boolean(date && date >= range.start && date <= range.end)
     }).length, 0),
   }

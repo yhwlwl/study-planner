@@ -12,9 +12,16 @@ import { clampDate, constraintsForDate, dateRange, dayTypeLabel, fmtDate, fmtWee
 import { actualLearningSnapshot, allDurationSuggestions, analyzePlan, checkAssignmentPlacement, effectiveMinutes, planningDayLoad, predictCompletion, previewPreparedChange } from './lib/planner'
 import { allGoalProgress, nearestRelevantGoalDate } from './lib/goals'
 import { uid } from './lib/id'
-import { cloneActiveState } from './lib/state'
+import { addInferredCompletionEntry, appendStatusEvent } from './lib/execution'
+import { cloneActiveState, hydratePortableState } from './lib/state'
 import { buildBlankState, buildGuestDemoState, normalizeState } from './lib/seed'
-import { loadLocalState } from './lib/db'
+import { deleteRecoverySnapshot, listRecoverySnapshots, loadLocalState, preserveRecoverySnapshot, type DataRecoverySnapshot } from './lib/db'
+import {
+  TUTORIAL_EXECUTE_ASSIGNMENT_ID, TUTORIAL_PARTIAL_ASSIGNMENT_ID, TUTORIAL_NAMESPACE, advanceTutorialSession, buildTutorialCheckpoint, buildTutorialState,
+  clearTutorialSession, createTutorialSession, ensureTutorialIntakeBatch, isTutorialNamespace, readTutorialSession, recoverTutorialSession,
+  tutorialAcceptsEvent, tutorialAllowsPage, tutorialCompleted, tutorialIssueCount, tutorialNaturalLanguageText, tutorialPageForStep, tutorialRecoveryStep, tutorialStateHealth, markTutorialOfferDismissed,
+  writeTutorialSession, type TutorialSession, type TutorialStep,
+} from './lib/tutorial'
 import { Modal } from './components/Modal'
 import { Drawer } from './components/Drawer'
 import { TaskCard } from './components/TaskCard'
@@ -26,23 +33,30 @@ import { SingleTaskDialog } from './components/SingleTaskDialog'
 import { AddTaskDialog, type TaskCreationKind, type TaskCreationMode } from './components/AddTaskDialog'
 import { AssignmentGroupChangeDialog } from './components/AssignmentGroupChangeDialog'
 import { ProposalDialog } from './components/ProposalDialog'
-import { GoalsPage } from './components/GoalsPage'
 import { CalendarConstraintManager } from './components/CalendarConstraintManager'
 import { ReviewDialog } from './components/ReviewDialog'
 import { HistoryDiffDialog } from './components/HistoryDiffDialog'
-import { FocusTimerPage, getTimerElapsedSeconds } from './components/FocusTimerPage'
-import { GuidePage, GITHUB_REPO_URL } from './components/GuidePage'
-import { IntakePage } from './components/IntakePage'
-import { ExportPage } from './components/ExportPage'
+import { TutorialCoachmark, type TutorialCoachmarkConfig } from './components/TutorialCoachmark'
 import { NumericInput } from './components/NumericInput'
+import { PwaUpdatePrompt } from './components/PwaUpdatePrompt'
 import { adjustmentPolicyForEvent, eventWithPreferences } from './lib/adjustment'
 import { applyConflictDecisions, mergeConstraintExceptions } from './lib/conflicts'
-import { downloadSnapshot, getSession, preparePortableState, signIn, signOut, signUp, supabase, supabaseConfigured, uploadSnapshot } from './lib/supabase'
+import { CloudRevisionConflictError, downloadSnapshot, getSession, preparePortableState, signIn, signOut, signUp, supabase, supabaseConfigured, uploadSnapshot } from './lib/supabase'
 import { buildCalendarPrintHtml, buildCalendarSvg, downloadSvgAsPng, safeExportName } from './lib/exports'
 import { Analytics } from '@vercel/analytics/react'
+import { SCHEMA_VERSION } from './types'
+import { validateStateInput } from './lib/state-schema'
+import { getTimerElapsedSeconds } from './lib/timer'
+import { APP_VERSION, GITHUB_REPO_URL } from './lib/constants'
 import './styles.css'
+import './tutorial.css'
 
 const StatsPage = lazy(() => import('./components/StatsPage').then(module => ({ default: module.StatsPage })))
+const GoalsPage = lazy(() => import('./components/GoalsPage').then(module => ({ default: module.GoalsPage })))
+const FocusTimerPage = lazy(() => import('./components/FocusTimerPage').then(module => ({ default: module.FocusTimerPage })))
+const GuidePage = lazy(() => import('./components/GuidePage').then(module => ({ default: module.GuidePage })))
+const IntakePage = lazy(() => import('./components/IntakePage').then(module => ({ default: module.IntakePage })))
+const ExportPage = lazy(() => import('./components/ExportPage').then(module => ({ default: module.ExportPage })))
 
 type Page = 'today' | 'calendar' | 'tasks' | 'intake' | 'goals' | 'stats' | 'export' | 'guide' | 'settings' | 'timer'
 type ShiftScope = 'today' | 'future'
@@ -54,6 +68,7 @@ type CloudSaveQueue = {
   timer?: number
   inFlight?: Promise<void>
   lastSavedUpdatedAt?: string
+  revision?: number
 }
 
 const navItems: { id: Page; label: string; icon: typeof LayoutDashboard }[] = [
@@ -74,7 +89,7 @@ function priorityLabel(priority: Priority) {
 
 export default function App() {
   const {
-    state, namespace, ready, updateSettings, prepareSingleAssignment, prepareTaskGroup,
+    state, namespace, ready, loadedFromStorage, updateSettings, prepareSingleAssignment, prepareTaskGroup,
     generateProposals, applySchedulingProposal, applyPreparedWithoutScheduling, replaceState, loadDataSpace, setDataSpace, clearDataSpace, sequenceRenumberSuggestion,
     dismissSequenceRenumberSuggestion, applySequenceRenumber, completeReview, undo, canUndo, updateIntakeBatch, prepareDurationChange
   } = useApp()
@@ -98,19 +113,321 @@ export default function App() {
   const [deadlineDialogOpen, setDeadlineDialogOpen] = useState(false)
   const [bulkMoveCenterOpen, setBulkMoveCenterOpen] = useState(false)
   const [sessionUser, setSessionUser] = useState<{ id: string; email?: string }>()
+  const [authResolved, setAuthResolved] = useState(!supabase)
+  const [tutorialSession, setTutorialSession] = useState<TutorialSession | undefined>(() => readTutorialSession())
+  const [tutorialBootReady, setTutorialBootReady] = useState(false)
+  const [tutorialBlockedNotice, setTutorialBlockedNotice] = useState<string>()
+  const [tutorialOfferOpen, setTutorialOfferOpen] = useState(false)
+  const tutorialBootstrapRunning = useRef(false)
+  const tutorialBootHandled = useRef(false)
+  const tutorialTransitionRunning = useRef(false)
+  const tutorialSessionRef = useRef(tutorialSession)
   const [cloudReady, setCloudReady] = useState(false)
   const [syncStatus, setSyncStatus] = useState<CloudSyncStatus>('local')
   const [firstLoginOpen, setFirstLoginOpen] = useState(false)
   const [cloudMessage, setCloudMessage] = useState('')
   const [actionNotice, setActionNotice] = useState<string>()
   const [dataSwitching, setDataSwitching] = useState(false)
-  const currentIssueCount = useMemo(() => analyzePlan(state, todayISO()).filter(issue => issue.level === 'danger').length, [state])
+  const tutorialActive = Boolean(tutorialSession && isTutorialNamespace(namespace))
+  const tutorialStepValue = tutorialSession?.step
+  const effectiveToday = tutorialSession?.anchorDate ?? todayISO()
+  const currentIssueCount = useMemo(() => tutorialActive ? tutorialIssueCount(state, effectiveToday) : analyzePlan(state, effectiveToday).filter(issue => issue.level === 'danger').length, [state, effectiveToday, tutorialActive])
   const previousUserId = useRef<string>()
   const guestSnapshotRef = useRef<AppState>()
   const [guestImportAvailable, setGuestImportAvailable] = useState(false)
   const stateRef = useRef(state)
+  const namespaceRef = useRef(namespace)
   const cloudSaveQueue = useRef<CloudSaveQueue>({})
   stateRef.current = state
+  namespaceRef.current = namespace
+  tutorialSessionRef.current = tutorialSession
+
+  const tutorialReturnPage = (value: Page): TutorialSession['returnPage'] => value === 'timer' ? 'today' : value
+
+  const tutorialNotice = (message = '教程中先完成当前这一步') => {
+    setTutorialBlockedNotice(message)
+    window.setTimeout(() => setTutorialBlockedNotice(current => current === message ? undefined : current), 1800)
+  }
+
+  const closeTutorialTransients = () => {
+    setProposalSession(undefined)
+    proposalGeneration?.worker?.terminate()
+    setProposalGeneration(undefined)
+    setAdjustmentOpen(false)
+    setReviewDate(undefined)
+    setAddTaskOpen(false)
+    setSingleTaskOpen(false)
+    setGroupDialogOpen(false)
+    setDeadlineDialogOpen(false)
+    setBulkMoveCenterOpen(false)
+    setMobileNav(false)
+  }
+
+  const persistTutorialState = async (next: AppState) => {
+    try {
+      await setDataSpace(TUTORIAL_NAMESPACE, next, false)
+      return true
+    } catch (error) {
+      console.warn('教程状态暂时无法持久化；当前标签页仍可继续。', error)
+      tutorialNotice('教程仍可继续；本机保存暂时不可用')
+      return false
+    }
+  }
+
+  const updateTutorialSession = (session: TutorialSession) => {
+    tutorialSessionRef.current = session
+    setTutorialSession(session)
+    writeTutorialSession(session)
+    return session
+  }
+
+  const advanceTutorialOnly = (expected: TutorialStep | TutorialStep[], next: TutorialStep) => {
+    const current = tutorialSessionRef.current
+    if (!current) return undefined
+    const updated = advanceTutorialSession(current, expected, next)
+    if (updated === current) return undefined
+    tutorialSessionRef.current = updated
+    setTutorialSession(updated)
+    return updated
+  }
+
+
+  const advanceTutorialStable = (expected: TutorialStep | TutorialStep[], next: TutorialStep) => {
+    if (tutorialTransitionRunning.current) return false
+    const updated = advanceTutorialOnly(expected, next)
+    if (!updated) return false
+    closeTutorialTransients()
+    setPage(tutorialPageForStep(next) as Page)
+    return true
+  }
+
+  const enterTutorialIntake = async () => {
+    const current = tutorialSessionRef.current
+    if (!current || current.step !== 'goal-existing' || tutorialTransitionRunning.current) return
+    const updated = advanceTutorialOnly('goal-existing', 'intake-entry')
+    if (!updated) return
+    tutorialTransitionRunning.current = true
+    closeTutorialTransients()
+    try {
+      const next = ensureTutorialIntakeBatch(stateRef.current, updated.anchorDate)
+      await persistTutorialState(next)
+      setPage('intake')
+    } finally {
+      tutorialTransitionRunning.current = false
+    }
+  }
+
+  const advanceTutorialAfterImport = () => advanceTutorialStable('intake-parse', 'intake-schedule')
+  const tutorialStatsExpanded = () => advanceTutorialStable('stats', 'stats-detail')
+
+  const tutorialProposalState = (proposal: SchedulingProposal) => hydratePortableState(proposal.stateAfter, {
+    replanHistory: stateRef.current.replanHistory,
+    conflictBackups: stateRef.current.conflictBackups,
+    planVersions: stateRef.current.planVersions,
+  })
+
+  const applyTutorialProposal = async (proposal: SchedulingProposal, expected: TutorialStep, next: TutorialStep) => {
+    const current = tutorialSessionRef.current
+    if (!current || current.step !== expected || tutorialTransitionRunning.current) return false
+    const nextState = tutorialProposalState(proposal)
+    const candidateSession: TutorialSession = { ...current, step: next, updatedAt: new Date().toISOString() }
+    const health = tutorialStateHealth(nextState, candidateSession)
+    if (!health.ok) {
+      tutorialNotice(`这个方案暂时不能进入下一步：${health.reason}`)
+      return false
+    }
+    let updated = advanceTutorialOnly(expected, next)
+    if (!updated) return false
+    if (['repair-calendar', 'intake-calendar', 'review-calendar', 'future-calendar'].includes(next)) {
+      const highlightDates = Array.from(new Set(proposal.movements.flatMap(move => [move.fromDate, move.toDate].filter(Boolean) as string[]))).sort()
+      updated = updateTutorialSession({ ...updated, highlightDates, lastChangeLabel: proposal.title, updatedAt: new Date().toISOString() })
+    }
+    tutorialTransitionRunning.current = true
+    closeTutorialTransients()
+    try {
+      await persistTutorialState(nextState)
+      setPage(tutorialPageForStep(next) as Page)
+      return true
+    } finally {
+      tutorialTransitionRunning.current = false
+    }
+  }
+
+  const recoverTutorialTo = async (step?: TutorialStep, message?: string) => {
+    const current = tutorialSessionRef.current
+    if (!current) return
+    const safeStep = step ?? tutorialRecoveryStep(current.step)
+    const recovered = updateTutorialSession({ ...current, step: safeStep, updatedAt: new Date().toISOString() })
+    closeTutorialTransients()
+    const health = tutorialStateHealth(stateRef.current, recovered)
+    if (!health.ok) await persistTutorialState(buildTutorialCheckpoint(safeStep, recovered.anchorDate))
+    setPage(tutorialPageForStep(safeStep) as Page)
+    if (message) tutorialNotice(message)
+  }
+
+  const startTutorial = async (options?: { auto?: boolean }) => {
+    if (tutorialBootstrapRunning.current) return
+    tutorialBootstrapRunning.current = true
+    setDataSwitching(true)
+    closeTutorialTransients()
+    setFirstLoginOpen(false)
+    try {
+      const returnNamespace = namespaceRef.current
+      const returnHadData = options?.auto ? false : loadedFromStorage || stateRef.current.assignments.length > 0 || stateRef.current.taskGroups.length > 0 || stateRef.current.intakeBatches.length > 0
+      if (returnHadData) await setDataSpace(returnNamespace, stateRef.current, false)
+      const session = createTutorialSession(returnNamespace, returnHadData, todayISO(), tutorialReturnPage(page))
+      tutorialSessionRef.current = session
+      setTutorialSession(session)
+      await persistTutorialState(buildTutorialState(session.anchorDate))
+      setPage('today')
+    } finally {
+      setDataSwitching(false)
+      tutorialBootstrapRunning.current = false
+    }
+  }
+
+  const restartTutorial = async () => {
+    const current = tutorialSessionRef.current
+    if (!current || tutorialBootstrapRunning.current) return
+    tutorialBootstrapRunning.current = true
+    setDataSwitching(true)
+    closeTutorialTransients()
+    try {
+      const restarted = updateTutorialSession({ ...current, step: 'repair-entry', startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+      await persistTutorialState(buildTutorialCheckpoint('repair-entry', restarted.anchorDate))
+      setPage('today')
+    } finally {
+      setDataSwitching(false)
+      tutorialBootstrapRunning.current = false
+    }
+  }
+
+  const exitTutorial = async (markCompleted = false) => {
+    const current = tutorialSessionRef.current
+    if (!current || tutorialBootstrapRunning.current) return
+    tutorialBootstrapRunning.current = true
+    setDataSwitching(true)
+    closeTutorialTransients()
+    let switched = false
+    try {
+      let returnNamespace = current.returnNamespace
+      if (sessionUser?.id) returnNamespace = `user:${sessionUser.id}`
+      else if (returnNamespace.startsWith('user:')) returnNamespace = 'guest'
+
+      if (returnNamespace.startsWith('user:')) {
+        const userId = returnNamespace.slice('user:'.length)
+        if (current.returnHadData) {
+          try {
+            await loadDataSpace(returnNamespace, buildBlankState())
+            switched = true
+          } catch (error) {
+            console.warn('无法恢复教程前的账号计划。', error)
+            tutorialNotice('暂时无法恢复你的原计划，请稍后再退出教程')
+            return
+          }
+        } else {
+          const blank = buildBlankState()
+          blank.guestModified = false
+          try { await setDataSpace(returnNamespace, blank, false) } catch (error) { console.warn('空白账号计划暂时无法持久化。', error) }
+          switched = true
+          if (markCompleted && sessionUser?.id === userId) {
+            try {
+              await uploadSnapshot(blank, userId)
+              resetCloudQueue(returnNamespace, blank.updatedAt)
+              setCloudReady(true)
+              setSyncStatus('saved')
+              setCloudMessage('教程已结束，已创建独立的空白个人计划。')
+            } catch (error) {
+              setCloudReady(false)
+              setSyncStatus('error')
+              setCloudMessage(error instanceof Error ? `个人计划已保存在本机；云端初始化失败：${error.message}` : '个人计划已保存在本机；云端初始化失败。')
+            }
+          } else {
+            setCloudReady(false)
+            setSyncStatus('local')
+            setFirstLoginOpen(true)
+          }
+        }
+      } else if (current.returnHadData) {
+        try {
+          await loadDataSpace(returnNamespace, buildGuestDemoState())
+          switched = true
+        } catch (error) {
+          console.warn('无法恢复教程前的游客计划。', error)
+          tutorialNotice('暂时无法恢复你的原计划，请稍后再退出教程')
+          return
+        }
+      } else {
+        const blank = buildBlankState()
+        try { await setDataSpace(returnNamespace, blank, false) } catch (error) { console.warn('空白游客计划暂时无法持久化。', error) }
+        switched = true
+      }
+
+      if (!switched) return
+      clearTutorialSession(markCompleted)
+      tutorialSessionRef.current = undefined
+      setTutorialSession(undefined)
+      void clearDataSpace(TUTORIAL_NAMESPACE).catch(() => undefined)
+      setPage(current.returnPage as Page)
+    } finally {
+      setDataSwitching(false)
+      tutorialBootstrapRunning.current = false
+    }
+  }
+
+
+  const navigate = (target: Page) => {
+    const current = tutorialSessionRef.current
+    if (current && !tutorialAllowsPage(current.step, target)) {
+      tutorialNotice()
+      setMobileNav(false)
+      return
+    }
+    setPage(target)
+    setMobileNav(false)
+  }
+
+  useEffect(() => {
+    if (!ready || !authResolved || tutorialBootHandled.current) return
+    tutorialBootHandled.current = true
+    const stored = tutorialSessionRef.current
+    if (stored) {
+      const recoveredBase = recoverTutorialSession(stored)
+      const returnNamespace = sessionUser?.id ? `user:${sessionUser.id}` : recoveredBase.returnNamespace.startsWith('user:') ? 'guest' : recoveredBase.returnNamespace
+      const recovered = returnNamespace === recoveredBase.returnNamespace ? recoveredBase : { ...recoveredBase, returnNamespace, updatedAt: new Date().toISOString() }
+      updateTutorialSession(recovered)
+      tutorialBootstrapRunning.current = true
+      setDataSwitching(true)
+      closeTutorialTransients()
+      const fallback = buildTutorialCheckpoint(recovered.step, recovered.anchorDate)
+      void loadDataSpace(TUTORIAL_NAMESPACE, fallback)
+        .then(async loaded => {
+          const health = tutorialStateHealth(loaded, recovered)
+          if (!health.ok) await persistTutorialState(fallback)
+          setPage(tutorialPageForStep(recovered.step) as Page)
+        })
+        .catch(async error => {
+          console.warn('教程本地状态读取失败，使用当前版本 checkpoint 恢复。', error)
+          await persistTutorialState(fallback)
+          setPage(tutorialPageForStep(recovered.step) as Page)
+        })
+        .finally(() => { tutorialBootstrapRunning.current = false; setDataSwitching(false); setTutorialBootReady(true) })
+      return
+    }
+    if (namespace === 'guest' && !sessionUser && !loadedFromStorage && !tutorialCompleted()) {
+      setTutorialOfferOpen(true)
+      setTutorialBootReady(true)
+      return
+    }
+    setTutorialBootReady(true)
+  }, [ready, authResolved, namespace, loadedFromStorage, sessionUser?.id])
+
+  useEffect(() => {
+    const current = tutorialSessionRef.current
+    if (!tutorialBootReady || !current || current.step === 'free') return
+    const target = tutorialPageForStep(current.step) as Page
+    if (page !== target) setPage(target)
+  }, [tutorialBootReady, tutorialSession?.step, page])
 
   useEffect(() => {
     // Pages share the document scroller. Starting a newly selected module at the
@@ -131,11 +448,16 @@ export default function App() {
   }, [page])
 
   useEffect(() => {
-    if (!ready || initialRouteHandled.current) return
+    if (!ready || tutorialSession || initialRouteHandled.current) return
     initialRouteHandled.current = true
+    if (sessionStorage.getItem('study-planner:open-recovery') === '1') {
+      sessionStorage.removeItem('study-planner:open-recovery')
+      setPage('settings')
+      return
+    }
     const trulyBlank = state.assignments.length === 0 && state.taskGroups.length === 0 && state.intakeBatches.length === 0
     if (trulyBlank && (state.templateKind === 'blank' || namespace !== 'guest')) setPage('intake')
-  }, [ready, namespace, state.assignments.length, state.taskGroups.length, state.intakeBatches.length, state.templateKind])
+  }, [ready, tutorialSession, namespace, state.assignments.length, state.taskGroups.length, state.intakeBatches.length, state.templateKind])
 
   useEffect(() => {
     const root = document.documentElement
@@ -150,13 +472,14 @@ export default function App() {
     return () => media.removeEventListener('change', applyTheme)
   }, [state.settings.theme])
 
-  const resetCloudQueue = (scope?: string, lastSavedUpdatedAt?: string) => {
+  const resetCloudQueue = (scope?: string, lastSavedUpdatedAt?: string, revision?: number) => {
     const queue = cloudSaveQueue.current
     if (queue.timer) window.clearTimeout(queue.timer)
     queue.scope = scope
     queue.pending = undefined
     queue.timer = undefined
     queue.lastSavedUpdatedAt = lastSavedUpdatedAt
+    queue.revision = revision
   }
 
   const flushCloudQueue = async () => {
@@ -169,14 +492,26 @@ export default function App() {
     queue.timer = undefined
     setSyncStatus('saving')
 
-    const rawRequest = uploadSnapshot(next, userId)
+    const rawRequest = uploadSnapshot(next, userId, queue.revision)
     const request = rawRequest.then(() => undefined, () => undefined)
     queue.inFlight = request
     try {
-      await rawRequest
+      const saved = await rawRequest
+      if (queue.scope === scope) queue.revision = saved.revision
       if (queue.scope === scope) queue.lastSavedUpdatedAt = next.updatedAt
-    } catch {
-      if (queue.scope === scope) setSyncStatus('error')
+    } catch (error) {
+      if (queue.scope === scope) {
+        setSyncStatus('error')
+        if (error instanceof CloudRevisionConflictError) {
+          try {
+            const cloud = await downloadSnapshot(userId)
+            if (cloud) await preserveRecoverySnapshot(scope, cloud.state, 'cloud-conflict', 'cloud', [`云端 revision ${cloud.revision}`])
+            await preserveRecoverySnapshot(scope, next, 'cloud-conflict', 'snapshot', [`本机尝试写入 revision ${error.expectedRevision + 1}`])
+          } catch { /* 恢复副本失败时仍保留本机当前状态 */ }
+          setCloudReady(false)
+          setCloudMessage('检测到另一台设备已经更新计划。云端和本机版本都已保留在“数据恢复中心”，请比较后再继续同步。')
+        } else setCloudMessage(error instanceof Error ? error.message : '云同步失败，本机修改已保留。')
+      }
     } finally {
       if (queue.inFlight === request) queue.inFlight = undefined
       if (queue.scope !== scope) return
@@ -217,16 +552,26 @@ export default function App() {
     const latest = stateRef.current
     queue.pending = undefined
     setSyncStatus('saving')
-    const rawRequest = uploadSnapshot(latest, userId)
+    const rawRequest = uploadSnapshot(latest, userId, queue.revision)
     const request = rawRequest.then(() => undefined, () => undefined)
     queue.inFlight = request
     try {
-      const savedAt = await rawRequest
+      const saved = await rawRequest
+      queue.revision = saved.revision
       queue.lastSavedUpdatedAt = latest.updatedAt
       setSyncStatus('saved')
-      return savedAt
+      return saved.savedAt
     } catch (error) {
       setSyncStatus('error')
+      if (error instanceof CloudRevisionConflictError) {
+        try {
+          const cloud = await downloadSnapshot(userId)
+          if (cloud) await preserveRecoverySnapshot(scope, cloud.state, 'cloud-conflict', 'cloud', [`云端 revision ${cloud.revision}`])
+          await preserveRecoverySnapshot(scope, latest, 'cloud-conflict', 'snapshot', [`本机尝试写入 revision ${error.expectedRevision + 1}`])
+        } catch { /* keep local state */ }
+        setCloudReady(false)
+        setCloudMessage('检测到另一台设备已经更新计划。云端和本机版本都已保留在“数据恢复中心”，请比较后再继续同步。')
+      }
       throw error
     } finally {
       if (queue.inFlight === request) queue.inFlight = undefined
@@ -239,24 +584,33 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!supabase) return
+    if (!supabase) { setAuthResolved(true); return }
+    let disposed = false
     const applySession = async (session: Session | null) => {
       const user = session ? { id: session.user.id, email: session.user.email } : undefined
+      const tutorialRunning = Boolean(tutorialSessionRef.current)
 
       // Supabase may emit TOKEN_REFRESHED / SIGNED_IN again when a background tab
-      // becomes visible. That is not an account change. Starting the privacy
-      // overlay for the same user would leave it waiting for a bootstrap effect
-      // whose dependency (user id) has not changed.
+      // becomes visible. That is not an account change.
       if (user && previousUserId.current === user.id) {
-        setSessionUser(current => (
-          current?.id === user.id && current.email === user.email ? current : user
-        ))
+        setSessionUser(current => (current?.id === user.id && current.email === user.email ? current : user))
         return
       }
 
-      // Repeated anonymous-session events are also no-ops.
       if (!user && !previousUserId.current) {
         setSessionUser(undefined)
+        return
+      }
+
+      // Tutorial is an isolated local workspace. Auth can change in another tab or
+      // because a token refreshes, but it must never replace tutorial data mid-step.
+      if (tutorialRunning) {
+        previousUserId.current = user?.id
+        setSessionUser(user)
+        setCloudReady(false)
+        resetCloudQueue(user ? `user:${user.id}` : undefined)
+        setSyncStatus('local')
+        setFirstLoginOpen(false)
         return
       }
 
@@ -283,13 +637,17 @@ export default function App() {
       setDataSwitching(true)
       setSessionUser(user)
     }
-    getSession().then(session => void applySession(session))
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => { void applySession(session) })
-    return () => data.subscription.unsubscribe()
+    getSession()
+      .then(session => void applySession(session))
+      .finally(() => { if (!disposed) setAuthResolved(true) })
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      void applySession(session).finally(() => { if (!disposed) setAuthResolved(true) })
+    })
+    return () => { disposed = true; data.subscription.unsubscribe() }
   }, [clearDataSpace, loadDataSpace])
 
   useEffect(() => {
-    if (!ready || !sessionUser?.id) return
+    if (!ready || !sessionUser?.id || tutorialSession || isTutorialNamespace(namespace)) return
     let cancelled = false
     setCloudReady(false)
     setSyncStatus('restoring')
@@ -298,13 +656,14 @@ export default function App() {
         const userId = sessionUser.id
         const userNamespace = `user:${userId}`
         // Local cache and cloud snapshot are independent; read them in parallel.
-        const [localUser, cloud] = await Promise.all([
+        const [localUser, cloudSnapshot] = await Promise.all([
           loadLocalState(userNamespace),
           downloadSnapshot(userId)
         ])
         if (cancelled) return
 
         const normalizedLocal = localUser ? normalizeState(localUser) : undefined
+        const cloud = cloudSnapshot?.state
         if (cloud) {
           const cloudNeedsCompaction = Boolean(cloud.replanHistory?.length || cloud.conflictBackups?.length)
           const normalizedCloud = normalizeState({
@@ -322,14 +681,14 @@ export default function App() {
 取消：恢复云端版本，并把本机版本保存为冲突备份。`)
             if (useLocal) {
               await setDataSpace(userNamespace, normalizedLocal, false)
-              await uploadSnapshot(normalizedLocal, userId)
-              resetCloudQueue(userNamespace, normalizedLocal.updatedAt)
+              const uploaded = await uploadSnapshot(normalizedLocal, userId, cloudSnapshot?.revision)
+              resetCloudQueue(userNamespace, normalizedLocal.updatedAt, uploaded.revision)
               setCloudMessage('已使用较新的本机版本并同步到云端。')
             } else {
               const backup = JSON.stringify(preparePortableState(normalizedLocal))
               normalizedCloud.conflictBackups = [...(normalizedLocal.conflictBackups ?? []).slice(-2), backup].slice(-3)
               await setDataSpace(userNamespace, normalizedCloud, false)
-              resetCloudQueue(userNamespace, cloudNeedsCompaction ? undefined : normalizedCloud.updatedAt)
+              resetCloudQueue(userNamespace, cloudNeedsCompaction ? undefined : normalizedCloud.updatedAt, cloudSnapshot?.revision)
               setCloudMessage('已恢复云端版本，本机版本已保留为冲突备份。')
             }
           } else {
@@ -338,7 +697,7 @@ export default function App() {
               normalizedCloud.conflictBackups = [...(normalizedLocal.conflictBackups ?? []).slice(-2), backup].slice(-3)
             }
             await setDataSpace(userNamespace, normalizedCloud, false)
-            resetCloudQueue(userNamespace, cloudNeedsCompaction ? undefined : normalizedCloud.updatedAt)
+            resetCloudQueue(userNamespace, cloudNeedsCompaction ? undefined : normalizedCloud.updatedAt, cloudSnapshot?.revision)
             setCloudMessage(cloudNeedsCompaction ? '已恢复个人计划，正在压缩旧版云端快照。' : '已从云端恢复个人计划。')
           }
           if (!cancelled) {
@@ -353,8 +712,8 @@ export default function App() {
           await setDataSpace(userNamespace, normalizedLocal, false)
           const uploadLocal = window.confirm('云端没有计划，但此设备保存了一份个人计划。是否把它作为云端初始版本？')
           if (uploadLocal) {
-            await uploadSnapshot(normalizedLocal, userId)
-            resetCloudQueue(userNamespace, normalizedLocal.updatedAt)
+            const uploaded = await uploadSnapshot(normalizedLocal, userId)
+            resetCloudQueue(userNamespace, normalizedLocal.updatedAt, uploaded.revision)
             setCloudReady(true)
             setSyncStatus('saved')
             setCloudMessage('已把本机个人计划设为云端初始版本。')
@@ -389,7 +748,7 @@ export default function App() {
     }
     void bootstrapCloud()
     return () => { cancelled = true }
-  }, [ready, sessionUser?.id, loadDataSpace, setDataSpace])
+  }, [ready, sessionUser?.id, tutorialSession, namespace, loadDataSpace, setDataSpace])
 
   useEffect(() => {
     if (!ready || !sessionUser?.id || !cloudReady || namespace !== `user:${sessionUser.id}`) return
@@ -423,9 +782,50 @@ export default function App() {
   }, [])
 
   const openAdjustment = (date?: string, reason: 'current-conflicts' | 'too-tiring' | 'future-replan' | 'execution-difference' = 'current-conflicts') => {
+    const tutorial = tutorialSessionRef.current
+    if (tutorial && tutorial.step !== 'free') {
+      if (tutorial.step === 'repair-entry') {
+        if (!advanceTutorialOnly('repair-entry', 'repair-action')) return
+        setAdjustmentDate(tutorial.anchorDate)
+        setAdjustmentReason('current-conflicts')
+        setAdjustmentOpen(true)
+        return
+      }
+      if (tutorial.step === 'future-entry') {
+        if (!advanceTutorialOnly('future-entry', 'future-action')) return
+        setAdjustmentDate(shiftDate(tutorial.anchorDate, 1))
+        setAdjustmentReason('future-replan')
+        setAdjustmentOpen(true)
+        return
+      }
+      tutorialNotice()
+      return
+    }
     setAdjustmentDate(date)
     setAdjustmentReason(reason)
     setAdjustmentOpen(true)
+  }
+
+  const closeAdjustment = () => {
+    const tutorial = tutorialSessionRef.current
+    setAdjustmentOpen(false)
+    if (tutorial?.step === 'repair-action') void recoverTutorialTo('repair-entry')
+    else if (tutorial?.step === 'future-action') void recoverTutorialTo('future-entry')
+  }
+
+  const openReview = (date: string) => {
+    const tutorial = tutorialSessionRef.current
+    if (tutorial && tutorial.step !== 'free') {
+      if (tutorial.step !== 'review-entry' || date !== tutorial.anchorDate) { tutorialNotice(); return }
+      if (!advanceTutorialOnly('review-entry', 'review-carry')) return
+    }
+    setReviewDate(date)
+  }
+
+  const closeReview = () => {
+    const tutorial = tutorialSessionRef.current
+    setReviewDate(undefined)
+    if (tutorial?.step === 'review-carry') void recoverTutorialTo('review-entry')
   }
 
   const initializeAccount = async (kind: 'blank' | 'demo' | 'import' | 'separate') => {
@@ -440,8 +840,8 @@ export default function App() {
       initial.guestModified = false
     }
     await setDataSpace(`user:${sessionUser.id}`, initial, false)
-    await uploadSnapshot(initial, sessionUser.id)
-    resetCloudQueue(`user:${sessionUser.id}`, initial.updatedAt)
+    const uploaded = await uploadSnapshot(initial, sessionUser.id)
+    resetCloudQueue(`user:${sessionUser.id}`, initial.updatedAt, uploaded.revision)
     setCloudReady(true)
     setSyncStatus('saved')
     setFirstLoginOpen(false)
@@ -450,8 +850,50 @@ export default function App() {
   }
 
   const openPrepared = (prepared: AppState, event: PlanChangeEvent, options?: { forceAlternatives?: boolean }) => {
+    const tutorial = tutorialSessionRef.current
+    const tutorialRestricted = Boolean(tutorial && tutorial.step !== 'free')
     const baseline = stateRef.current
     const policy = adjustmentPolicyForEvent(event)
+    if (tutorialRestricted && tutorial) {
+      if (!tutorialAcceptsEvent(tutorial, event)) { tutorialNotice(); return }
+      const previewStep: Partial<Record<TutorialStep, TutorialStep>> = {
+        'repair-action': 'repair-preview',
+        'intake-schedule': 'intake-preview',
+        'review-carry': 'review-preview',
+        'future-action': 'future-preview',
+      }
+      const nextPreview = previewStep[tutorial.step]
+      if (!nextPreview) { tutorialNotice(); return }
+
+      // 教程使用正式调度/校验核心。固定 fixture、固定策略和操作白名单负责一致性，
+      // checkpoint 只负责验证，不再预先写死“正确答案”。
+      const direct = previewPreparedChange(baseline, prepared, event, policy.directPreviewLabel)
+      const generated = tutorial.step === 'review-carry'
+        ? []
+        : generateProposals(prepared, event, baseline, undefined, 0)
+      const feasibleGenerated = generated.filter(item => !item.infeasible)
+      const repairTeachingProposals = tutorial.step === 'repair-action'
+        ? feasibleGenerated.filter(item => item.movements.length > 0 && item.goalImpacts.some(goal => (goal.latestRiskBefore && !goal.latestRiskAfter) || (goal.desiredRiskBefore && !goal.desiredRiskAfter) || Boolean(goal.beforeExpectedCompletion && goal.afterExpectedCompletion && goal.afterExpectedCompletion < goal.beforeExpectedCompletion)))
+        : []
+      const futureTeachingProposals = tutorial.step === 'future-action'
+        ? feasibleGenerated.filter(item => item.movements.length > 0)
+        : []
+      const proposals = tutorial.step === 'review-carry'
+        ? (direct.infeasible ? [] : [direct])
+        : repairTeachingProposals.length ? repairTeachingProposals
+          : futureTeachingProposals.length ? futureTeachingProposals
+            : feasibleGenerated
+      if (!proposals.length) {
+        // 保留问题详情给用户看，不自动把整个教程跳回上一层。
+        if (!advanceTutorialOnly(tutorial.step, nextPreview)) return
+        setProposalSession({ baseline, prepared, event, policy, proposals: generated.length ? generated : [direct], expansionLevel: 0, calculationRevision: 0, moreExhausted: true })
+        tutorialNotice('当前条件下没有直接可应用方案，请查看预览中的具体原因')
+        return
+      }
+      if (!advanceTutorialOnly(tutorial.step, nextPreview)) return
+      setProposalSession({ baseline, prepared, event, policy, proposals, expansionLevel: 0, calculationRevision: 0, moreExhausted: true })
+      return
+    }
     const directPreview = previewPreparedChange(baseline, prepared, event, policy.directPreviewLabel)
     const explicitLocalOperation = event.metadata?.explicitLocalOperation === true || event.metadata?.operationScope === 'requested-change-only'
     const useDirectFirst = policy.mode === 'validate-and-commit' || policy.mode === 'optional-optimization'
@@ -499,10 +941,11 @@ export default function App() {
         signatures.add(proposal.distinctSignature)
         merged.push(proposal)
       }
+      if (tutorialRestricted && merged.length === 0) merged.push(directPreview)
       setProposalSession({ baseline, prepared, event: routedEvent, policy, proposals: merged, expansionLevel: 0, calculationRevision: 0 })
     }
 
-    if (typeof Worker === 'undefined') {
+    if (tutorialRestricted || typeof Worker === 'undefined') {
       complete(generateProposals(prepared, routedEvent, baseline))
       return
     }
@@ -535,6 +978,11 @@ export default function App() {
   }
 
   const applyCurrentReviewPlan = (prepared: AppState, event: PlanChangeEvent) => {
+    const tutorial = tutorialSessionRef.current
+    if (tutorial?.step === 'review-carry') {
+      openPrepared(prepared, event)
+      return
+    }
     const baseline = stateRef.current
     const policy = adjustmentPolicyForEvent(event)
     const directPreview = previewPreparedChange(baseline, prepared, event, policy.directPreviewLabel)
@@ -553,6 +1001,8 @@ export default function App() {
   }
 
   const openAddTask = (date?: string, intent: SchedulingIntent = date ? 'prefer-date' : 'system', intakeBatchId?: string) => {
+    const tutorial = tutorialSessionRef.current
+    if (tutorial && tutorial.step !== 'free') { tutorialNotice(); return }
     setAddTaskContext({ date, intent, intakeBatchId })
     setAddTaskOpen(true)
   }
@@ -561,7 +1011,7 @@ export default function App() {
     setAddTaskOpen(false)
     if (mode === 'intake') {
       setIntakeAddRequest({ id: uid('intake-add'), kind, batchId: addTaskContext.intakeBatchId })
-      setPage('intake')
+      navigate('intake')
       return
     }
     if (kind === 'single') {
@@ -575,10 +1025,78 @@ export default function App() {
 
   const pendingIntakeCount = state.intakeBatches.reduce((sum, batch) => sum + (batch.status === 'archived' ? 0 : batch.taskGroups.filter(item => !item.appliedAt).length), 0)
 
+  const tutorialRestricted = Boolean(tutorialActive && tutorialStepValue && tutorialStepValue !== 'free')
+  let tutorialCoachConfig: TutorialCoachmarkConfig | undefined
+  if (tutorialRestricted && tutorialStepValue) {
+    const base: Partial<Record<TutorialStep, TutorialCoachmarkConfig>> = {
+      'repair-entry': { target: 'replan-center', text: '这里有 3 个问题：今天超载、任务逾期、目标有风险。点“重排中心”查看。' },
+      'repair-action': { target: 'repair-submit|repair-current', text: '点“修复当前问题”。系统只重新安排需要处理的内容，不动已完成和锁定任务。' },
+      'repair-preview': { target: 'proposal-primary', text: '先看哪些任务会移动。确认没问题后，点“应用方案”。' },
+      'repair-calendar': { text: '高亮日期就是刚刚改动的位置。已完成和锁定内容没有被打乱。', actionLabel: '下一步：看目标', onAction: () => advanceTutorialStable('repair-calendar', 'goal-existing') },
+      'goal-existing': { target: 'tutorial-goal-view', text: '点“查看”打开目标详情。看完后用正常的“关闭”返回，教程会继续。' },
+      'intake-entry': { target: 'tutorial-natural-input', text: '点“自然语言 / 粘贴清单”。先把任务录进来，再决定怎么排。' },
+      'intake-source': { target: 'tutorial-parse', text: '示例任务已经填好。直接点“解析并预览”。' },
+      'intake-parse': { target: 'tutorial-import-confirm', text: '确认识别出的任务、数量和时长，然后点“加入当前批次”。现在还不会进入日历。' },
+      'intake-schedule': { target: 'schedule-intake', text: '任务已经在真实录入区里。点“生成排期预览”。有截止日期的内容会按正式规则参与目标与期限判断。' },
+      'intake-preview': { target: 'proposal-primary', text: '看清任务被安排到哪些日期。确认后点“应用方案”，这时才会进入正式计划。' },
+      'intake-calendar': { text: '新任务已经进入计划。高亮日期就是这次排期新增或调整的位置。', actionLabel: '下一步：执行今天', onAction: () => advanceTutorialStable('intake-calendar', 'execute-complete') },
+      'execute-complete': { target: 'tutorial-complete-confirm|tutorial-execute', text: '完成高亮任务，并记录 52 分钟实际用时。' },
+      'execute-partial': { target: 'tutorial-partial-confirm|tutorial-execute', text: '把第二项记录为部分完成：12 分钟、50%。' },
+      'review-entry': { target: 'today-review', text: '今天没有全部做完。点“结束今天并复盘”，按真实结果处理剩余任务。' },
+      'review-carry': { target: 'review-carry', text: '选择顺延日期，再点“完成复盘，并按当前方案顺延”。不用重新录入任务。' },
+      'review-preview': { target: 'proposal-primary', text: '确认未完成任务会移到哪里，然后点“应用方案”。' },
+      'review-calendar': { text: '未完成任务已经接到后面的日期，今天的执行记录仍然保留。', actionLabel: '下一步：看统计', onAction: () => advanceTutorialStable('review-calendar', 'stats') },
+      stats: { target: 'tutorial-stats-expand', text: '点“查看连续记录和学习热力图”，展开详细统计。' },
+      'stats-detail': { text: '这里保存的是实际执行结果：学了多久、完成多少、计划和实际差多少。', actionLabel: '下一步：调整未来', onAction: () => advanceTutorialStable('stats-detail', 'future-entry') },
+      'future-entry': { target: 'replan-center', text: '现在没有故障，也可以主动改后面的节奏。点“计划有变化”进入重排中心。' },
+      'future-action': { target: 'future-submit|future-replan', text: '选择一个取舍方向，再生成未来方案。这里是在主动规划，不是在修复错误。' },
+      'future-preview': { target: 'proposal-primary', text: '对比未来几天调整前后。确认后点“应用方案”。' },
+      'future-calendar': { text: '主动重排已经生效。它和刚才“修复问题”走的是同一套真实预览与确认流程。', actionLabel: '完成体验', onAction: () => advanceTutorialStable('future-calendar', 'complete') },
+      complete: { text: '你已经走完：发现问题 → 修复 → 录入 → 排期 → 执行 → 复盘 → 再调整。', actionLabel: '开始我的计划', onAction: () => { void exitTutorial(true) }, secondaryLabel: '继续看看', onSecondary: () => { const updated = advanceTutorialOnly('complete', 'free'); if (updated) setPage('today') } },
+    }
+    const headlines: Partial<Record<TutorialStep, string>> = {
+      'repair-entry': '打开重排中心',
+      'repair-action': '生成修复方案',
+      'repair-preview': '确认这次调整',
+      'repair-calendar': '看修复结果',
+      'goal-existing': '查看目标怎样影响排期',
+      'intake-entry': '打开自然语言录入',
+      'intake-source': '解析示例任务',
+      'intake-parse': '把识别结果加入录入批次',
+      'intake-schedule': '生成新任务排期',
+      'intake-preview': '确认新任务排期',
+      'intake-calendar': '看新任务落在哪些天',
+      'execute-complete': '完整完成一项任务',
+      'execute-partial': '记录一次部分完成',
+      'review-entry': '按真实结果结束今天',
+      'review-carry': '把没做完的接到后面',
+      'review-preview': '确认顺延结果',
+      'review-calendar': '看顺延后的计划',
+      stats: '展开详细统计',
+      'stats-detail': '看计划和实际留下了什么数据',
+      'future-entry': '主动调整后面的计划',
+      'future-action': '选择未来节奏',
+      'future-preview': '确认未来几天的变化',
+      'future-calendar': '看主动重排结果',
+      complete: '完整流程走完了',
+    }
+    const phase = tutorialStepValue.startsWith('repair') ? '01 · 修复计划'
+      : tutorialStepValue === 'goal-existing' ? '02 · 目标'
+        : tutorialStepValue.startsWith('intake') ? '03 · 录入与排期'
+          : tutorialStepValue.startsWith('execute') ? '04 · 执行'
+            : tutorialStepValue.startsWith('review') ? '05 · 复盘'
+              : tutorialStepValue.startsWith('stats') ? '06 · 统计'
+                : tutorialStepValue.startsWith('future') ? '07 · 调整未来'
+                  : '完成体验'
+    const coach = base[tutorialStepValue]
+    tutorialCoachConfig = coach ? { ...coach, eyebrow: coach.eyebrow ?? phase, headline: headlines[tutorialStepValue] } : undefined
+  }
 
-  if (!ready || dataSwitching) return <div className="loading-screen"><div className="spinner"/><p>{dataSwitching ? '正在安全切换数据空间……' : '正在载入学习计划……'}</p></div>
 
-  if (page === 'timer') return <FocusTimerPage onExit={() => setPage('today')}/>
+
+  if (!ready || !authResolved || !tutorialBootReady || dataSwitching) return <div className="loading-screen"><div className="spinner"/><p>{dataSwitching ? '正在安全切换数据空间……' : '正在载入学习计划……'}</p></div>
+
+  if (page === 'timer') return <FocusTimerPage onExit={() => navigate('today')}/>
 
   return (
     <div className={`app-shell ${state.settings.sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
@@ -588,34 +1106,43 @@ export default function App() {
           {navItems.map(item => {
             const Icon = item.icon
             const intakeLabel = item.id === 'intake' && pendingIntakeCount ? `${item.label}，${pendingIntakeCount} 项待安排内容` : item.label
-            return <button key={item.id} aria-label={intakeLabel} title={state.settings.sidebarCollapsed ? intakeLabel : undefined} className={page === item.id ? 'nav-active' : ''} onClick={() => { setPage(item.id); setMobileNav(false) }}><Icon size={19}/><span>{item.label}</span>{item.id === 'intake' && pendingIntakeCount > 0 && <em className="intake-nav-badge">{pendingIntakeCount > 99 ? '99+' : pendingIntakeCount}</em>}</button>
+            const tutorialDisabled = Boolean(tutorialSession && !tutorialAllowsPage(tutorialSession.step, item.id))
+            return <button key={item.id} aria-label={intakeLabel} aria-disabled={tutorialDisabled || undefined} title={tutorialDisabled ? '教程中先完成当前步骤' : state.settings.sidebarCollapsed ? intakeLabel : undefined} className={`${page === item.id ? 'nav-active' : ''} ${tutorialDisabled ? 'tutorial-disabled-control' : ''}`.trim()} onClick={() => navigate(item.id)}><Icon size={19}/><span>{item.label}</span>{item.id === 'intake' && pendingIntakeCount > 0 && <em className="intake-nav-badge">{pendingIntakeCount > 99 ? '99+' : pendingIntakeCount}</em>}</button>
           })}
         </nav>
         <div className="sidebar-bottom">
           <a className="sidebar-repo-link" href={GITHUB_REPO_URL} target="_blank" rel="noreferrer" title={state.settings.sidebarCollapsed ? 'GitHub 仓库' : undefined}><Github size={18}/><span>GitHub 仓库</span><ArrowUpRight className="sidebar-repo-arrow" size={14}/></a>
-          <div className={`sync-status ${sessionUser ? 'online' : ''} ${syncStatus === 'error' ? 'sync-error' : ''}`}>{sessionUser ? <Cloud size={16}/> : <CloudOff size={16}/>}<span>{!sessionUser ? '游客演示 · 仅本地保存' : syncStatus === 'restoring' ? '正在从云端恢复' : syncStatus === 'queued' ? '已保存到本机 · 等待云同步' : syncStatus === 'saving' ? '正在同步到云端' : syncStatus === 'error' ? '云同步失败' : cloudReady ? '已自动保存到云端' : '等待初始化个人计划'}</span></div>
-          <button className="collapse-button" title={state.settings.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'} aria-label={state.settings.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'} onClick={() => updateSettings({ sidebarCollapsed: !state.settings.sidebarCollapsed })}><ChevronLeft size={18}/><span>{state.settings.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}</span></button>
+          <div className={`sync-status ${sessionUser && !tutorialActive ? 'online' : ''} ${syncStatus === 'error' && !tutorialActive ? 'sync-error' : ''}`}>{tutorialActive || !sessionUser ? <CloudOff size={16}/> : <Cloud size={16}/>}<span>{tutorialActive ? '交互教程 · 独立本地空间' : !sessionUser ? '游客 · 仅本地保存' : syncStatus === 'restoring' ? '正在从云端恢复' : syncStatus === 'queued' ? '已保存到本机 · 等待云同步' : syncStatus === 'saving' ? '正在同步到云端' : syncStatus === 'error' ? '云同步失败' : cloudReady ? '已自动保存到云端' : '等待初始化个人计划'}</span></div>
+          <button className={`collapse-button ${tutorialRestricted ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialRestricted || undefined} title={tutorialRestricted ? '教程中保持当前布局' : state.settings.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'} aria-label={state.settings.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'} onClick={() => tutorialRestricted ? tutorialNotice('教程中暂时保持当前布局') : updateSettings({ sidebarCollapsed: !state.settings.sidebarCollapsed })}><ChevronLeft size={18}/><span>{state.settings.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}</span></button>
+          <small className="sidebar-version">v{APP_VERSION}</small>
         </div>
       </aside>
       {mobileNav && <button className="mobile-overlay" onClick={() => setMobileNav(false)} aria-label="关闭菜单"/>}
       <main ref={mainAreaRef} className="main-area">
         <header className="topbar">
           <button className="icon-button mobile-menu" aria-label="打开菜单" onClick={() => setMobileNav(true)}><Menu size={21}/></button>
-          <div className="page-heading"><h1>{navItems.find(n => n.id === page)?.label}</h1><span>{format(new Date(), 'yyyy年M月d日')}</span></div>
-          <div className="topbar-actions"><ActiveTimerReturnButton onOpen={() => setPage('timer')}/><button className="secondary-button" aria-label={currentIssueCount ? `计划有 ${currentIssueCount} 个问题，打开处理` : '打开计划变化入口'} onClick={() => openAdjustment()}><RefreshCw size={16}/><span>{currentIssueCount ? `${currentIssueCount} 个问题需处理` : '计划有变化'}</span></button></div>
+          <div className="page-heading"><h1>{navItems.find(n => n.id === page)?.label}</h1><span>{tutorialActive ? format(parseISO(effectiveToday), 'yyyy年M月d日') : format(new Date(), 'yyyy年M月d日')}</span></div>
+          <div className="topbar-actions"><ActiveTimerReturnButton onOpen={() => tutorialRestricted ? tutorialNotice('教程中先完成当前步骤，再进入专注计时') : navigate('timer')}/><button data-tutorial-target={tutorialRestricted && (tutorialStepValue === 'repair-entry' || tutorialStepValue === 'future-entry') ? 'replan-center' : undefined} aria-disabled={tutorialRestricted && tutorialStepValue !== 'repair-entry' && tutorialStepValue !== 'future-entry' ? true : undefined} className={`secondary-button ${tutorialRestricted && tutorialStepValue !== 'repair-entry' && tutorialStepValue !== 'future-entry' ? 'tutorial-disabled-control' : ''}`} aria-label={currentIssueCount ? `计划有 ${currentIssueCount} 个问题，打开处理` : '打开计划变化入口'} onClick={() => openAdjustment()}><RefreshCw size={16}/><span>{currentIssueCount ? `${currentIssueCount} 个问题需处理` : '计划有变化'}</span></button>{tutorialActive && tutorialStepValue === 'free' && <button className="secondary-button" onClick={() => void exitTutorial(false)}>返回我的计划</button>}</div>
         </header>
+        {tutorialActive && tutorialCoachConfig && tutorialStepValue && <TutorialCoachmark step={tutorialStepValue} config={tutorialCoachConfig} onRestart={() => { void restartTutorial() }} onExit={() => { void exitTutorial(false) }}/>}
         <div className="page-content">
-          {page === 'today' && <TodayPage onNavigate={setPage} onPrepared={openPrepared} onAddTask={date => openAddTask(date, 'prefer-date')} onReview={setReviewDate}/>}
-          {page === 'calendar' && <CalendarPage onPrepared={openPrepared} onOpenAdjustment={date => openAdjustment(date, 'current-conflicts')} onAddTask={date => openAddTask(date, 'prefer-date')}/>}
-          {page === 'tasks' && <TasksPage onOpenIntake={() => setPage('intake')} onPrepared={openPrepared}/>}
-          {page === 'intake' && <IntakePage onPrepared={openPrepared} onNavigate={target => setPage(target)} onAddTask={batchId => openAddTask(undefined, 'system', batchId)} addRequest={intakeAddRequest} onAddRequestHandled={() => setIntakeAddRequest(undefined)}/>}
-          {page === 'goals' && <GoalsPage onPrepared={openPrepared}/>} 
-          {page === 'stats' && <Suspense fallback={<div className="page-loading"><div className="spinner"/><p>正在载入统计图表……</p></div>}><StatsPage onOpenReplan={date => openAdjustment(date, 'current-conflicts')}/></Suspense>}
-          {page === 'export' && <ExportPage onNavigate={target => setPage(target)}/>}
-          {page === 'guide' && <GuidePage onNavigate={target => setPage(target)}/>}
-          {page === 'settings' && <SettingsPage sessionUserId={sessionUser?.id} sessionEmail={sessionUser?.email} cloudMessage={cloudMessage} onCloudUpload={uploadCloudNow} onPrepared={openPrepared}/>} 
+          {page === 'today' && <TodayPage onNavigate={navigate} onPrepared={openPrepared} onAddTask={date => openAddTask(date, 'prefer-date')} onReview={openReview} todayOverride={tutorialSession?.anchorDate} tutorialMode={tutorialRestricted} tutorialStep={tutorialStepValue} tutorialTargetId={tutorialStepValue === 'execute-partial' ? TUTORIAL_PARTIAL_ASSIGNMENT_ID : TUTORIAL_EXECUTE_ASSIGNMENT_ID} onTutorialTaskRecorded={mode => { if (mode === 'complete') advanceTutorialStable('execute-complete', 'execute-partial'); else advanceTutorialStable('execute-partial', 'review-entry') }} onTutorialBlocked={tutorialNotice}/>}
+          {page === 'calendar' && <CalendarPage onPrepared={openPrepared} onOpenAdjustment={date => openAdjustment(date, 'current-conflicts')} onAddTask={date => openAddTask(date, 'prefer-date')} tutorialMode={tutorialRestricted} tutorialHighlightDates={tutorialSession?.highlightDates} onTutorialBlocked={tutorialNotice}/>}
+          {page === 'tasks' && <TasksPage onOpenIntake={() => navigate('intake')} onPrepared={openPrepared} tutorialMode={tutorialRestricted} tutorialStep={tutorialStepValue} onTutorialBlocked={tutorialNotice}/>}
+          <Suspense fallback={<div className="page-loading"><div className="spinner"/><p>正在载入页面……</p></div>}>
+            {page === 'intake' && <IntakePage onPrepared={openPrepared} onNavigate={target => navigate(target)} onAddTask={batchId => openAddTask(undefined, 'system', batchId)} addRequest={intakeAddRequest} onAddRequestHandled={() => setIntakeAddRequest(undefined)} tutorialMode={tutorialRestricted && tutorialPageForStep(tutorialStepValue!) === 'intake'} tutorialStep={tutorialStepValue} tutorialText={tutorialSession ? tutorialNaturalLanguageText(tutorialSession.anchorDate) : undefined} onTutorialNaturalOpen={() => advanceTutorialStable('intake-entry', 'intake-source')} onTutorialParsed={() => advanceTutorialStable('intake-source', 'intake-parse')} onTutorialImported={advanceTutorialAfterImport} onStartTutorial={() => setTutorialOfferOpen(true)} onTutorialBlocked={tutorialNotice}/>}
+            {page === 'goals' && <GoalsPage onPrepared={openPrepared} tutorialMode={tutorialRestricted && tutorialPageForStep(tutorialStepValue!) === 'goals'} tutorialStep={tutorialStepValue} onTutorialExistingViewed={() => { void enterTutorialIntake() }} onTutorialBlocked={tutorialNotice}/>}
+            {page === 'stats' && <StatsPage onOpenReplan={date => openAdjustment(date, 'current-conflicts')} tutorialMode={tutorialRestricted && (tutorialStepValue === 'stats' || tutorialStepValue === 'stats-detail')} onTutorialExpanded={tutorialStatsExpanded}/>}
+            {page === 'export' && <ExportPage onNavigate={target => navigate(target)}/>}
+            {page === 'guide' && <GuidePage onNavigate={target => navigate(target)} onStartTutorial={() => setTutorialOfferOpen(true)}/>}
+          </Suspense>
+          {page === 'settings' && <SettingsPage sessionUserId={sessionUser?.id} sessionEmail={sessionUser?.email} cloudMessage={cloudMessage} onCloudUpload={uploadCloudNow} onPrepared={openPrepared}/>}
         </div>
       </main>
+      <Modal open={tutorialOfferOpen} title="体验完整流程" onClose={() => { markTutorialOfferDismissed(); setTutorialOfferOpen(false) }}>
+        <div className="tutorial-offer-copy"><p>这是一个独立的演示教程，会带你一步一步体验：计划修复、目标、录入、排期、执行、复盘和调整。</p><p>教程使用演示数据，不会修改你的真实计划。</p><p>如果暂时关闭，之后可以在“使用教程”里重新打开。</p></div>
+        <div className="modal-actions"><button className="secondary-button" onClick={() => { markTutorialOfferDismissed(); setTutorialOfferOpen(false); if (!state.assignments.length) setPage('intake') }}>直接开始我的计划</button><button className="primary-button" onClick={() => { setTutorialOfferOpen(false); void startTutorial() }}>开始体验</button></div>
+      </Modal>
       <AddTaskDialog open={addTaskOpen} onClose={() => setAddTaskOpen(false)} onSelect={selectTaskCreation}/>
       <SingleTaskDialog open={singleTaskOpen} state={state} defaultDate={singleTaskDate} defaultIntent={singleTaskIntent} creationMode="schedule" onClose={() => setSingleTaskOpen(false)} onSubmit={draft => {
         const prepared = prepareSingleAssignment(draft)
@@ -633,8 +1160,15 @@ export default function App() {
       </Modal>}
       {proposalSession && <ProposalDialog
         open baseline={proposalSession.baseline} preparedState={proposalSession.prepared} event={proposalSession.event}
-        proposals={proposalSession.proposals} policy={proposalSession.policy} calculationRevision={proposalSession.calculationRevision} decisionSummary={proposalSession.decisionSummary} moreExhausted={proposalSession.moreExhausted}
-        onClose={() => setProposalSession(undefined)}
+        proposals={proposalSession.proposals} policy={proposalSession.policy} calculationRevision={proposalSession.calculationRevision} decisionSummary={proposalSession.decisionSummary} moreExhausted={proposalSession.moreExhausted} tutorialMode={tutorialRestricted} onTutorialBlocked={tutorialNotice}
+        onClose={() => {
+          const step = tutorialSessionRef.current?.step
+          setProposalSession(undefined)
+          if (step === 'repair-preview') void recoverTutorialTo('repair-entry')
+          else if (step === 'intake-preview') void recoverTutorialTo('intake-schedule')
+          else if (step === 'review-preview') void recoverTutorialTo('review-entry')
+          else if (step === 'future-preview') void recoverTutorialTo('future-entry')
+        }}
         onKeep={() => {
           const type = proposalSession.event.type
           const reviewDate = typeof proposalSession.event.metadata?.reviewDate === 'string' ? proposalSession.event.metadata.reviewDate : undefined
@@ -710,17 +1244,28 @@ export default function App() {
         }}
         onRequestExternalChange={action => {
           setProposalSession(undefined)
-          setPage(action === 'change-goal' ? 'goals' : 'settings')
+          navigate(action === 'change-goal' ? 'goals' : 'settings')
         }}
-        onApply={proposal => { applySchedulingProposal(proposal, proposalSession.event); setActionNotice(`已应用“${proposal.title}”，移动 ${proposal.metrics.movedTaskCount} 项任务`); setProposalSession(undefined) }}
+        onApply={proposal => {
+          const step = tutorialSessionRef.current?.step
+          if (step === 'repair-preview') { void applyTutorialProposal(proposal, 'repair-preview', 'repair-calendar'); return }
+          if (step === 'intake-preview') { void applyTutorialProposal(proposal, 'intake-preview', 'intake-calendar'); return }
+          if (step === 'review-preview') { void applyTutorialProposal(proposal, 'review-preview', 'review-calendar'); return }
+          if (step === 'future-preview') { void applyTutorialProposal(proposal, 'future-preview', 'future-calendar'); return }
+          applySchedulingProposal(proposal, proposalSession.event)
+          setActionNotice(`已应用“${proposal.title}”，移动 ${proposal.metrics.movedTaskCount} 项任务`)
+          setProposalSession(undefined)
+        }}
       />} 
       <ReviewDialog
         open={Boolean(reviewDate)}
-        date={reviewDate ?? todayISO()}
-        onClose={() => setReviewDate(undefined)}
+        date={reviewDate ?? effectiveToday}
+        onClose={closeReview}
         onPreparedDuration={openPrepared}
         onApplyCurrentPlan={applyCurrentReviewPlan}
         onRequestMorePlans={openMoreReviewPlans}
+        tutorialMode={tutorialStepValue === 'review-carry'}
+        onTutorialBlocked={tutorialNotice}
       />
       <SequenceRenumberDialog
         suggestion={sequenceRenumberSuggestion}
@@ -732,19 +1277,21 @@ export default function App() {
         state={state}
         initialDate={adjustmentDate}
         initialReason={adjustmentReason}
-        onClose={() => setAdjustmentOpen(false)}
+        onClose={closeAdjustment}
         onPrepared={(prepared, event) => { setAdjustmentOpen(false); openPrepared(prepared, event) }}
         onOpenIntake={() => openAddTask()}
-        onOpenDeadline={() => setDeadlineDialogOpen(true)}
-        onOpenBulkMove={() => setBulkMoveCenterOpen(true)}
-        onDurationSuggestion={suggestion => { const prepared = prepareDurationChange(suggestion); openPrepared(prepared.state, prepared.event) }}
+        onOpenDeadline={() => tutorialRestricted ? tutorialNotice() : setDeadlineDialogOpen(true)}
+        onOpenBulkMove={() => tutorialRestricted ? tutorialNotice() : setBulkMoveCenterOpen(true)}
+        onDurationSuggestion={suggestion => { if (tutorialRestricted) { tutorialNotice(); return }; const prepared = prepareDurationChange(suggestion); openPrepared(prepared.state, prepared.event) }}
+        tutorialMode={tutorialStepValue === 'repair-action' ? 'repair' : tutorialStepValue === 'future-action' ? 'future' : undefined}
+        onTutorialBlocked={tutorialNotice}
       />
       <GoalDeadlineDialog
         open={deadlineDialogOpen}
         state={state}
         onClose={() => setDeadlineDialogOpen(false)}
         onPrepared={openPrepared}
-        onOpenGoals={() => setPage('goals')}
+        onOpenGoals={() => navigate('goals')}
       />
       <BulkMoveCenterDialog
         open={bulkMoveCenterOpen}
@@ -752,15 +1299,17 @@ export default function App() {
         onClose={() => setBulkMoveCenterOpen(false)}
         onPrepared={openPrepared}
       />
-      {actionNotice && <div className="action-result-toast"><div><strong>{actionNotice}</strong><span>当前操作已保存；需要时可以立即撤销。</span></div><div><button className="secondary-button" disabled={!canUndo} onClick={() => { undo(); setActionNotice('已恢复上一步') }}>撤销</button><button className="text-button" onClick={() => setActionNotice(undefined)}>关闭</button></div></div>}
+      {actionNotice && !tutorialRestricted && <div className="action-result-toast"><div><strong>{actionNotice}</strong><span>当前操作已保存；需要时可以立即撤销。</span></div><div><button className="secondary-button" disabled={!canUndo} onClick={() => { undo(); setActionNotice('已恢复上一步') }}>撤销</button><button className="text-button" onClick={() => setActionNotice(undefined)}>关闭</button></div></div>}
       <Modal open={firstLoginOpen} title="欢迎使用 · 选择个人计划起点" onClose={() => {}}>
         <p className="onboarding-copy">云端还没有你的计划。游客数据不会被静默上传；请选择个人账号的独立起点。</p>
         <div className="template-options">
           {guestImportAvailable && <button onClick={() => void initializeAccount('import')}><strong>导入已修改的游客计划</strong><span>复制任务、任务组、目标、日期约束和当前执行状态；游客空间仍独立保留。</span></button>}
-          <button onClick={() => void initializeAccount('demo')}><strong>使用完整演示计划（推荐）</strong><span>创建一份与游客数据完全独立的真实规模演示计划。</span></button>
-          <button onClick={() => void initializeAccount('blank')}><strong>从空白开始</strong><span>创建新的账号计划；游客数据仍独立保留在本机。</span></button>
+          <button onClick={() => { setFirstLoginOpen(false); setTutorialOfferOpen(true) }}><strong>体验完整流程（推荐）</strong><span>在独立教程空间里亲手完成修复、目标、录入、执行、复盘和未来重排；不会写入账号计划。</span></button>
+          <button onClick={() => void initializeAccount('blank')}><strong>直接从空白开始</strong><span>创建新的账号计划；游客数据仍独立保留在本机。</span></button>
         </div>
       </Modal>
+      <PwaUpdatePrompt />
+      {tutorialBlockedNotice && <div className="tutorial-blocked-notice" role="status">{tutorialBlockedNotice}</div>}
       <Analytics />
     </div>
   )
@@ -851,9 +1400,9 @@ function ActiveTimerReturnButton({ onOpen }: { onOpen: () => void }) {
   return <button className={`active-timer-return ${state.timer.running ? 'running' : 'paused'}`} onClick={onOpen}><Clock3 size={16}/><span><strong>{state.timer.running ? '正在计时' : '计时暂停'}</strong><small>{elapsed}</small></span></button>
 }
 
-function TodayPage({ onNavigate, onPrepared, onAddTask, onReview }: { onNavigate: (page: Page) => void; onPrepared: (state: AppState, event: PlanChangeEvent) => void; onAddTask: (date: string) => void; onReview: (date: string) => void }) {
+function TodayPage({ onNavigate, onPrepared, onAddTask, onReview, todayOverride, tutorialMode = false, tutorialStep, tutorialTargetId, onTutorialTaskRecorded, onTutorialBlocked }: { onNavigate: (page: Page) => void; onPrepared: (state: AppState, event: PlanChangeEvent) => void; onAddTask: (date: string) => void; onReview: (date: string) => void; todayOverride?: string; tutorialMode?: boolean; tutorialStep?: TutorialStep; tutorialTargetId?: string; onTutorialTaskRecorded?: (mode: 'complete' | 'partial') => void; onTutorialBlocked?: (message?: string) => void }) {
   const { state, namespace, commit, captureDailyPlanBaseline, startTimer } = useApp()
-  const rawToday = todayISO()
+  const rawToday = todayOverride ?? todayISO()
   const defaultDate = clampDate(rawToday, state.settings.startDate, state.settings.endDate)
   const [date, setDate] = useState(defaultDate)
   const [completeTarget, setCompleteTarget] = useState<Assignment>()
@@ -895,7 +1444,7 @@ function TodayPage({ onNavigate, onPrepared, onAddTask, onReview }: { onNavigate
     captureDailyPlanBaseline(rawToday)
   }, [rawToday, state.settings.startDate, state.settings.endDate, state.dailyPlanBaselines, captureDailyPlanBaseline])
   useEffect(() => {
-    if (!state.settings.optionalReview || date !== todayISO() || !tasks.length || !tasks.every(item => item.status === 'done') || state.reviewRecords.some(item => item.date === date)) return
+    if (!state.settings.optionalReview || tutorialMode || date !== rawToday || !tasks.length || !tasks.every(item => item.status === 'done') || state.reviewRecords.some(item => item.date === date)) return
     const key = `study-planner:auto-review:${namespace}:${date}`
     if (window.sessionStorage.getItem(key)) return
     window.sessionStorage.setItem(key, '1')
@@ -960,7 +1509,8 @@ function TodayPage({ onNavigate, onPrepared, onAddTask, onReview }: { onNavigate
 
 
   useEffect(() => {
-    const current = todayISO()
+    if (tutorialMode) return
+    const current = rawToday
     if (current <= state.settings.startDate) return
     const reviewedDates = new Set(state.reviewRecords.map(record => record.date))
     const previousDate = state.assignments
@@ -973,11 +1523,12 @@ function TodayPage({ onNavigate, onPrepared, onAddTask, onReview }: { onNavigate
     if (window.sessionStorage.getItem(promptKey)) return
     window.sessionStorage.setItem(promptKey, '1')
     setReviewReminderDate(previousDate)
-  }, [namespace, state.settings.startDate, state.assignments, state.reviewRecords, groups])
+  }, [namespace, state.settings.startDate, state.assignments, state.reviewRecords, groups, tutorialMode, rawToday])
 
   const openComplete = (a: Assignment) => {
+    if (tutorialMode && (!['execute-complete', 'execute-partial'].includes(tutorialStep ?? '') || a.id !== tutorialTargetId)) { onTutorialBlocked?.('教程中先处理高亮任务'); return }
     if (state.timer.assignmentId === a.id) { onNavigate('timer'); return }
-    setCompleteTarget(a); setCompleteDate(date); setActual(''); setProgress(100)
+    setCompleteTarget(a); setCompleteDate(date); setActual(tutorialMode && a.id === tutorialTargetId ? (tutorialStep === 'execute-partial' ? '12' : '52') : ''); setProgress(tutorialMode && tutorialStep === 'execute-partial' ? 50 : 100)
   }
 
   const closeCompletion = () => {
@@ -989,40 +1540,50 @@ function TodayPage({ onNavigate, onPrepared, onAddTask, onReview }: { onNavigate
     if (!completeTarget) return
     const minutes = Math.max(0, Number(actual) || 0)
     const viewedDate = completeDate ?? date
-    const currentDate = todayISO()
+    const currentDate = rawToday
     const actualDate = viewedDate < currentDate ? viewedDate : currentDate
     const actualTimestamp = timestampForDate(actualDate)
     commit(draft => {
       const item = draft.assignments.find(a => a.id === completeTarget.id)
       if (!item) return
+      const changedAt = new Date().toISOString()
       const activeTimerMinutes = draft.timer.assignmentId === item.id ? Math.max(1, Math.round(getTimerElapsedSeconds(draft.timer) / 60)) : 0
       const minutesToRecord = minutes || activeTimerMinutes
       if (minutesToRecord) {
         item.actualMinutes += minutesToRecord
-        item.timeEntries.push({ id: uid('time'), minutes: minutesToRecord, createdAt: actualTimestamp, source: activeTimerMinutes && !minutes ? 'timer' : 'manual' })
+        item.timeEntries.push({ id: uid('time'), minutes: minutesToRecord, date: actualDate, createdAt: changedAt, source: activeTimerMinutes && !minutes ? 'timer' : 'manual' })
+      } else if (finish && item.actualMinutes <= 0) {
+        addInferredCompletionEntry(item, actualDate, changedAt)
       }
       item.progress = finish ? 100 : Math.min(99, Math.max(1, progress))
       item.remainingMinutes = finish ? 0 : effectiveMinutes(item)
       item.status = finish ? 'done' : 'partial'
       item.completedAt = finish ? actualTimestamp : undefined
+      appendStatusEvent(item, item.status, item.progress, actualDate, finish ? 'completion' : 'partial', changedAt)
       if (draft.timer.assignmentId === item.id) draft.timer = { accumulatedSeconds: 0, running: false }
-    })
+    }, tutorialMode ? { tutorialAction: 'execute-task', tutorialTargetId: completeTarget.id } : undefined)
     closeCompletion()
+    if (tutorialMode && completeTarget.id === tutorialTargetId) {
+      if (tutorialStep === 'execute-complete' && finish) onTutorialTaskRecorded?.('complete')
+      if (tutorialStep === 'execute-partial' && !finish) onTutorialTaskRecorded?.('partial')
+    }
   }
 
   return <>
     <section className="today-hero">
       <div className="today-hero-main">
-        <div className="date-switcher"><button className="icon-button" aria-label="查看前一天" onClick={() => setDate(clampDate(format(new Date(parseISO(date).getTime()-86400000),'yyyy-MM-dd'), state.settings.startDate,state.settings.endDate))}><ChevronLeft size={19}/></button><div><h2>{fmtDate(date, 'M月d日')} · {fmtWeekday(date)}</h2><span className={`day-badge day-${config.type}`}>{dayTypeLabel[config.type]}</span></div><button className="icon-button" aria-label="查看后一天" onClick={() => setDate(clampDate(format(new Date(parseISO(date).getTime()+86400000),'yyyy-MM-dd'), state.settings.startDate,state.settings.endDate))}><ChevronRight size={19}/></button></div>
+        <div className="date-switcher"><button className={`icon-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} aria-label="查看前一天" onClick={() => tutorialMode ? onTutorialBlocked?.('教程中日期固定为剧情当天') : setDate(clampDate(format(new Date(parseISO(date).getTime()-86400000),'yyyy-MM-dd'), state.settings.startDate,state.settings.endDate))}><ChevronLeft size={19}/></button><div><h2>{fmtDate(date, 'M月d日')} · {fmtWeekday(date)}</h2><span className={`day-badge day-${config.type}`}>{dayTypeLabel[config.type]}</span></div><button className={`icon-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} aria-label="查看后一天" onClick={() => tutorialMode ? onTutorialBlocked?.('教程中日期固定为剧情当天') : setDate(clampDate(format(new Date(parseISO(date).getTime()+86400000),'yyyy-MM-dd'), state.settings.startDate,state.settings.endDate))}><ChevronRight size={19}/></button></div>
         <p>{tasks.length
           ? `${isToday ? '今天' : isPast ? '当日' : '该日'}有 ${tasks.length} 项任务，已完成 ${done} 项，剩余预计 ${minutesText(remainingPlanned)}。`
-          : `${isToday ? '今天' : '该日'}暂时没有安排任务。`}</p>
+          : isToday && resumableBatchCount
+            ? `今天暂时没有已排期任务；另有 ${resumableBatchCount} 项录入内容等待排期。`
+            : `${isToday ? '今天' : '该日'}暂时没有安排任务。`}</p>
       </div>
-      <div className="button-wrap today-hero-actions"><button className="primary-button subtle-action" onClick={() => onAddTask(date)}><Plus size={16}/>添加任务</button><button className="secondary-button" onClick={() => onNavigate('calendar')}><CalendarDays size={16}/>打开月历</button><button className="secondary-button" onClick={()=>setShiftOpen(true)}>批量顺延</button>{!(!isToday && !isPast) && <button className="secondary-button today-review-button" onClick={() => onReview(date)}>{isToday ? '结束今天并复盘' : '复盘此日'}</button>}</div>
+      <div className="button-wrap today-hero-actions"><button className={`primary-button subtle-action ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中暂不新增额外任务') : onAddTask(date)}><Plus size={16}/>添加任务</button><button className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中先完成当前步骤，再自由查看月历') : onNavigate('calendar')}><CalendarDays size={16}/>打开月历</button><button className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={()=>tutorialMode ? onTutorialBlocked?.('教程中暂不执行额外批量顺延') : setShiftOpen(true)}>批量顺延</button>{!(!isToday && !isPast) && <button className={`secondary-button today-review-button ${tutorialMode && tutorialStep === 'review-entry' ? 'tutorial-target' : ''} ${tutorialMode && tutorialStep !== 'review-entry' ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode && tutorialStep !== 'review-entry' ? true : undefined} data-tutorial-target={tutorialMode && tutorialStep === 'review-entry' ? 'today-review' : undefined} data-tutorial-action={tutorialMode && tutorialStep === 'review-entry' ? 'open-review' : undefined} onClick={() => tutorialMode && tutorialStep !== 'review-entry' ? onTutorialBlocked?.('完成高亮任务后再进行今日复盘') : onReview(date)}>{isToday ? '结束今天并复盘' : '复盘此日'}</button>}</div>
     </section>
-    {resumableBatch && <div className="intake-resume-banner"><div><Inbox size={19}/><span><strong>“{resumableBatch.name}”还在录入中</strong><small>{resumableBatchCount} 项内容尚未安排，正式计划没有被改动。</small></span></div><button className="primary-button" onClick={() => onNavigate('intake')}>继续录入</button></div>}
-    {reviewReminderDate && <div className="review-reminder-banner"><div><strong>{fmtDate(reviewReminderDate)} 还有未完成的复盘</strong><span>这是轻量提醒，不会自动弹窗或反复打断。</span></div><div><button className="secondary-button" onClick={() => setReviewReminderDate(undefined)}>稍后</button><button className="primary-button" onClick={() => { setDate(reviewReminderDate); onReview(reviewReminderDate); setReviewReminderDate(undefined) }}>打开复盘</button></div></div>}
-    {pendingPastTasks.length > 0 && <div className="review-reminder-banner pending-task-banner"><div><strong>{pendingPastTasks.length} 项过去未完成任务仍待处理</strong><span>包括复盘后暂不顺延和逾期任务，可到“任务 → 待处理”集中查看。</span></div><div><button className="primary-button" onClick={() => onNavigate('tasks')}>查看待处理任务</button></div></div>}
+    {!tutorialMode && resumableBatch && (tasks.length > 0 || state.assignments.length > 0) && <div className="intake-resume-banner"><div><Inbox size={19}/><span><strong>{resumableBatchCount} 项已录入、待排期</strong><small>确认排期后才会进入今日和月历。</small></span></div><button className="primary-button" onClick={() => onNavigate('intake')}>去排期</button></div>}
+    {!tutorialMode && reviewReminderDate && <div className="review-reminder-banner"><div><strong>{fmtDate(reviewReminderDate)} 还有未完成的复盘</strong><span>这是轻量提醒，不会自动弹窗或反复打断。</span></div><div><button className="secondary-button" onClick={() => setReviewReminderDate(undefined)}>稍后</button><button className="primary-button" onClick={() => { setDate(reviewReminderDate); onReview(reviewReminderDate); setReviewReminderDate(undefined) }}>打开复盘</button></div></div>}
+    {!tutorialMode && pendingPastTasks.length > 0 && <div className="review-reminder-banner pending-task-banner"><div><strong>{pendingPastTasks.length} 项过去未完成任务仍待处理</strong><span>包括复盘后暂不顺延和逾期任务，可到“任务 → 待处理”集中查看。</span></div><div><button className="primary-button" onClick={() => onNavigate('tasks')}>查看待处理任务</button></div></div>}
     <section className="compact-metrics today-load-metrics">
       <div><span>原计划</span><strong>{minutesText(originalPlanned)}</strong></div>
       <div><span>已发生实际</span><strong>{minutesText(actualTotal)}</strong></div>
@@ -1031,21 +1592,21 @@ function TodayPage({ onNavigate, onPrepared, onAddTask, onReview }: { onNavigate
     </section>
     <div className="load-metric-note" role="note"><Sparkles size={15}/><span><strong>怎么区分？</strong>原计划是最初估计；执行负载是实际/推断用时 + 未完成剩余预计，用来和当天容量比较。</span></div>
     {state.settings.showWarnings && risk && <div className="alert warning"><Sparkles size={18}/><div><strong>进度提醒</strong><span>{risk}</span></div></div>}
-    {isToday && activeTasks[0] && <section className="today-next-focus"><div><span><Sparkles size={15}/>下一项建议</span><strong>{activeTasks[0].title}</strong><small>{groups.get(activeTasks[0].groupId)?.subject ?? '其他'} · 剩余约 {minutesText(effectiveMinutes(activeTasks[0]))}</small></div><button className="primary-button" onClick={() => { startTimer(activeTasks[0].id); onNavigate('timer') }}><Clock3 size={16}/>开始专注</button></section>}
+    {isToday && activeTasks[0] && <section className="today-next-focus"><div><span><Sparkles size={15}/>下一项建议</span><strong>{activeTasks[0].title}</strong><small>{groups.get(activeTasks[0].groupId)?.subject ?? '其他'} · 剩余约 {minutesText(effectiveMinutes(activeTasks[0]))}</small></div><button className={`primary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => { if (tutorialMode) { onTutorialBlocked?.('教程中先按高亮步骤记录完成'); return }; startTimer(activeTasks[0].id); onNavigate('timer') }}><Clock3 size={16}/>开始专注</button></section>}
     <section className="section-block">
       <div className="section-title"><div><h2>{isToday ? '今日任务' : isPast ? `${fmtDate(date)} 的执行记录` : `${fmtDate(date)} 的计划任务`}</h2><p>{isPast ? '已完成记录保持不变；未完成任务可在待处理视图继续安排。' : '完成后勾选，可录入精确到 1 分钟的实际用时。'}</p></div></div>
       <div className="task-list">{tasks.length ? <>
-        {activeTasks.map(a => <TaskCard key={a.id} assignment={a} group={groups.get(a.groupId)!} onComplete={openComplete} onOpenTimer={() => onNavigate('timer')}/>)}
-        {completedTasks.length > 0 && <details className="completed-task-section"><summary>已完成 {completedTasks.length} 项<span>展开查看</span></summary><div>{completedTasks.map(a => <TaskCard key={a.id} assignment={a} group={groups.get(a.groupId)!} onComplete={openComplete} onOpenTimer={() => onNavigate('timer')}/>)}</div></details>}
-      </> : <div className="empty-state today-empty-actions"><CheckCircle2 size={30}/><h3>{isToday ? '今天没有任务' : '该日没有任务'}</h3><p>{state.assignments.length ? '可以到月历调整计划，或设置这一天的可用时间。' : '先把手里的任务录入系统，再统一生成第一份计划。'}</p>{!state.assignments.length && <button className="primary-button" onClick={() => onNavigate('intake')}><Inbox size={16}/>开始录入任务</button>}</div>}</div>
+        {activeTasks.map(a => <TaskCard key={a.id} assignment={a} group={groups.get(a.groupId)!} onComplete={openComplete} onOpenTimer={() => onNavigate('timer')} tutorialTarget={tutorialMode && ['execute-complete', 'execute-partial'].includes(tutorialStep ?? '') && a.id === tutorialTargetId} tutorialLocked={tutorialMode} tutorialDisabled={tutorialMode && !(['execute-complete', 'execute-partial'].includes(tutorialStep ?? '') && a.id === tutorialTargetId)} onTutorialBlocked={onTutorialBlocked}/>)}
+        {completedTasks.length > 0 && <details className="completed-task-section"><summary>已完成 {completedTasks.length} 项<span>展开查看</span></summary><div>{completedTasks.map(a => <TaskCard key={a.id} assignment={a} group={groups.get(a.groupId)!} onComplete={openComplete} onOpenTimer={() => onNavigate('timer')} tutorialLocked={tutorialMode} tutorialDisabled={tutorialMode} onTutorialBlocked={onTutorialBlocked}/>)}</div></details>}
+      </> : <div className="empty-state today-empty-actions"><CheckCircle2 size={30}/><h3>{isToday ? '今天没有已排期任务' : '该日没有任务'}</h3><p>{isToday && resumableBatchCount ? `还有 ${resumableBatchCount} 项任务待排期。` : state.assignments.length ? '可以到月历调整计划，或设置这一天的可用时间。' : '先把手里的任务录入系统，再统一生成第一份计划。'}</p>{!state.assignments.length && <button className="primary-button" onClick={() => onNavigate('intake')}><Inbox size={16}/>{resumableBatchCount ? '去排期' : '开始录入任务'}</button>}</div>}</div>
     </section>
     <Modal open={Boolean(completeTarget)} title={completeTarget ? `记录：${completeTarget.title}` : '记录任务'} onClose={closeCompletion}>
       <div className="form-stack">
-        <p className="muted-text">{completeDate && completeDate < todayISO() ? `历史补录：实际用时将计入 ${fmtDate(completeDate)}` : '实际用时将计入今天'}</p>
-        <label className="field"><span>本次实际用时（分钟，可留空）</span><NumericInput min={0} max={1440} step={1} value={actual === '' ? undefined : Number(actual)} onValueChange={value => setActual(String(value))} onEmpty={() => setActual('')} autoFocus/></label>
-        <label className="field"><span>若未完成，填写当前进度</span><NumericInput min={1} max={99} value={progress} onValueChange={setProgress}/></label>
+        <p className="muted-text">{completeDate && completeDate < rawToday ? `历史补录：实际用时将计入 ${fmtDate(completeDate)}` : '实际用时将计入今天'}</p>
+        <label className="field"><span>{tutorialMode ? '本次实际用时（分钟，教程可填 1–65）' : '本次实际用时（分钟，可留空）'}</span><NumericInput min={tutorialMode ? 1 : 0} max={tutorialMode ? 65 : 1440} step={1} value={actual === '' ? undefined : Number(actual)} onValueChange={value => setActual(String(value))} onEmpty={() => setActual('')} autoFocus={!tutorialMode}/></label>
+        {(!tutorialMode || tutorialStep === 'execute-partial') && <label className="field"><span>若未完成，填写当前进度</span><NumericInput min={1} max={99} value={progress} onValueChange={setProgress}/></label>}
       </div>
-      <div className="modal-actions"><button className="secondary-button" onClick={() => saveCompletion(false)}>保存为部分完成</button><button className="primary-button" onClick={() => saveCompletion(true)}>标记完成</button></div>
+      <div className="modal-actions"><button className={`secondary-button ${tutorialMode && tutorialStep !== 'execute-partial' ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode && tutorialStep !== 'execute-partial' || undefined} data-tutorial-target={tutorialMode && tutorialStep === 'execute-partial' ? 'tutorial-partial-confirm' : undefined} onClick={() => tutorialMode && tutorialStep !== 'execute-partial' ? onTutorialBlocked?.('这一步先按引导记录') : saveCompletion(false)}>保存为部分完成</button><button className={`primary-button ${tutorialMode && tutorialStep === 'execute-complete' ? 'tutorial-target' : tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode && tutorialStep !== 'execute-complete' || undefined} data-tutorial-target={tutorialMode && tutorialStep === 'execute-complete' ? 'tutorial-complete-confirm' : undefined} data-tutorial-action={tutorialMode ? 'completion-primary' : undefined} disabled={tutorialMode && tutorialStep === 'execute-complete' && (!actual || Number(actual) < 1 || Number(actual) > 65)} onClick={() => tutorialMode && tutorialStep !== 'execute-complete' ? onTutorialBlocked?.('这一步先记录部分完成') : saveCompletion(true)}>标记完成</button></div>
     </Modal>
     <Modal open={shiftOpen} title="批量顺延设置" onClose={()=>setShiftOpen(false)} wide mobileFullscreen>
       <p className="muted-text">先选择顺延范围和天数。这里展示即时估算，下一步的统一预览是唯一确认点；每日重复任务不会移动。</p>
@@ -1073,11 +1634,11 @@ function TodayPage({ onNavigate, onPrepared, onAddTask, onReview }: { onNavigate
   </>
 }
 
-function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask }: { onPrepared: (state: AppState, event: PlanChangeEvent) => void; onOpenAdjustment: (date: string) => void; onAddTask: (date: string) => void }) {
+function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask, tutorialMode = false, tutorialHighlightDates = [], onTutorialBlocked }: { onPrepared: (state: AppState, event: PlanChangeEvent) => void; onOpenAdjustment: (date: string) => void; onAddTask: (date: string) => void; tutorialMode?: boolean; tutorialHighlightDates?: string[]; onTutorialBlocked?: (message?: string) => void }) {
   const { state, commit, updateAssignment, updateDayConfig, moveAssignments, reopenAssignment, prepareAssignmentDelete, prepareDurationChange, prepareAssignmentGroupChange } = useApp()
   const initialCalendarDate = todayISO() >= state.settings.startDate && todayISO() <= state.settings.endDate ? todayISO() : state.settings.startDate
   const [month, setMonth] = useState(startOfMonth(parseISO(initialCalendarDate)))
-  const [viewMode, setViewMode] = useState<'month' | 'week'>('month')
+  const [viewMode, setViewMode] = useState<'month' | 'week'>(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches ? 'week' : 'month')
   const [weekStart, setWeekStart] = useState(() => shiftDate(initialCalendarDate, -getDay(parseISO(initialCalendarDate))))
   const [dayOpen, setDayOpen] = useState<string>()
   const [selectedIds, setSelectedIds] = useState<string[]>([])
@@ -1485,6 +2046,7 @@ function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask }: { onPrepared:
      {calendarExportNotice && <div className="export-notice calendar-export-notice" role="status"><CheckCircle2 size={17}/><span>{calendarExportNotice}</span></div>}
     {moveNotice && <div className="manual-move-notice"><div><strong>已记录你的手动安排</strong><span>「{moveNotice.title}」已移到 {moveNotice.date}，后续自动调整会优先保留，也不会近期拉回原日期。</span></div><div className="button-wrap"><button className="secondary-button" onClick={() => { updateAssignment(moveNotice.id, { locked: true }); setMoveNotice(undefined) }}><Lock size={15}/>同时锁定</button><button className="text-button" onClick={() => setMoveNotice(undefined)}>知道了</button></div></div>}
     {moveModeTaskId && <div className="calendar-move-mode"><div><strong>正在移动：{state.assignments.find(item => item.id === moveModeTaskId)?.title}</strong><span>点击月历或周视图中的目标日期。再次长按其他任务可更换对象。</span></div><button className="secondary-button" onClick={() => setMoveModeTaskId(undefined)}>取消移动</button></div>}
+    {tutorialMode && tutorialHighlightDates.length > 0 && <div className="tutorial-calendar-result-note"><CheckCircle2 size={17}/><span>本次变化涉及 {tutorialHighlightDates.length} 个日期，已在月历中标出。</span></div>}
     <section className={`calendar-card ${viewMode === 'week' ? 'calendar-week-view' : 'calendar-month-view'}`}>
       {viewMode === 'month' ? <>
         <div className="weekday-row">{['日', '一', '二', '三', '四', '五', '六'].map(label => <div key={label}>周{label}</div>)}</div>
@@ -1502,7 +2064,7 @@ function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask }: { onPrepared:
             const projected = dragged ? load + (dragged.scheduledDate === date ? 0 : countedMinutes(dragged)) : load
             return <div
               key={date}
-              className={`calendar-cell ${!inPlan ? 'outside' : ''} ${config ? `day-${config.type}` : ''} ${config?.isBufferDay ? 'day-buffer' : ''} ${ratio > 1 ? 'load-over' : ratio > .8 ? 'load-near' : ''} ${dragTargetDate === date ? 'calendar-drag-target' : ''} ${moveModeTaskId ? 'calendar-date-selectable' : ''}`}
+              className={`calendar-cell ${!inPlan ? 'outside' : ''} ${config ? `day-${config.type}` : ''} ${config?.isBufferDay ? 'day-buffer' : ''} ${ratio > 1 ? 'load-over' : ratio > .8 ? 'load-near' : ''} ${dragTargetDate === date ? 'calendar-drag-target' : ''} ${moveModeTaskId ? 'calendar-date-selectable' : ''} ${tutorialHighlightDates.includes(date) ? 'tutorial-calendar-changed' : ''}`}
               onDragOver={event => { if (!inPlan) return; event.preventDefault(); setDragTargetDate(date) }}
               onDrop={event => inPlan && drop(date, event)}
               onClick={() => inPlan && chooseCalendarDate(date)}
@@ -1536,7 +2098,7 @@ function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask }: { onPrepared:
           const load = inPlan ? loadFor(date) : 0
           const capacity = inPlan ? getCapacity(state, date) : 0
           const config = inPlan ? getDayConfig(state, date) : undefined
-          return <article key={date} className={`calendar-week-day ${!inPlan ? 'outside' : ''} ${config ? `day-${config.type}` : ''} ${load > capacity ? 'load-over' : load > capacity * .8 ? 'load-near' : ''} ${moveModeTaskId ? 'calendar-date-selectable' : ''}`}>
+          return <article key={date} className={`calendar-week-day ${!inPlan ? 'outside' : ''} ${config ? `day-${config.type}` : ''} ${load > capacity ? 'load-over' : load > capacity * .8 ? 'load-near' : ''} ${moveModeTaskId ? 'calendar-date-selectable' : ''} ${tutorialHighlightDates.includes(date) ? 'tutorial-calendar-changed' : ''}`}>
             <button className="calendar-week-head" disabled={!inPlan} onClick={() => inPlan && chooseCalendarDate(date)}>
               <div><strong>{fmtDate(date)} · {fmtWeekday(date)}</strong><span>{config?.isBufferDay ? `缓冲日 · ${minutesText(capacity)}` : config ? dayTypeLabel[config.type] : '计划外'}</span></div>
               <div><strong>{minutesText(load)}</strong><span>/ {minutesText(capacity)}</span></div>
@@ -1662,17 +2224,21 @@ function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask }: { onPrepared:
   </>
 }
 
-function TasksPage({ onOpenIntake, onPrepared }: { onOpenIntake: () => void; onPrepared: (state: AppState, event: PlanChangeEvent) => void }) {
-  const { state, editTaskGroup, updateAssignment, prepareAssignmentDelete, prepareTaskGroupEdit, prepareTaskGroupDelete, prepareDurationChange } = useApp()
+function TasksPage({ onOpenIntake, onPrepared, tutorialMode = false, tutorialStep, onTutorialBlocked }: { onOpenIntake: () => void; onPrepared: (state: AppState, event: PlanChangeEvent) => void; tutorialMode?: boolean; tutorialStep?: TutorialStep; onTutorialBlocked?: (message?: string) => void }) {
+  const { state, editTaskGroup, updateAssignment, finishAssignment, prepareAssignmentDelete, prepareTaskGroupEdit, prepareTaskGroupDelete, prepareDurationChange } = useApp()
   const [mode, setMode] = useState<'tasks' | 'groups'>('tasks')
   const [search, setSearch] = useState('')
   const [priority, setPriority] = useState<'all'|Priority>('all')
   const [subject, setSubject] = useState<'all'|Subject>('all')
   const [showHidden, setShowHidden] = useState(false)
   const [taskFilter, setTaskFilter] = useState<'attention'|'unscheduled'|'overdue'|'today'|'future'|'done'|'all'>('attention')
+  const [visibleTaskCount, setVisibleTaskCount] = useState(100)
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([])
   const [editing, setEditing] = useState<TaskGroup>()
   const [movingGroup, setMovingGroup] = useState<TaskGroup>()
+  const [movingTask, setMovingTask] = useState<Assignment>()
   const [moveDate, setMoveDate] = useState(todayISO())
+  const [taskMoveDate, setTaskMoveDate] = useState(todayISO())
   const assignmentsByGroup = useMemo(() => new Map(state.taskGroups.map(group => [group.id, state.assignments.filter(item => item.groupId === group.id)])), [state.taskGroups, state.assignments])
   const groupMap = useMemo(() => new Map(state.taskGroups.map(group => [group.id, group])), [state.taskGroups])
   const subjects = Array.from(new Set([...state.settings.customSubjects, ...state.taskGroups.map(group => group.subject)])).sort()
@@ -1712,6 +2278,36 @@ function TasksPage({ onOpenIntake, onPrepared }: { onOpenIntake: () => void; onP
       if (attentionA !== attentionB) return attentionA - attentionB
       return (a.scheduledDate ?? '9999-12-31').localeCompare(b.scheduledDate ?? '9999-12-31') || (groupMap.get(b.groupId)?.priority ?? 0) - (groupMap.get(a.groupId)?.priority ?? 0)
     }), [state.assignments, groupMap, priority, subject, query, taskFilter, today])
+  const visibleTasks = tasks.slice(0, visibleTaskCount)
+  useEffect(() => {
+    setVisibleTaskCount(100)
+    setSelectedTaskIds([])
+  }, [priority, query, subject, taskFilter, mode])
+
+  const selectedTasks = tasks.filter(item => selectedTaskIds.includes(item.id))
+  const toggleAllVisible = () => {
+    const visibleIds = visibleTasks.map(item => item.id)
+    setSelectedTaskIds(current => visibleIds.every(id => current.includes(id))
+      ? current.filter(id => !visibleIds.includes(id))
+      : [...new Set([...current, ...visibleIds])])
+  }
+  const batchUpdateLock = (locked: boolean) => {
+    selectedTasks.filter(item => item.locked !== locked).forEach(item => updateAssignment(item.id, { locked }))
+    setSelectedTaskIds([])
+  }
+  const batchComplete = () => {
+    selectedTasks.filter(item => item.status !== 'done' && item.id !== state.timer.assignmentId).forEach(item => finishAssignment(item.id))
+    setSelectedTaskIds([])
+  }
+  const batchArchiveGroups = () => {
+    const groupIds = [...new Set(selectedTasks.map(item => item.groupId))]
+    if (!groupIds.length || !window.confirm(`将归档选中任务所属的 ${groupIds.length} 个任务组？任务和时间记录会保留，之后可在任务组筛选中恢复显示。`)) return
+    groupIds.forEach(id => {
+      const group = state.taskGroups.find(item => item.id === id)
+      if (group) editTaskGroup({ ...group, status: 'archived', hidden: true })
+    })
+    setSelectedTaskIds([])
+  }
 
   const prepareGroupMove = (group: TaskGroup, date: string) => {
     if (!date || date < state.settings.startDate || date > state.settings.endDate) { window.alert('目标日期超出计划范围。'); return }
@@ -1744,6 +2340,34 @@ function TasksPage({ onOpenIntake, onPrepared }: { onOpenIntake: () => void; onP
     onPrepared(prepared, event)
   }
 
+  const prepareTaskMove = (assignment: Assignment, date: string) => {
+    const earliest = today > state.settings.startDate ? today : state.settings.startDate
+    if (!date || date < earliest || date > state.settings.endDate) { window.alert('请选择今天或之后、且在计划范围内的日期。'); return }
+    if (assignment.status === 'done' || assignment.locked || assignment.id === state.timer.assignmentId) { window.alert('已完成、锁定或正在计时的任务不能直接重新安排。'); return }
+    const prepared = cloneActiveState(state)
+    const item = prepared.assignments.find(candidate => candidate.id === assignment.id)
+    if (!item) return
+    const movedAt = new Date().toISOString()
+    const previousDate = item.scheduledDate
+    item.previousDate = previousDate
+    item.scheduledDate = date
+    item.lastManualMoveAt = movedAt
+    item.scheduleSource = 'manual'
+    item.intentStrength = 'manual'
+    const affectedDates = Array.from(new Set([...(previousDate ? [previousDate] : []), date])).sort()
+    const affectedGoalIds = prepared.goals.filter(goal => goal.linkedTaskGroupIds.includes(item.groupId) || goal.linkedAssignmentIds.includes(item.id) || goal.completionConditions.some(condition => condition.groupId === item.groupId)).map(goal => goal.id)
+    const event: PlanChangeEvent = {
+      id: uid('event'), type: 'bulk-move', action: 'repair', title: `重新安排“${item.title}”`,
+      description: `把这一项任务安排到 ${fmtDate(date)}；先核验容量、期限和日期保护。`,
+      affectedGoalIds, affectedGroupIds: [item.groupId], affectedAssignmentIds: [item.id], affectedDates, createdAt: movedAt,
+      metadata: { requestedDate: date, explicitLocalOperation: true, operationScope: 'requested-change-only', requestedChangeLabel: `仅重新安排“${item.title}”`, preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'] },
+    }
+    prepared.changeEvents = [...prepared.changeEvents, event].slice(-100)
+    prepared.updatedAt = movedAt
+    setMovingTask(undefined)
+    onPrepared(prepared, event)
+  }
+
   const filterOptions: Array<{ id: typeof taskFilter; label: string; count: number }> = [
     { id: 'attention', label: '待处理', count: taskCounts.attention },
     { id: 'unscheduled', label: '未安排', count: taskCounts.unscheduled },
@@ -1761,26 +2385,31 @@ function TasksPage({ onOpenIntake, onPrepared }: { onOpenIntake: () => void; onP
       <select value={priority} onChange={event => setPriority(event.target.value === 'all' ? 'all' : Number(event.target.value) as Priority)}><option value="all">全部优先级</option>{[5,3,2,1,0].map(item => <option key={item} value={item}>{priorityLabel(item as Priority)}</option>)}</select>
       <select value={subject} onChange={event => setSubject(event.target.value as 'all'|Subject)}><option value="all">全部科目／类别</option>{subjects.map(item => <option key={item}>{item}</option>)}</select>
       {mode === 'groups' && <label className="toggle-label"><input type="checkbox" checked={showHidden} onChange={event => setShowHidden(event.target.checked)}/><span>显示隐藏任务组</span></label>}
-      <div className="tasks-toolbar-note"><Inbox size={17}/><span>添加新任务请前往“录入”</span><button className="text-button" onClick={onOpenIntake}>打开录入</button></div>
+      <div className="tasks-toolbar-note"><Inbox size={17}/><span>添加新任务请前往“录入”</span><button className={`text-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.() : onOpenIntake()}>打开录入</button></div>
     </section>
 
     {mode === 'tasks' ? <>
-      <div className="task-inbox-summary"><div><strong>任务收件箱</strong><span>未安排和过去未完成任务会一直留在这里，直到你明确处理。</span></div><div><b>{taskCounts.attention}</b><small>项待处理</small></div></div>
+      <div className="task-inbox-summary"><div><strong>任务收件箱</strong><span>待处理：未排期或已逾期的任务。</span></div><div><b>{taskCounts.attention}</b><small>项待处理</small></div></div>
       <div className="task-filter-tabs">{filterOptions.map(item => <button key={item.id} className={taskFilter === item.id ? 'active' : ''} onClick={() => setTaskFilter(item.id)}><span>{item.label}</span><em>{item.count}</em></button>)}</div>
-      <section className="assignment-list">{tasks.map(item => {
+      {tasks.length > 0 && <div className="task-bulk-bar"><label className="task-bulk-select"><input type="checkbox" checked={visibleTasks.length > 0 && visibleTasks.every(item => selectedTaskIds.includes(item.id))} onChange={toggleAllVisible}/><span>选择当前显示</span></label>{selectedTaskIds.length > 0 ? <><strong>已选 {selectedTaskIds.length} 项</strong><button className="secondary-button" onClick={batchComplete}>批量完成</button><button className="secondary-button" onClick={() => batchUpdateLock(true)}>批量锁定</button><button className="secondary-button" onClick={() => batchUpdateLock(false)}>批量解除锁定</button><button className="text-button" onClick={batchArchiveGroups}>批量归档所属任务组</button><button className="text-button" onClick={() => setSelectedTaskIds([])}>清除选择</button></> : <span className="muted-text">可一次完成、锁定或归档多项任务。</span>}</div>}
+      <section className="assignment-list">{visibleTasks.map(item => {
         const group = groupMap.get(item.groupId)!
         const overdue = item.status !== 'done' && Boolean(item.scheduledDate && item.scheduledDate < today)
         const unscheduled = item.status !== 'done' && !item.scheduledDate
-        return <article className={`assignment-list-card ${overdue || unscheduled ? 'needs-attention' : ''}`} key={item.id}>
-          <div className="assignment-list-main"><div className="task-title-row"><span className={`subject-pill subject-${group.subject}`}>{group.subject}</span><span className={`priority-badge priority-${group.priority}`}>{priorityLabel(group.priority)}</span><strong>{item.title}</strong></div><div className="task-meta"><span>{group.title}</span><span>{item.status === 'done' ? '已完成' : item.status === 'partial' ? `部分完成 ${item.progress}%` : '待完成'}</span><span>{item.scheduledDate ? (overdue ? `逾期于 ${fmtDate(item.scheduledDate)}` : fmtDate(item.scheduledDate)) : '未安排日期'}</span><span>预计 {minutesText(item.estimatedMinutes)}</span>{item.actualMinutes > 0 && <span>实际 {minutesText(item.actualMinutes)}</span>}</div>{item.notes && <p>{item.notes}</p>}</div>
-          <div className="assignment-list-actions"><button className="secondary-button" onClick={() => updateAssignment(item.id, { locked: !item.locked })}>{item.locked ? '解除锁定' : '锁定'}</button><button className="danger-button" onClick={() => { const prepared = prepareAssignmentDelete(item.id); onPrepared(prepared.state, prepared.event) }}><Trash2 size={15}/>移除</button></div>
+        return <article className={`assignment-list-card ${overdue || unscheduled ? 'needs-attention' : ''} ${selectedTaskIds.includes(item.id) ? 'selected' : ''}`} key={item.id}>
+          <label className="assignment-select-checkbox" aria-label={`选择任务${item.title}`}><input type="checkbox" checked={selectedTaskIds.includes(item.id)} onChange={event => setSelectedTaskIds(current => event.target.checked ? [...current, item.id] : current.filter(id => id !== item.id))}/></label><div className="assignment-list-main"><div className="task-title-row"><span className={`subject-pill subject-${group.subject}`}>{group.subject}</span><span className={`priority-badge priority-${group.priority}`}>{priorityLabel(group.priority)}</span><strong>{item.title}</strong></div><div className="task-meta"><span>{group.title}</span><span>{item.status === 'done' ? '已完成' : item.status === 'partial' ? `部分完成 ${item.progress}%` : '待完成'}</span><span>{item.scheduledDate ? (overdue ? `逾期于 ${fmtDate(item.scheduledDate)}` : fmtDate(item.scheduledDate)) : '未安排日期'}</span><span>预计 {minutesText(item.estimatedMinutes)}</span>{item.actualMinutes > 0 && <span>实际 {minutesText(item.actualMinutes)}</span>}</div>{item.notes && <p>{item.notes}</p>}</div>
+          <div className="assignment-list-actions">{(overdue || unscheduled) && <button className="primary-button" disabled={item.locked || item.id === state.timer.assignmentId} title={item.locked ? '先解除锁定，再重新安排' : item.id === state.timer.assignmentId ? '请先结束当前计时' : undefined} onClick={() => { setTaskMoveDate(today > state.settings.startDate ? today : state.settings.startDate); setMovingTask(item) }}>安排日期</button>}<button className="secondary-button" onClick={() => updateAssignment(item.id, { locked: !item.locked })}>{item.locked ? '解除锁定' : '锁定'}</button><button className="danger-button" onClick={() => { const prepared = prepareAssignmentDelete(item.id); onPrepared(prepared.state, prepared.event) }}><Trash2 size={15}/>移除</button></div>
         </article>
-      })}{!tasks.length && <div className="empty-state"><CheckCircle2 size={30}/><h3>{taskFilter === 'attention' ? '没有待处理任务' : '没有符合条件的任务'}</h3><p>{taskFilter === 'attention' ? '所有任务都有明确去向。' : '尝试切换筛选或搜索条件。'}</p></div>}</section>
+      })}{tasks.length > visibleTasks.length && <div className="list-pagination"><span>已显示 {visibleTasks.length} / {tasks.length} 项</span><button className="secondary-button" onClick={() => setVisibleTaskCount(value => value + 100)}>加载后续 100 项</button></div>}{!tasks.length && <div className="empty-state"><CheckCircle2 size={30}/><h3>{taskFilter === 'attention' ? '没有待处理任务' : '没有符合条件的任务'}</h3><p>{taskFilter === 'attention' ? '所有任务都有明确去向。' : '尝试切换筛选或搜索条件。'}</p></div>}</section>
     </> : <>
       <section className="group-list">{groups.map(group => { const items = assignmentsByGroup.get(group.id) ?? []; const done = items.filter(item => item.status === 'done').length; const actual = items.reduce((sum,item) => sum + item.actualMinutes,0); const planned = items.reduce((sum,item) => sum + item.estimatedMinutes,0); const durationSuggestion = allDurationSuggestions(state).find(item => item.groupId === group.id); const linkedGoals = state.goals.filter(goal => goal.linkedTaskGroupIds.includes(group.id) || goal.completionConditions.some(condition => condition.groupId === group.id)); return <article className="group-card" key={group.id}><div className="group-card-head"><div><span className={`subject-pill subject-${group.subject}`}>{group.subject}</span><span className={`priority-badge priority-${group.priority}`}>{priorityLabel(group.priority)}</span><span className="status-pill">{group.status === 'completed' ? '已完成' : group.status === 'archived' ? '已归档' : '进行中'}</span><h3>{group.title}</h3></div><div className="group-actions"><button className="text-button" onClick={() => { setMoveDate(today); setMovingGroup(group) }}>移动未完成</button><button className="text-button" onClick={() => setEditing(group)}>编辑</button><button className="icon-button danger-icon" aria-label={`删除任务组${group.title}`} onClick={() => { const prepared = prepareTaskGroupDelete(group.id); onPrepared(prepared.state, prepared.event) }}><Trash2 size={17}/></button></div></div><div className="group-stats"><span>{done}/{items.length} 已完成</span><span>预计 {minutesText(planned)}</span><span>实际 {minutesText(actual)}</span><span>关联目标 {linkedGoals.length}</span>{group.dailyMax && <span>每天最多 {group.dailyMax} 个</span>}</div><div className="progress-track"><i style={{width:`${items.length ? done/items.length*100 : 0}%`}}/></div>{(group.notes || group.sourceLabel) && <p className="group-note">{group.notes || group.sourceLabel}</p>}{durationSuggestion && <div className="duration-suggestion"><div><strong>发现用时校准机会</strong><span>当前 {durationSuggestion.currentEstimate} 分钟；最近 {durationSuggestion.sampleCount} 个有效样本平均 {Math.round(durationSuggestion.recentAverage)} 分钟，建议 {durationSuggestion.suggestedEstimate} 分钟。只会生成预览，不直接覆盖。</span></div><button className="secondary-button" onClick={() => { const prepared = prepareDurationChange(durationSuggestion); onPrepared(prepared.state, prepared.event) }}>查看时长调整方案</button></div>}</article> })}
         {!groups.length && <div className="empty-state"><CheckCircle2 size={30}/><h3>{state.taskGroups.filter(group => !group.hiddenStandalone).length ? '没有符合条件的任务组' : '计划还是空的'}</h3><p>{state.taskGroups.length ? '调整筛选条件。' : '新任务统一从“录入”添加，确认安排后会在这里管理。'}</p><button className="primary-button" onClick={onOpenIntake}>打开录入</button></div>}
       </section>
     </>}
+
+    <Modal open={Boolean(movingTask)} title={movingTask ? `安排“${movingTask.title}”` : '安排任务'} onClose={() => setMovingTask(undefined)}>
+      {movingTask && <><p className="muted-text">选择日期后先预览，确认后才会改动计划。</p><label className="field"><span>安排到</span><input type="date" min={today > state.settings.startDate ? today : state.settings.startDate} max={state.settings.endDate} value={taskMoveDate} onChange={event => setTaskMoveDate(event.target.value)}/></label><div className="modal-actions"><button className="secondary-button" onClick={() => setMovingTask(undefined)}>取消</button><button className="primary-button" onClick={() => prepareTaskMove(movingTask, taskMoveDate)}>生成预览</button></div></>}
+    </Modal>
 
     <Modal open={Boolean(movingGroup)} title={movingGroup ? `移动“${movingGroup.title}”的未完成任务` : '移动未完成任务'} onClose={() => setMovingGroup(undefined)}>
       {movingGroup && <><p className="muted-text">只移动该组中未完成、未锁定且未计时的任务。系统会在最终预览中展示容量、目标和日期保护影响。</p><label className="field"><span>目标日期</span><input type="date" min={state.settings.startDate} max={state.settings.endDate} value={moveDate} onChange={event => setMoveDate(event.target.value)}/></label><div className="modal-actions"><button className="secondary-button" onClick={() => setMovingGroup(undefined)}>取消</button><button className="primary-button" onClick={() => prepareGroupMove(movingGroup, moveDate)}>生成预览</button></div></>}
@@ -1809,16 +2438,20 @@ function SettingsPage({ sessionUserId, sessionEmail, cloudMessage, onCloudUpload
   const [subjectDraft,setSubjectDraft]=useState('')
   const [versionOpen,setVersionOpen]=useState<AppState['planVersions'][number]>()
   const [replacementPreview,setReplacementPreview]=useState<{label:string;state:AppState}>()
+  const [recoverySnapshots,setRecoverySnapshots]=useState<DataRecoverySnapshot[]>([])
   const fileRef=useRef<HTMLInputElement>(null)
   useEffect(() => setPlanNameDraft(state.settings.planName), [state.settings.planName])
+  useEffect(() => { void listRecoverySnapshots(namespace).then(setRecoverySnapshots) }, [namespace, state.schemaVersion])
   const versionDiff = versionOpen ? previewPlanVersion(versionOpen.id) : undefined
   const exportJson=()=>downloadBlob(JSON.stringify(state,null,2),`study-plan-v0.8-${todayISO()}.json`,'application/json')
   const exportCsv=()=>{const groups=new Map(state.taskGroups.map(group=>[group.id,group]));const rows=[['科目/类别','任务','计划日期','状态','预计分钟','实际分钟','进度','优先级','排期来源','用户意图']];for(const item of state.assignments){const group=groups.get(item.groupId);if(group)rows.push([group.subject,item.title,item.scheduledDate??'',item.status,String(item.estimatedMinutes),String(item.actualMinutes),String(item.progress),String(group.priority),item.scheduleSource,item.intentStrength])}downloadBlob('\ufeff'+rows.map(row=>row.map(csvEscape).join(',')).join('\n'),`study-plan-${todayISO()}.csv`,'text/csv;charset=utf-8')}
-  const importJson=(file:File)=>{const reader=new FileReader();reader.onload=()=>{try{const parsed=JSON.parse(String(reader.result)) as AppState;if(!parsed.version||!parsed.taskGroups)throw new Error();setReplacementPreview({label:`导入备份：${file.name}`,state:normalizeState(parsed)})}catch{window.alert('无法识别这个备份文件。')}};reader.readAsText(file)}
+  const importJson=(file:File)=>{const reader=new FileReader();reader.onload=()=>{void(async()=>{try{const parsed=JSON.parse(String(reader.result)) as unknown;const validation=validateStateInput(parsed,'json');if(!validation.success||!validation.data){await preserveRecoverySnapshot(namespace,parsed,'invalid-data','json',validation.issues);setRecoverySnapshots(await listRecoverySnapshots(namespace));window.alert(`无法识别这个备份文件。\n\n${validation.issues.slice(0,4).join('\n')}`);return}const incomingVersion=Number(validation.data.schemaVersion??validation.data.version??0);if(incomingVersion<SCHEMA_VERSION)await preserveRecoverySnapshot(namespace,parsed,'before-migration','json');await preserveRecoverySnapshot(namespace,state,'before-replacement','json');setRecoverySnapshots(await listRecoverySnapshots(namespace));setReplacementPreview({label:`导入备份：${file.name}`,state:normalizeState(validation.data)})}catch{window.alert('无法识别这个备份文件。')}})()};reader.readAsText(file)}
   const login=async(kind:'in'|'up')=>{try{setAuthMessage('处理中……');await(kind==='in'?signIn(email,password):signUp(email,password));setAuthMessage(kind==='in'?'登录成功，正在恢复云端计划':'注册请求已提交，请检查邮箱。')}catch(error){setAuthMessage(error instanceof Error?error.message:'操作失败')}}
   const cloudUpload=async()=>{try{const timestamp=await onCloudUpload();setAuthMessage(`已同步：${new Date(timestamp).toLocaleString()}`)}catch(error){setAuthMessage(error instanceof Error?error.message:'同步失败')}}
-  const cloudDownload=async()=>{try{const cloud=await downloadSnapshot(sessionUserId);if(!cloud){setAuthMessage('云端尚无数据');return}setReplacementPreview({label:'从云端恢复当前计划',state:normalizeState({...cloud,replanHistory:state.replanHistory,conflictBackups:state.conflictBackups,planVersions:state.planVersions})})}catch(error){setAuthMessage(error instanceof Error?error.message:'下载失败')}}
+  const cloudDownload=async()=>{try{const cloud=await downloadSnapshot(sessionUserId);if(!cloud){setAuthMessage('云端尚无数据');return}setReplacementPreview({label:'从云端恢复当前计划',state:normalizeState({...cloud.state,replanHistory:state.replanHistory,conflictBackups:state.conflictBackups,planVersions:state.planVersions})})}catch(error){setAuthMessage(error instanceof Error?error.message:'下载失败')}}
   const restoreConflict=(raw:string)=>{try{const parsed=JSON.parse(raw) as AppState;setReplacementPreview({label:'恢复同步冲突备份',state:normalizeState(parsed)})}catch{window.alert('冲突备份已损坏，无法恢复。')}}
+  const openRecoverySnapshot=(snapshot:DataRecoverySnapshot)=>{try{const parsed=JSON.parse(snapshot.raw) as unknown;const validation=validateStateInput(parsed,'snapshot');if(!validation.success||!validation.data){window.alert(`这个副本仍然损坏，建议先下载后人工检查。\n\n${validation.issues.slice(0,4).join('\n')}`);return}setReplacementPreview({label:`恢复安全副本：${new Date(snapshot.createdAt).toLocaleString()}`,state:normalizeState(validation.data)})}catch{window.alert('这个副本不是有效 JSON，可下载后人工检查。')}}
+  const recoveryReason=(reason:DataRecoverySnapshot['reason'])=>reason==='before-migration'?'迁移前自动备份':reason==='invalid-data'?'已隔离的损坏数据':reason==='before-replacement'?'覆盖前自动备份':'云同步冲突副本'
   const addSubject=()=>{const value=subjectDraft.trim();if(!value)return;updateSettings({customSubjects:Array.from(new Set([...state.settings.customSubjects,value]))});setSubjectDraft('')}
   const prepareSettingsChange = (patch: Partial<AppState['settings']>, title: string, type: PlanChangeEvent['type'] = 'rule-change') => {
     const prepared = cloneActiveState(state)
@@ -1873,6 +2506,7 @@ function SettingsPage({ sessionUserId, sessionEmail, cloudMessage, onCloudUpload
     <details className="settings-advanced"><summary>高级排期参数</summary><div className="settings-advanced-body">
     <SettingsSection title="排期偏好" description="这些是可解释的偏好和范围参数；硬约束、用户手动安排、锁定、执行状态与日期保护不会被静默突破。"><div className="form-grid three"><label className="field"><span>冻结近期天数</span><NumericInput commitMode="blur" min={0} max={7} value={state.settings.freezeDays} onValueChange={value=>updateSettings({freezeDays:value})}/></label><label className="field"><span>常规日最多任务</span><NumericInput commitMode="blur" min={1} max={100} value={state.settings.regularMaxTasks} onValueChange={value=>updateSettings({regularMaxTasks:value})}/></label><label className="field"><span>学习日最多任务</span><NumericInput commitMode="blur" min={1} max={100} value={state.settings.studyMaxTasks} onValueChange={value=>updateSettings({studyMaxTasks:value})}/></label><label className="field"><span>均衡方案目标利用率（%）</span><NumericInput commitMode="blur" min={50} max={100} value={Math.round(state.settings.targetUtilization*100)} onValueChange={value=>updateSettings({targetUtilization:value/100})}/></label><label className="field"><span>接近满载提示线（%）</span><NumericInput commitMode="blur" min={60} max={100} value={Math.round(state.settings.nearFullThreshold*100)} onValueChange={value=>updateSettings({nearFullThreshold:value/100})}/></label><label className="field"><span>缓冲日目标利用率（%）</span><NumericInput commitMode="blur" min={0} max={80} value={Math.round(state.settings.bufferUtilization*100)} onValueChange={value=>updateSettings({bufferUtilization:value/100})}/></label><label className="field"><span>小范围调整优先半径（天）</span><NumericInput commitMode="blur" min={1} max={14} value={state.settings.localRepairRadius} onValueChange={value=>updateSettings({localRepairRadius:value})}/></label><label className="field"><span>单日尽量最多新增任务</span><NumericInput commitMode="blur" min={0} max={10} value={state.settings.maxNewTasksPerDay} onValueChange={value=>updateSettings({maxNewTasksPerDay:value})}/></label><label className="field"><span>单日负载变化预算（%容量）</span><NumericInput commitMode="blur" min={0} max={100} value={Math.round(state.settings.maxLoadChangeRatio*100)} onValueChange={value=>updateSettings({maxLoadChangeRatio:value/100})}/></label><label className="field"><span>单类别建议占比上限（%）</span><NumericInput commitMode="blur" min={30} max={100} value={Math.round(state.settings.subjectShareLimit*100)} onValueChange={value=>updateSettings({subjectShareLimit:value/100})}/></label></div></SettingsSection>
     <SettingsSection title="每日容量" description="容量是默认硬上限。今天已经学习的实际时间会消耗容量，即使该任务不计入正式统计。"><div className="form-grid three"><label className="field"><span>常规日（分钟）</span><NumericInput commitMode="blur" min={0} max={1440} value={state.settings.regularMinutes} onValueChange={value=>prepareSettingsChange({regularMinutes:value}, '调整常规日默认容量', 'availability-change')}/></label><label className="field"><span>学习日（分钟）</span><NumericInput commitMode="blur" min={0} max={1440} value={state.settings.studyMinutes} onValueChange={value=>prepareSettingsChange({studyMinutes:value}, '调整学习日默认容量', 'availability-change')}/></label><label className="field"><span>旅游日（分钟）</span><NumericInput commitMode="blur" min={0} max={1440} value={state.settings.travelMinutes} onValueChange={value=>prepareSettingsChange({travelMinutes:value}, '调整旅游日默认容量', 'availability-change')}/></label></div><div className="toggle-grid"><Toggle checked={state.settings.countWordsTime} onChange={value=>updateSettings({countWordsTime:value})} label="把每日单词计入正式计划与统计时间"/><Toggle checked={state.settings.showWarnings} onChange={value=>updateSettings({showWarnings:value})} label="显示进度风险提醒"/><Toggle checked={state.settings.optionalReview} onChange={value=>updateSettings({optionalReview:value})} label="当天任务全部完成时自动打开复盘（入口始终保留）"/><Toggle checked={state.settings.keepOfflineOnLogout} onChange={value=>updateSettings({keepOfflineOnLogout:value})} label="退出登录后保留个人离线缓存"/></div></SettingsSection>
+    <SettingsSection title="首次建档确认" description="首次排期前只需要确认一次当前的可用时间；确认不会锁死设置，之后仍可修改并重新预览。"><div className="setup-confirmation"><div><strong>{state.settings.setupProgress?.availabilityConfirmed ? '可用时间已确认' : '还没有确认可用时间'}</strong><span>{state.settings.setupProgress?.availabilityConfirmed ? '首次排期可以使用当前容量。' : '确认后，录入页的首次排期按钮才会启用。'}</span></div><button className="secondary-button" onClick={()=>updateSettings({setupProgress:{...(state.settings.setupProgress ?? {}), currentStep:3, availabilityConfirmed:true}})}>{state.settings.setupProgress?.availabilityConfirmed ? '再次确认' : '确认当前可用时间'}</button></div></SettingsSection>
     <CalendarConstraintManager onPrepared={onPrepared}/>
     <SettingsSection title="自定义科目／类别" description="保留学习预设，同时允许增加自己的类别；存储层不会把产品永久限制为学校科目。"><div className="custom-subject-editor"><div className="button-wrap"><input value={subjectDraft} onChange={event=>setSubjectDraft(event.target.value)} placeholder="例如：数学竞赛、研究项目"/><button className="primary-button" onClick={addSubject}>添加</button></div><div className="tag-list">{state.settings.customSubjects.map(item=><span key={item}>{item}<button aria-label={`删除${item}`} onClick={()=>updateSettings({customSubjects:state.settings.customSubjects.filter(subject=>subject!==item)})}>×</button></span>)}</div></div></SettingsSection>
     <SettingsSection title="自适应时长建议" description="只使用最近有效样本生成建议，不自动覆盖预计或移动日历；孤立异常值按 IQR 规则降低影响。"><div className="form-grid three"><label className="field"><span>历史窗口（最近完成数）</span><NumericInput commitMode="blur" min={3} max={50} value={state.settings.duration.windowSize} onValueChange={value=>updateSettings({duration:{...state.settings.duration,windowSize:value}})}/></label><label className="field"><span>最少样本数</span><NumericInput commitMode="blur" min={2} max={20} value={state.settings.duration.minimumSamples} onValueChange={value=>updateSettings({duration:{...state.settings.duration,minimumSamples:value}})}/></label><label className="field"><span>偏差提示阈值（%）</span><NumericInput commitMode="blur" min={5} max={100} value={Math.round(state.settings.duration.deviationThreshold*100)} onValueChange={value=>updateSettings({duration:{...state.settings.duration,deviationThreshold:value/100}})}/></label></div><Toggle checked={state.settings.duration.enabled} onChange={value=>updateSettings({duration:{...state.settings.duration,enabled:value}})} label="启用复盘中的时长建议"/></SettingsSection>
@@ -1882,9 +2516,12 @@ function SettingsPage({ sessionUserId, sessionEmail, cloudMessage, onCloudUpload
     {state.replanHistory.length > 0 && <SettingsSection title="旧版恢复记录" description="仅在检测到旧版本历史时显示。"><div className="history-list">{[...state.replanHistory].reverse().map(entry=><div className="history-row" key={entry.id}><div><strong>{entry.label}</strong><span>{new Date(entry.createdAt).toLocaleString()} · 移动 {entry.moveCount} 项</span></div><div className="button-wrap">{entry.afterSnapshot&&<button className="secondary-button" onClick={()=>setHistoryEntry(entry)}>查看差异</button>}<button className="secondary-button" onClick={()=>restoreReplanHistory(entry.id)}>恢复</button></div></div>)}</div></SettingsSection>}
     </div></details>
     <SettingsSection title="数据与恢复" description={`当前数据空间：${namespace==='guest'?'游客演示':sessionEmail??'个人账号'}。JSON 备份可能包含个人计划，请妥善保管。`}><div className="button-wrap"><button className="secondary-button" onClick={exportJson}><Download size={16}/>导出 JSON</button><button className="secondary-button" onClick={exportCsv}><FileDown size={16}/>导出 CSV</button><button className="secondary-button" onClick={()=>window.print()}><FileDown size={16}/>打印 / 导出 PDF</button><button className="secondary-button" onClick={()=>fileRef.current?.click()}><Upload size={16}/>导入 JSON</button><input ref={fileRef} type="file" accept="application/json" hidden onChange={event=>event.target.files?.[0]&&importJson(event.target.files[0])}/><button className="secondary-button" disabled={!canUndo} onClick={undo}><RotateCcw size={16}/>恢复上一步</button>{namespace==='guest'&&<><button className="secondary-button" onClick={()=>window.confirm('恢复完整功能演示计划？当前游客修改会被覆盖。')&&resetAll('demo')}>恢复演示计划</button><button className="secondary-button" onClick={()=>window.confirm('从空白计划开始？当前游客数据会被清空。')&&resetAll('blank')}>从空白开始</button></>}<button className="danger-button" onClick={()=>window.confirm('确认重置当前数据空间？请先导出备份。')&&resetAll(namespace==='guest'?'demo':'blank')}><Trash2 size={16}/>重置计划</button></div>{state.conflictBackups.length>0&&<div className="conflict-backups"><strong>同步冲突备份</strong><p>不同设备冲突会保留副本，不静默覆盖。</p>{state.conflictBackups.slice(-5).reverse().map((raw,index)=><div key={index}><span>备份 {state.conflictBackups.length-index}</span><div className="button-wrap"><button className="text-button" onClick={()=>restoreConflict(raw)}>恢复</button><button className="text-button" onClick={()=>downloadBlob(raw,`study-plan-conflict-${index+1}.json`,'application/json')}>下载</button></div></div>)}</div>}</SettingsSection>
-    {supabaseConfigured && <SettingsSection title="账号与同步" description="登录后同步当前计划；完整版本历史仍保留在本机。">{sessionEmail?<div className="cloud-panel"><div><Cloud size={20}/><span>已登录：{sessionEmail}</span></div><div className="button-wrap"><button className="secondary-button" onClick={cloudUpload}>立即上传</button><button className="secondary-button" onClick={cloudDownload}>从云端恢复</button><button className="secondary-button" onClick={()=>signOut()}>退出登录</button></div></div>:<div className="auth-form"><input type="email" placeholder="邮箱" value={email} onChange={event=>setEmail(event.target.value)}/><input type="password" placeholder="密码" value={password} onChange={event=>setPassword(event.target.value)}/><button className="primary-button" onClick={()=>login('in')}>登录</button><button className="secondary-button" onClick={()=>login('up')}>注册</button></div>}{(authMessage||cloudMessage)&&<p className="settings-message">{authMessage||cloudMessage}</p>}</SettingsSection>}
+    {supabaseConfigured && <SettingsSection title="账号与同步" description="登录不会覆盖游客计划；首次使用账号时可选择是否导入。">{sessionEmail?<div className="cloud-panel"><div><Cloud size={20}/><span>已登录：{sessionEmail}</span></div><div className="button-wrap"><button className="secondary-button" onClick={cloudUpload}>立即上传</button><button className="secondary-button" onClick={cloudDownload}>从云端恢复</button><button className="secondary-button" onClick={()=>signOut()}>退出登录</button></div></div>:<div className="auth-form"><input type="email" placeholder="邮箱" value={email} onChange={event=>setEmail(event.target.value)}/><input type="password" placeholder="密码" value={password} onChange={event=>setPassword(event.target.value)}/><button className="primary-button" onClick={()=>login('in')}>登录</button><button className="secondary-button" onClick={()=>login('up')}>注册</button></div>}{(authMessage||cloudMessage)&&<p className="settings-message">{authMessage||cloudMessage}</p>}</SettingsSection>}
 
     <Modal open={Boolean(replacementPreview)} title="覆盖当前计划前预览" onClose={()=>setReplacementPreview(undefined)} wide mobileFullscreen>{replacementPreview&&<><p><strong>{replacementPreview.label}</strong></p><div className="proposal-summary-grid"><div><strong>{state.assignments.length} → {replacementPreview.state.assignments.length}</strong><span>任务</span></div><div><strong>{state.goals.length} → {replacementPreview.state.goals.length}</strong><span>目标</span></div><div><strong>{state.calendarConstraints.length} → {replacementPreview.state.calendarConstraints.length}</strong><span>日期约束</span></div><div><strong>{state.assignments.filter(item=>item.status==='done').length} → {replacementPreview.state.assignments.filter(item=>item.status==='done').length}</strong><span>已完成记录</span></div></div><div className="alert warning"><Sparkles size={18}/><div><strong>当前状态会先进入撤销历史</strong><span>恢复或导入后可立即使用“恢复上一步”；本机计划版本不会被普通云端恢复覆盖。</span></div></div><div className="modal-actions"><button className="secondary-button" onClick={()=>setReplacementPreview(undefined)}>取消</button><button className="primary-button" onClick={()=>{replaceState(replacementPreview.state,true);setReplacementPreview(undefined);setAuthMessage('已完成恢复，可使用“恢复上一步”撤销')}}>确认覆盖</button></div></>}</Modal>
+    <SettingsSection title="数据恢复中心" description="迁移、覆盖或发现损坏数据前自动保留原始副本。副本只在本机保存，可先下载再决定是否恢复。">
+      {recoverySnapshots.length ? <div className="history-list recovery-list">{[...recoverySnapshots].reverse().map(snapshot=><div className="history-row" key={snapshot.id}><div><strong>{recoveryReason(snapshot.reason)}</strong><span>{new Date(snapshot.createdAt).toLocaleString()} · {snapshot.source} · schema v{snapshot.schemaVersion??'未知'}</span>{snapshot.issues?.length&&<small>{snapshot.issues.slice(0,2).join('；')}</small>}</div><div className="button-wrap"><button className="secondary-button" onClick={()=>openRecoverySnapshot(snapshot)}>检查并恢复</button><button className="text-button" onClick={()=>downloadBlob(snapshot.raw,`study-plan-recovery-${snapshot.createdAt.slice(0,10)}-${snapshot.id}.json`,'application/json')}>下载原始副本</button><button className="text-button danger-text" onClick={()=>{if(window.confirm('删除这个本机恢复副本？此操作不能撤销。'))void deleteRecoverySnapshot(namespace,snapshot.id).then(()=>listRecoverySnapshots(namespace)).then(setRecoverySnapshots)}}>删除</button></div></div>)}</div>:<p className="muted-text">目前没有迁移前或损坏数据副本。</p>}
+    </SettingsSection>
     <HistoryDiffDialog entry={historyEntry} onClose={()=>setHistoryEntry(undefined)}/>
     <Modal open={Boolean(versionOpen)} title="恢复计划版本前预览" onClose={()=>setVersionOpen(undefined)} wide mobileFullscreen>{versionOpen&&versionDiff&&<><p><strong>{versionOpen.reason}</strong><br/><span className="muted-text">恢复前会先保存当前计划；实际用时、进度、完成状态、完成日期、计时器和复盘记录不会被旧快照覆盖。</span></p><div className="proposal-summary-grid"><div><strong>{versionDiff.moved.length}</strong><span>任务日期变化</span></div><div><strong>{versionDiff.added.length}</strong><span>将增加</span></div><div><strong>{versionDiff.removed.length}</strong><span>将移除</span></div><div><strong>{versionDiff.goalChanges.length}</strong><span>目标变化</span></div></div><details open><summary>任务日期变化（{versionDiff.moved.length}）</summary><ul>{versionDiff.moved.map(item=><li key={item.id}>{item.title}：{item.from??'未安排'} → {item.to??'未安排'}</li>)}</ul></details><details><summary>增加／移除任务</summary><ul>{versionDiff.added.map(item=><li key={`a-${item.id}`}>增加：{item.title}</li>)}{versionDiff.removed.map(item=><li key={`r-${item.id}`}>移除：{item.title}</li>)}</ul></details><details><summary>目标变化（{versionDiff.goalChanges.length}）</summary><ul>{versionDiff.goalChanges.map(item=><li key={item.id}>{item.title}：{item.before??'无'} → {item.after??'无'}</li>)}</ul></details><div className="modal-actions"><button className="secondary-button" onClick={()=>setVersionOpen(undefined)}>取消</button><button className="primary-button" onClick={()=>{restorePlanVersion(versionOpen.id);setVersionOpen(undefined)}}>恢复此版本</button></div></>}</Modal>
   </div>
