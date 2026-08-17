@@ -2467,3 +2467,16 @@ body{
     z-index:10!important;
   }
 }
+
+/* sidebar app version */
+.sidebar-version {
+  display: block;
+  padding: 2px 8px 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.2;
+  letter-spacing: .02em;
+  text-align: center;
+  user-select: none;
+}
+.sidebar-collapsed .sidebar-version { padding-inline: 0; font-size: 9px; }

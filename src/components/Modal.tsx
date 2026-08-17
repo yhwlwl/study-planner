@@ -108,6 +108,7 @@ export function Modal({ open, title, children, footer, onClose, wide = false, mo
     <div className="modal-backdrop">
       <section ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={titleId} className={`modal-card ${wide ? 'modal-wide' : ''} ${mobileSheet ? 'modal-mobile-sheet' : ''} ${mobileFullscreen ? 'modal-mobile-fullscreen' : ''} ${effectiveFooter ? 'modal-with-footer' : ''} ${className}`.trim()} onMouseDown={e => e.stopPropagation()}>
         <header className="modal-header"><h2 id={titleId}>{title}</h2><button className="icon-button" onClick={onClose} aria-label="关闭"><X size={20} /></button></header>
+        <div className="tutorial-modal-coachmark-slot" aria-live="polite"/>
         <div className="modal-body">{extracted.content}</div>
         {effectiveFooter && <footer className="modal-footer">{effectiveFooter}</footer>}
       </section>

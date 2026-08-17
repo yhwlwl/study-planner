@@ -65,11 +65,11 @@ check('07 文案', '关键动作标题是直接动词句', has(source.app, "'rep
 check('07 文案', '录入文案明确“现在还不会进入日历”', has(source.app, '现在还不会进入日历'))
 check('07 文案', '预览文案明确确认后才进入正式计划', has(source.app, '这时才会进入正式计划'))
 
-check('08 Coachmark', '浮层不再提供随机换位置按钮', lacks(source.coach, '换空位', 'tutorial-position-button', 'safeFloatingPositions'))
-check('08 Coachmark', '桌面浮层锚定真实目标上下方', has(source.coach, "type FloatingMode = 'above' | 'below' | 'top-dock' | 'bottom-dock'", 'targetRect.bottom + gap', 'targetRect.top - measuredHeight - gap'))
-check('08 Coachmark', '移动端弹窗提示固定到目标反侧边缘', has(source.coach, 'dockBottom', "mode: dockBottom ? 'bottom-dock' : 'top-dock'"))
+check('08 Coachmark', '提示不再使用动态悬浮定位', lacks(source.coach, 'FloatingMode', 'tutorial-coachmark-floating', 'setLayout', 'dockBottom'))
+check('08 Coachmark', '弹窗步骤进入固定提示槽，不覆盖表单内容', has(source.modal, 'tutorial-modal-coachmark-slot') && has(source.coach, 'createPortal', 'tutorial-modal-coachmark-slot'))
+check('08 Coachmark', '页面步骤继续使用正常文档流提示框', has(source.coach, 'const content = collapsed ? (', 'className="tutorial-coachmark"'))
 check('08 Coachmark', '提示保留阶段/标题/正文层级', has(source.coach, 'tutorial-coachmark-head', 'tutorial-coachmark-title', 'tutorial-coachmark-copy'))
-check('08 Coachmark', '关联气泡有指向目标的箭头，移动端 dock 不伪装指向', has(source.css, '.tutorial-coachmark-floating::after', '.tutorial-placement-top-dock::after'))
+check('08 Coachmark', '弹窗提示槽为空时不占空间，窄屏保持紧凑', has(source.css, '.tutorial-modal-coachmark-slot:empty', '@media (max-width: 640px)'))
 
 check('09 移动端弹窗', 'Modal 使用 visualViewport 的实际可见高度', has(source.modal, 'window.visualViewport', '--modal-visible-height'))
 check('09 移动端弹窗', '全屏弹窗正文独立滚动且 footer 永远占据可见高度', has(source.styles, '/* v0.9 tutorial: visible viewport modal guarantee */', 'flex:1 1 0!important', 'flex:0 0 auto!important'))

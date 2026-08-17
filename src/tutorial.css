@@ -163,3 +163,21 @@
     backdrop-filter:blur(14px);
   }
 }
+
+/* v4 tutorial: inline modal coachmark slot */
+.tutorial-modal-coachmark-slot {
+  flex: 0 0 auto;
+  padding: 0 18px 10px;
+  background: var(--surface, #fff);
+}
+.tutorial-modal-coachmark-slot:empty { display: none; }
+.tutorial-modal-coachmark-slot .tutorial-coachmark {
+  margin: 0;
+  box-shadow: none;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface, #fff) 97%, var(--primary, #4f6ef7));
+}
+.tutorial-modal-coachmark-slot .tutorial-coachmark-collapsed { margin: 0; }
+@media (max-width: 640px) {
+  .tutorial-modal-coachmark-slot { padding: 0 12px 8px; }
+}
