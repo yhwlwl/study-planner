@@ -32,7 +32,6 @@ export interface FeedbackRecord {
   created_at: string
   replies: FeedbackReply[]
   attachments: FeedbackAttachment[]
-  account_email?: string | null
   app_version?: string | null
   page_path?: string | null
   user_agent?: string | null
@@ -75,6 +74,16 @@ const GUEST_SECRET_KEY = 'study-planner:feedback-guest-secret'
 const MAX_SCREENSHOTS = 3
 const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024
 const ALLOWED_SCREENSHOT_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+const ADMIN_DETAIL_COLUMNS = [
+  'id', 'feedback_type', 'content', 'user_id', 'created_at',
+  'app_version', 'page_path', 'user_agent', 'status', 'visitor_id', 'account_mode',
+  'utm_source', 'utm_campaign', 'first_referrer', 'browser_language', 'client_timezone', 'is_pwa',
+  'first_seen_at', 'last_seen_at', 'tenure_days',
+  'total_sessions', 'total_events', 'total_active_days',
+  'sessions_30d', 'events_30d', 'active_days_30d', 'unique_pages_30d',
+  'assignment_count', 'completed_assignment_count', 'task_group_count', 'goal_count', 'intake_batch_count', 'replan_count',
+  'depth_score', 'depth_level', 'depth_calculated_at',
+].join(',')
 let memoryGuestSecret = ''
 
 function sessionIsFeedbackAdmin(session: Session | null): boolean {
@@ -244,11 +253,12 @@ export async function listFeedback(scope: 'mine' | 'admin'): Promise<FeedbackRec
 
   let rows: Array<Omit<FeedbackRecord, 'replies' | 'attachments'>> = []
   if (scope === 'admin') {
-    const adminResult = await supabase.rpc('list_feedback_admin_details')
-    if (adminResult.error) throw new Error('反馈详细信息加载失败，请稍后重试。')
-    rows = Array.isArray(adminResult.data)
-      ? adminResult.data as Array<Omit<FeedbackRecord, 'replies' | 'attachments'>>
-      : []
+    const submissions = await supabase
+      .from('feedback_submissions')
+      .select(ADMIN_DETAIL_COLUMNS)
+      .order('created_at', { ascending: false })
+    if (submissions.error) throw new Error('反馈详细信息加载失败，请稍后重试。')
+    rows = (submissions.data ?? []) as Array<Omit<FeedbackRecord, 'replies' | 'attachments'>>
   } else {
     const submissions = await supabase
       .from('feedback_submissions')
