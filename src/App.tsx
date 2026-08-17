@@ -57,8 +57,9 @@ const FocusTimerPage = lazy(() => import('./components/FocusTimerPage').then(mod
 const GuidePage = lazy(() => import('./components/GuidePage').then(module => ({ default: module.GuidePage })))
 const IntakePage = lazy(() => import('./components/IntakePage').then(module => ({ default: module.IntakePage })))
 const ExportPage = lazy(() => import('./components/ExportPage').then(module => ({ default: module.ExportPage })))
+const FeedbackPage = lazy(() => import('./components/FeedbackPage').then(module => ({ default: module.FeedbackPage })))
 
-type Page = 'today' | 'calendar' | 'tasks' | 'intake' | 'goals' | 'stats' | 'export' | 'guide' | 'settings' | 'timer'
+type Page = 'today' | 'calendar' | 'tasks' | 'intake' | 'goals' | 'stats' | 'export' | 'feedback' | 'guide' | 'settings' | 'timer'
 type ShiftScope = 'today' | 'future'
 type CloudSyncStatus = 'local' | 'restoring' | 'queued' | 'saving' | 'saved' | 'error'
 
@@ -79,6 +80,7 @@ const navItems: { id: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'goals', label: '目标', icon: Target },
   { id: 'stats', label: '统计', icon: BarChart3 },
   { id: 'export', label: '导出', icon: FileDown },
+  { id: 'feedback', label: '意见反馈', icon: Inbox },
   { id: 'guide', label: '使用教程', icon: BookOpen },
   { id: 'settings', label: '设置', icon: SettingsIcon }
 ]
@@ -142,7 +144,7 @@ export default function App() {
   namespaceRef.current = namespace
   tutorialSessionRef.current = tutorialSession
 
-  const tutorialReturnPage = (value: Page): TutorialSession['returnPage'] => value === 'timer' ? 'today' : value
+  const tutorialReturnPage = (value: Page): TutorialSession['returnPage'] => value === 'timer' || value === 'feedback' ? 'today' : value
 
   const tutorialNotice = (message = '教程中先完成当前这一步') => {
     setTutorialBlockedNotice(message)
@@ -1143,6 +1145,7 @@ export default function App() {
             {page === 'goals' && <GoalsPage onPrepared={openPrepared} tutorialMode={tutorialRestricted && tutorialPageForStep(tutorialStepValue!) === 'goals'} tutorialStep={tutorialStepValue} onTutorialExistingViewed={() => { void enterTutorialIntake() }} onTutorialGoalCreated={tutorialGoalCreated} onTutorialBlocked={tutorialNotice}/>}
             {page === 'stats' && <StatsPage onOpenReplan={date => openAdjustment(date, 'current-conflicts')} tutorialMode={tutorialRestricted && (tutorialStepValue === 'stats' || tutorialStepValue === 'stats-detail')} onTutorialExpanded={tutorialStatsExpanded}/>}
             {page === 'export' && <ExportPage onNavigate={target => navigate(target)}/>}
+            {page === 'feedback' && <FeedbackPage/>}
             {page === 'guide' && <GuidePage onNavigate={target => navigate(target)} onStartTutorial={() => setTutorialOfferOpen(true)}/>}
           </Suspense>
           {page === 'settings' && <SettingsPage sessionUserId={sessionUser?.id} sessionEmail={sessionUser?.email} cloudMessage={cloudMessage} onCloudUpload={uploadCloudNow} onPrepared={openPrepared} onStartTutorial={() => setTutorialOfferOpen(true)}/>}
