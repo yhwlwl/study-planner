@@ -4,11 +4,11 @@
     "p95_500_ms": 5000,
     "p95_1000_ms": 20000
   },
-  "generatedAt": "2026-08-17T08:22:41.914Z",
+  "generatedAt": "2026-08-17T08:47:21.748Z",
   "environment": {
     "platform": "linux",
     "node": "v22.23.2",
-    "cpu": "AMD EPYC 9V74 80-Core Processor",
+    "cpu": "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz",
     "logicalCpus": 4,
     "totalMemoryGb": 15.6
   },
@@ -17,14 +17,14 @@
       "count": 100,
       "days": 30,
       "samplesMs": [
-        2.49,
-        1.53,
-        3.48,
-        1.79,
-        1.63
+        2.27,
+        1.63,
+        3.71,
+        1.68,
+        1.69
       ],
-      "p50Ms": 1.79,
-      "p95Ms": 3.48,
+      "p50Ms": 1.69,
+      "p95Ms": 3.71,
       "maxUnscheduled": 0,
       "stable": true
     },
@@ -32,14 +32,14 @@
       "count": 500,
       "days": 90,
       "samplesMs": [
-        7.83,
-        9.5,
-        7.71,
-        10.07,
-        10.5
+        7.23,
+        7.59,
+        7.92,
+        8.06,
+        11.87
       ],
-      "p50Ms": 9.5,
-      "p95Ms": 10.5,
+      "p50Ms": 7.92,
+      "p95Ms": 11.87,
       "maxUnscheduled": 0,
       "stable": true
     },
@@ -47,14 +47,14 @@
       "count": 1000,
       "days": 180,
       "samplesMs": [
-        16.84,
-        15.74,
-        16.98,
-        16.86,
-        15.21
+        16.57,
+        14.85,
+        16.23,
+        14.89,
+        16.14
       ],
-      "p50Ms": 16.84,
-      "p95Ms": 16.98,
+      "p50Ms": 16.14,
+      "p95Ms": 16.57,
       "maxUnscheduled": 0,
       "stable": true
     }
@@ -63,7 +63,7 @@
     "totalTasks": 500,
     "existingTasks": 450,
     "newTasks": 50,
-    "elapsedMs": 66.93,
+    "elapsedMs": 69.64,
     "movedExisting": 0
   }
 }

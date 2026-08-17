@@ -1,0 +1,232 @@
+{
+  "generatedAt": "2026-08-17T08:47:23.635Z",
+  "passed": 45,
+  "total": 45,
+  "results": [
+    {
+      "scenario": "核心目标从 8/8 提前到 8/6",
+      "pass": true,
+      "evidence": "目标收紧进入目标导向推荐预览；候选窗口从当前可调整未来开始。"
+    },
+    {
+      "scenario": "化学组从核心目标放宽到 8/20",
+      "pass": true,
+      "evidence": "目标放宽默认预览“保持当前排期”，优化只是用户可选方案。"
+    },
+    {
+      "scenario": "任务组发现缺少子任务",
+      "pass": true,
+      "evidence": "只创建缺少的 Assignment，并以 Insert 事件进入预览。"
+    },
+    {
+      "scenario": "觉得当前计划太累",
+      "pass": true,
+      "evidence": "先询问用户希望得到的具体减负结果，再生成推荐与备选。"
+    },
+    {
+      "scenario": "8/10–8/15 出去玩",
+      "pass": true,
+      "evidence": "范围约束先列出影响，再推荐旅行前后平衡方案。"
+    },
+    {
+      "scenario": "新增任务组",
+      "pass": true,
+      "evidence": "新组生成草稿后必须预览，也可由用户明确保留为未安排。"
+    },
+    {
+      "scenario": "老师 8/15 检查若干任务组",
+      "pass": true,
+      "evidence": "用 Goal 数量/百分比条件表达阶段检查，不新增 Milestone。"
+    },
+    {
+      "scenario": "预计时长变化引发计划调整",
+      "pass": true,
+      "evidence": "先预览预计变化；日期仍合法时保持不动，新增冲突才最小修复。"
+    },
+    {
+      "scenario": "复盘逐项顺延不再二次重排",
+      "pass": true,
+      "evidence": "用户已选日期只做精确校验；原复盘中的重复“完整调整方案”入口已移除。"
+    },
+    {
+      "scenario": "复盘完成页提供三条明确路径",
+      "pass": true,
+      "evidence": "当前方案可直接校验提交；只有用户主动获取更多方案时才进入完整方案比较。"
+    },
+    {
+      "scenario": "已完成历史不再生成待处理冲突",
+      "pass": true,
+      "evidence": "已完成超载、已完成超次数和历史数字变化不会单独阻止方案；新增任务仍按历史负载校验。"
+    },
+    {
+      "scenario": "冲突处理选项按用途分层",
+      "pass": true,
+      "evidence": "选项数量可以因问题类型不同而变化，但不再把换日、修改条件和撤销操作混为同一层。"
+    },
+    {
+      "scenario": "复盘冲突只处理冲突项",
+      "pass": true,
+      "evidence": "合法项被固定，调度器只能处理精确预览中识别出的冲突任务。"
+    },
+    {
+      "scenario": "批量移动按用户指定结果校验",
+      "pass": true,
+      "evidence": "批量移动不再无条件重算全部日期；仅冲突项需要替代方案。"
+    },
+    {
+      "scenario": "系统改动全部先预览",
+      "pass": true,
+      "evidence": "直接提交、推荐调整和探索优化均经过统一预览确认。"
+    },
+    {
+      "scenario": "多方案由用户决定但默认界面简洁",
+      "pass": true,
+      "evidence": "默认只计算推荐方案；用户主动比较时再按需计算其他策略。"
+    },
+    {
+      "scenario": "摘要计数可逐层展开到具体问题",
+      "pass": true,
+      "evidence": "第一层显示数量，点击进入具体问题，再展开涉及任务和完整原因。"
+    },
+    {
+      "scenario": "日期负载增减使用红绿方向提示",
+      "pass": true,
+      "evidence": "负载增加为红色向上，减少为绿色向下，无变化为中性。"
+    },
+    {
+      "scenario": "选中态在手机和桌面都清晰",
+      "pass": true,
+      "evidence": "选择状态同时使用明显边框、背景、阴影和“已选择”标记。"
+    },
+    {
+      "scenario": "移动端计划调整不产生大块空白",
+      "pass": true,
+      "evidence": "复杂弹窗在手机上使用 100dvh 弹性全屏结构，正文独立滚动。"
+    },
+    {
+      "scenario": "手机首页不再被桌面 flex-basis 撑出大块空白",
+      "pass": true,
+      "evidence": "Today 头部在手机上改为显式单列 Grid，内容高度由真实内容决定。"
+    },
+    {
+      "scenario": "硬冲突逐项展示而不是只给总数",
+      "pass": true,
+      "evidence": "冲突摘要可展开到类别、数值、任务、后果和处理方式。"
+    },
+    {
+      "scenario": "有冲突时主按钮仍提供下一步",
+      "pass": true,
+      "evidence": "按钮按状态引导处理冲突或重新计算，不因 infeasible 简单全部禁用。"
+    },
+    {
+      "scenario": "一次性例外支持部分接受与部分拒绝",
+      "pass": true,
+      "evidence": "每项例外独立决定；拒绝项释放任务，接受项进入新计算条件。"
+    },
+    {
+      "scenario": "一次性例外保持最小任务授权",
+      "pass": true,
+      "evidence": "日期、规则、临时上限和涉及任务共同限定例外，不修改永久设置。"
+    },
+    {
+      "scenario": "无可行候选时仍提供可点击解决路径",
+      "pass": true,
+      "evidence": "没有候选时不只留下灰色按钮，而是给出扩大搜索、改容量和改目标入口。"
+    },
+    {
+      "scenario": "移动端月历完整保留七列",
+      "pass": true,
+      "evidence": "移动端取消强制宽度和横向空白，七列在视口内完整呈现。"
+    },
+    {
+      "scenario": "日期容量增加不被当作必须修复",
+      "pass": true,
+      "evidence": "新增容量默认保持排期，用户可主动选择减负或提前。"
+    },
+    {
+      "scenario": "Today 任务卡不再绕过统一移动校验",
+      "pass": true,
+      "evidence": "任务移动通过精确预览或调度方案，不由快捷按钮静默执行。"
+    },
+    {
+      "scenario": "缓冲日长任务与高强度任务被明确识别",
+      "pass": true,
+      "evidence": "分析器只把缓冲日中仍未完成的长任务和高强度任务列为问题；已完成历史不参与重排。"
+    },
+    {
+      "scenario": "目标没有有效完成条件时不会自动完成",
+      "pass": true,
+      "evidence": "空目标保持进行中且进度为 0。"
+    },
+    {
+      "scenario": "目标完成历史记录实际达成日期与按期结果",
+      "pass": true,
+      "evidence": "完成时间来自实际执行记录，并保存期望/最晚日期结果。"
+    },
+    {
+      "scenario": "复盘同时纳入原计划与当日真实执行",
+      "pass": true,
+      "evidence": "跨日补做、提前执行和计划外执行不会从复盘消失。"
+    },
+    {
+      "scenario": "方案内逐项微调重新完整验算",
+      "pass": true,
+      "evidence": "用户在预览中修改日期或锁定结果后，重新计算容量、上限、目标和保护日期。"
+    },
+    {
+      "scenario": "事件协调器按意图完整度运行分流",
+      "pass": true,
+      "evidence": "review=validate-and-commit；move=validate-and-commit；relax=optional-optimization；insert=recommended-preview；tired=exploratory-optimization"
+    },
+    {
+      "scenario": "部分目标与后续完整目标不会互相覆盖",
+      "pass": true,
+      "evidence": "前 50% 最近期限=2026-08-15；后 50% 最近期限=2026-08-20"
+    },
+    {
+      "scenario": "明确局部操作第一方案只执行用户操作",
+      "pass": true,
+      "evidence": "删除、换组和任务组编辑先展示精确变化，不自动启动更大范围调度。"
+    },
+    {
+      "scenario": "单任务删除不借机移动其他任务",
+      "pass": true,
+      "evidence": "单任务删除先生成只移除该任务的结构预览；其他任务移动数应为 0。"
+    },
+    {
+      "scenario": "任务组删除采用最小作用域预览",
+      "pass": true,
+      "evidence": "任务组删除先删除组、任务和直接引用，不自动重排其他组。"
+    },
+    {
+      "scenario": "既有问题与本次新增问题分开显示",
+      "pass": true,
+      "evidence": "计划原有硬问题只提示；只有本次新增或恶化的问题进入本次处理范围。"
+    },
+    {
+      "scenario": "正在计时任务不能从首页绕过计时结算",
+      "pass": true,
+      "evidence": "首页完成入口先返回计时页；极端陈旧状态仍会把已计时分钟写入实际记录。"
+    },
+    {
+      "scenario": "所有任务都有可发现入口",
+      "pass": true,
+      "evidence": "任务页同时提供待处理、未安排、逾期、今日、未来和已完成视图。"
+    },
+    {
+      "scenario": "批量移动不再使用浏览器文本输入",
+      "pass": true,
+      "evidence": "批量移动使用日期选择器和所选任务摘要。"
+    },
+    {
+      "scenario": "复盘暂不顺延任务仍可集中找回",
+      "pass": true,
+      "evidence": "仅保存复盘后，过去未完成任务在任务收件箱和首页提醒中保持可见。"
+    },
+    {
+      "scenario": "复盘过去未完成任务可以顺延出去",
+      "pass": true,
+      "evidence": "过去日期只冻结已发生事实；复盘和待处理视图可把未完成任务移到今天、未来或待安排，但不能把任务移入过去。"
+    }
+  ]
+}

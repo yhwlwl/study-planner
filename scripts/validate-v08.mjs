@@ -17,7 +17,8 @@ const source = {
 }
 const pkg = JSON.parse(read('package.json'))
 const releaseVersion = `v${pkg.version}`
-add('版本与迁移', '发布版本为 0.9.0', pkg.version === '0.9.0', `package.json: ${pkg.version}`)
+const appVersion = read('src/lib/constants.ts').match(/APP_VERSION\s*=\s*'([^']+)'/)?.[1]
+add('版本与迁移', `发布版本与应用显示版本一致（${pkg.version}）`, appVersion === pkg.version, `package.json: ${pkg.version}；APP_VERSION: ${appVersion ?? '缺失'}`)
 add('版本与迁移', '状态架构版本已提升（当前为 11）', /SCHEMA_VERSION\s*=\s*11/.test(source.types), 'src/types.ts；执行账本与历史状态事件使用独立版本迁移')
 add('版本与迁移', '存在确定性 v0.7→v0.8 迁移', /migrat|迁移/.test(source.seed) && /coreTargetDate/.test(source.seed) && /calendarConstraints/.test(source.seed), 'src/lib/seed.ts')
 add('版本与迁移', '旧全局目标日期不再出现在当前界面与当前调度计算', !/settings\.coreTargetDate|settings\.chemistryTargetDate/.test(source.app + source.stats + source.planner), '仅 seed/types 保留迁移兼容字段')

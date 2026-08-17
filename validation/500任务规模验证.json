@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-17T08:22:34.336Z",
+  "generatedAt": "2026-08-17T08:47:14.374Z",
   "fixture": {
     "goals": 20,
     "taskGroups": 50,
@@ -14,8 +14,8 @@
     "serializationCompletes": true
   },
   "measurements": {
-    "clone50TimesMs": 62.73,
-    "serialize100TimesMs": 93.64,
+    "clone50TimesMs": 61.95,
+    "serialize100TimesMs": 66.97,
     "portableBytes": 189711,
     "fullWithLocalVersionsBytes": 4529380,
     "heavyToPortableRatio": 23.88
