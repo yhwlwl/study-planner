@@ -17,6 +17,7 @@ import { createPlanVersion, createVersionFromProposal, previewVersionDiff, resto
 import { dateRange, getCapacity, timestampForDate, todayISO } from './lib/date'
 import { appendIntakeDraft, createIntakeBatchRecord } from './lib/intake-batches'
 import { splitSessionCount } from './lib/intake'
+import { TUTORIAL_NAMESPACE, readTutorialSession, tutorialAllowsCommit } from './lib/tutorial'
 import { dependencyCycleLabels } from './lib/dependencies'
 import { addInferredCompletionEntry, appendStatusEvent, isInferredTimeEntry, timeEntryDate } from './lib/execution'
 
@@ -30,7 +31,7 @@ interface AppContextValue {
   ready: boolean
   loadedFromStorage: boolean
   canUndo: boolean
-  commit: (recipe: Recipe, options?: { history?: boolean; markGuestModified?: boolean }) => void
+  commit: (recipe: Recipe, options?: { history?: boolean; markGuestModified?: boolean; tutorialAction?: string; tutorialTargetId?: string }) => void
   replaceState: (state: AppState, history?: boolean) => void
   loadDataSpace: (namespace: string, fallback?: AppState) => Promise<AppState>
   setDataSpace: (namespace: string, state: AppState, history?: boolean) => Promise<void>
@@ -106,6 +107,12 @@ function templateState(kind: 'demo' | 'blank') {
 }
 
 function nowISO() { return new Date().toISOString() }
+
+function guidedTutorialMutationBlocked(namespace: string) {
+  if (namespace !== TUTORIAL_NAMESPACE) return false
+  const session = readTutorialSession()
+  return !session || session.step !== 'free'
+}
 
 function planEvent(input: Omit<PlanChangeEvent, 'id' | 'createdAt'>): PlanChangeEvent {
   return { id: uid('event'), createdAt: nowISO(), ...input }
@@ -252,6 +259,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const currentAssignments = new Map(state.assignments.map(item => [item.id, { groupId: item.groupId, scheduledDate: item.scheduledDate }]))
     const previous = previousScheduleRef.current
     previousScheduleRef.current = { namespace, assignments: currentAssignments }
+    if (namespace === TUTORIAL_NAMESPACE) { setSequenceRenumberSuggestion(undefined); return }
     if (!ready || !previous || previous.namespace !== namespace) return
     const changedGroupIds = new Set<string>()
     const changedSources = new Set<'manual' | 'automatic'>()
@@ -284,6 +292,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const replaceState = useCallback((nextInput: AppState, pushHistory = true) => {
     setState(previous => {
+      if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
       if (pushHistory) history.current = [...history.current.slice(-29), previous]
       const next = normalizeState(nextInput)
       next.dataRevision = Math.max(previous.dataRevision ?? 1, next.dataRevision ?? 1) + 1
@@ -293,8 +302,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  const commit = useCallback((recipe: Recipe, options?: { history?: boolean; markGuestModified?: boolean }) => {
+  const commit = useCallback((recipe: Recipe, options?: { history?: boolean; markGuestModified?: boolean; tutorialAction?: string; tutorialTargetId?: string }) => {
     setState(previous => {
+      if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession(), options?.tutorialAction, options?.tutorialTargetId)) return previous
       if (options?.history !== false) history.current = [...history.current.slice(-29), previous]
       let next = cloneForMutation(previous)
       recipe(next)
@@ -329,6 +339,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const clearDataSpace = useCallback(async (targetNamespace: string) => clearLocalState(targetNamespace), [])
 
   const undo = useCallback(() => {
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return
     const previous = history.current.pop()
     if (previous) setState(previous)
   }, [])
@@ -552,6 +563,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const deleteTaskGroup = useCallback((id: string) => setState(previous => {
+    if (guidedTutorialMutationBlocked(namespaceRef.current)) return previous
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
     const group = previous.taskGroups.find(item => item.id === id)
     if (!group) return previous
     history.current = [...history.current.slice(-29), previous]
@@ -605,6 +618,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const removeAssignment = useCallback((id: string) => setState(previous => {
+    if (guidedTutorialMutationBlocked(namespaceRef.current)) return previous
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
     const target = previous.assignments.find(item => item.id === id)
     if (!target) return previous
     history.current = [...history.current.slice(-29), previous]
@@ -1322,6 +1337,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const applySchedulingProposal = useCallback((proposal: SchedulingProposal, event: PlanChangeEvent) => setState(previous => {
+    if (guidedTutorialMutationBlocked(namespaceRef.current)) return previous
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
     history.current = [...history.current.slice(-29), previous]
     let next = hydratePortableState(proposal.stateAfter, { replanHistory: previous.replanHistory, conflictBackups: previous.conflictBackups, planVersions: previous.planVersions })
     next = normalizeState(next)
@@ -1340,6 +1357,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }), [])
 
   const applyPreparedWithoutScheduling = useCallback((preparedState: AppState, event: PlanChangeEvent, reason = '保留为未安排任务') => setState(previous => {
+    if (guidedTutorialMutationBlocked(namespaceRef.current)) return previous
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
     history.current = [...history.current.slice(-29), previous]
     const draft = cloneActiveState(preparedState)
     // “保留为未安排”必须真正清空本次新增任务的草稿日期；不能把一个已经
@@ -1369,6 +1388,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 
   const restoreReplanHistory = useCallback((id: string) => setState(previous => {
+    if (guidedTutorialMutationBlocked(namespaceRef.current)) return previous
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
     const entry = previous.replanHistory.find(item => item.id === id)
     if (!entry) return previous
     history.current = [...history.current.slice(-29), previous]
@@ -1393,6 +1414,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const completeReview = useCallback((date: string): ReviewRecord => {
     const record = reviewRecordFor(stateRef.current, date)
     setState(previous => {
+      if (guidedTutorialMutationBlocked(namespaceRef.current)) return previous
+      if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
       history.current = [...history.current.slice(-29), previous]
       const next = cloneForMutation(previous)
       next.reviewRecords = [...next.reviewRecords.filter(item => item.date !== date), record].slice(-120)
@@ -1409,6 +1432,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const restorePlanVersion = useCallback((id: string, side: 'before' | 'after' = 'after') => setState(previous => {
+    if (guidedTutorialMutationBlocked(namespaceRef.current)) return previous
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return previous
     const version = previous.planVersions.find(item => item.id === id)
     if (!version) return previous
     history.current = [...history.current.slice(-29), previous]
@@ -1457,6 +1482,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [commit, sequenceRenumberSuggestion])
 
   const resetAll = useCallback(async (kind: 'demo' | 'blank' = namespaceRef.current === 'guest' ? 'demo' : 'blank') => {
+    if (guidedTutorialMutationBlocked(namespaceRef.current)) return
+    if (namespaceRef.current === TUTORIAL_NAMESPACE && !tutorialAllowsCommit(readTutorialSession())) return
     const next = templateState(kind)
     await clearLocalState(namespaceRef.current)
     history.current = []

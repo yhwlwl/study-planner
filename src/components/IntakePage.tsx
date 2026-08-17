@@ -36,12 +36,15 @@ function emptyDraft(state: AppState): TaskGroupDraft {
   }
 }
 
-export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAddRequestHandled }: {
+export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAddRequestHandled, tutorialMode = false, onStartTutorial, onTutorialBlocked }: {
   onPrepared: (state: AppState, event: PlanChangeEvent) => void
   onNavigate: (page: 'today' | 'tasks' | 'intake' | 'goals' | 'settings') => void
   onAddTask: (batchId?: string) => void
   addRequest?: { id: string; kind: TaskCreationKind; batchId?: string }
   onAddRequestHandled: () => void
+  tutorialMode?: boolean
+  onStartTutorial?: () => void
+  onTutorialBlocked?: (message?: string) => void
 }) {
   const {
     state, canUndo, undo, updateSettings, createIntakeBatch, duplicateIntakeBatch, updateIntakeBatch, addIntakeSingleTask, addIntakeTaskGroup, updateIntakeSingleTask, updateIntakeTaskGroup,
@@ -66,6 +69,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
   const [deletedBatchName, setDeletedBatchName] = useState<string>()
   const fileRef = useRef<HTMLInputElement>(null)
   const handledAddRequestId = useRef<string>()
+  const [showFirstScheduleCue, setShowFirstScheduleCue] = useState(false)
 
   useEffect(() => {
     if (activeId && activeBatches.some(batch => batch.id === activeId)) return
@@ -98,6 +102,18 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
   const availabilityConfirmed = state.settings.setupProgress?.availabilityConfirmed ?? Boolean(state.assignments.length)
   const setupStep = state.settings.setupProgress?.currentStep ?? 1
   const setSetupStep = (currentStep: 1 | 2 | 3 | 4) => updateSettings({ setupProgress: { ...(state.settings.setupProgress ?? {}), currentStep } })
+
+  useEffect(() => {
+    if (state.assignments.length || !pendingItems.length || issueCount || dialogOpen || singleDialogOpen || pasteOpen) return
+    try {
+      const key = 'study-planner:seen-first-schedule-cue-v1'
+      if (localStorage.getItem(key)) return
+      localStorage.setItem(key, '1')
+      setShowFirstScheduleCue(true)
+    } catch {
+      setShowFirstScheduleCue(true)
+    }
+  }, [state.assignments.length, pendingItems.length, issueCount, dialogOpen, singleDialogOpen, pasteOpen])
 
   useEffect(() => {
     if (!active?.lastEditedItemId) return
@@ -151,6 +167,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
 
   const schedule = () => {
     if (!active) return
+    setShowFirstScheduleCue(false)
     const ids = selectedIds.length ? selectedIds : pendingItems.map(item => item.id)
     const invalid = pendingItems.filter(item => ids.includes(item.id) && intakeDraftIssues(item, state).length)
     if (invalid.length) {
@@ -199,13 +216,11 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
       <div>
         <span className="intake-kicker"><Inbox size={16}/>录入</span>
         <h2>{state.assignments.length ? '先把新增任务收齐，再决定如何调整计划' : '先录入任务，完成后统一生成第一份计划'}</h2>
-        <p>{state.assignments.length
-          ? '录入中的内容不会改变今天和未来的正式安排。你可以分几次完成，再统一安排全部或所选任务。'
-          : '这里会自动保存录入进度。中途退出没有关系，下次可以从原位置继续。'}</p>
+        <p>录入后需确认排期，任务才会进入今日和月历。</p>
       </div>
-      <button className="primary-button" onClick={createBatch}><FolderPlus size={17}/>新建录入批次</button>
+      <button className={`primary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中使用预置录入批次') : createBatch()}><FolderPlus size={17}/>新建录入批次</button>
     </section>
-    {!state.assignments.length && <nav className="intake-setup-steps" aria-label="首次建档进度">
+    {!tutorialMode && !state.assignments.length && <nav className="intake-setup-steps" aria-label="首次建档进度">
       <button className={`${pendingItems.length ? 'complete ' : ''}${setupStep === 1 ? 'active' : ''}`} onClick={() => setSetupStep(1)}><span>1</span><strong>任务清单</strong><small>{pendingItems.length ? `${pendingItems.length} 项已录入` : '正在进行'}</small></button>
       <button className={`${state.goals.length ? 'complete ' : ''}${setupStep === 2 ? 'active' : ''}`} onClick={() => { setSetupStep(2); onNavigate('goals') }}><span>2</span><strong>目标期限</strong><small>{state.goals.length ? `${state.goals.length} 个目标` : '可稍后补充'}</small></button>
       <button className={`${availabilityConfirmed ? 'complete ' : ''}${setupStep === 3 ? 'active' : ''}`} onClick={() => { setSetupStep(3); onNavigate('settings') }}><span>3</span><strong>可用时间</strong><small>{availabilityConfirmed ? `已确认 · 约 ${minutesText(Math.round(capacity))}` : '请确认每天能学习多久'}</small></button>
@@ -214,12 +229,12 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
 
     <div className="intake-layout">
       <aside className="intake-batch-list" aria-label="录入批次">
-        <div className="intake-batch-list-head"><strong>录入批次</strong><button className="text-button" onClick={() => setShowArchived(value => !value)}>{showArchived ? '隐藏归档' : `归档 ${state.intakeBatches.length - activeBatches.length}`}</button></div>
+        <div className="intake-batch-list-head"><strong>录入批次</strong><button className={`text-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中暂不切换归档批次') : setShowArchived(value => !value)}>{showArchived ? '隐藏归档' : `归档 ${state.intakeBatches.length - activeBatches.length}`}</button></div>
         {visibleBatches.length ? visibleBatches.map(batch => {
           const batchSummary = intakeSummary(batch.taskGroups)
           const pending = batch.taskGroups.filter(item => !item.appliedAt).length
           const archived = batch.status === 'archived'
-          return <button key={batch.id} className={`intake-batch-button ${batch.id === active?.id ? 'active' : ''} ${archived ? 'archived' : ''}`} onClick={() => { if (archived) updateIntakeBatch(batch.id, { status: 'editing' }); setActiveId(batch.id); setSelectedIds([]) }}>
+          return <button key={batch.id} className={`intake-batch-button ${batch.id === active?.id ? 'active' : ''} ${archived ? 'archived' : ''}`} onClick={() => { if (tutorialMode && batch.id !== active?.id) { onTutorialBlocked?.('教程中固定使用当前录入批次'); return }; if (archived) updateIntakeBatch(batch.id, { status: 'editing' }); setActiveId(batch.id); setSelectedIds([]) }}>
             <span><strong>{batch.name}</strong><small>{archived ? '已归档，点击恢复' : batch.status === 'calculating' ? '正在生成排期预览' : pending ? `${pending} 项待安排内容` : batch.taskGroups.length ? '已全部安排' : '尚未录入'}</small></span>
             <span className="intake-batch-count">{batchSummary.assignmentCount}</span>
             <ChevronRight size={16}/>
@@ -231,21 +246,21 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
         {!active ? <div className="intake-empty-main">
           <Inbox size={34}/><h3>{state.assignments.length ? '新增内容先保存到录入' : '选择最省力的建档方式'}</h3><p>录入期间只保存和校验，不会重新计算正式计划。随时退出都能继续。</p>
           <div className="intake-empty-options">
-            <button className="primary-button" onClick={startWithImport}><Upload size={17}/><span><strong>导入任务清单</strong><small>粘贴文本、CSV 或 XLSX</small></span></button>
-            <button className="secondary-button" onClick={startAddTask}><Plus size={17}/><span><strong>添加任务</strong><small>独立任务或任务组</small></span></button>
-            {!state.assignments.length && <button className="secondary-button" onClick={() => { if (window.confirm('载入示例计划会替换当前空白空间，录入内容将不保留。继续吗？')) void resetAll('demo').then(() => onNavigate('today')) }}><FileSpreadsheet size={17}/><span><strong>暂时体验示例计划</strong><small>先看看完整使用效果</small></span></button>}
+            <button className={`primary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中使用预置录入批次') : startWithImport()}><Upload size={17}/><span><strong>导入任务清单</strong><small>粘贴文本、CSV 或 XLSX</small></span></button>
+            <button className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中使用预置录入批次') : startAddTask()}><Plus size={17}/><span><strong>添加任务</strong><small>独立任务或任务组</small></span></button>
+            {!state.assignments.length && onStartTutorial && <button className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('你已经在教程中') : onStartTutorial()}><FileSpreadsheet size={17}/><span><strong>体验完整流程</strong><small>在独立教程空间里亲手走一遍</small></span></button>}
           </div>
         </div> : <>
           <header className="intake-workspace-head">
             <div className="intake-name-field">
               <label htmlFor="intake-batch-name">批次名称</label>
-              <input id="intake-batch-name" value={active.name} onChange={event => updateIntakeBatch(active.id, { name: event.target.value })}/>
+              <input id="intake-batch-name" value={active.name} readOnly={tutorialMode} onChange={event => updateIntakeBatch(active.id, { name: event.target.value })}/>
               <small>最近保存于 {new Date(active.updatedAt).toLocaleString('zh-CN')}</small>
             </div>
             <div className="intake-head-actions">
-              <button className="secondary-button" onClick={() => { updateIntakeBatch(active.id, { status: 'pending' }); onNavigate(state.assignments.length ? 'today' : 'intake') }}><Save size={16}/>保存并退出</button>
-              <button className="icon-button" aria-label={`复制录入批次 ${active.name}`} onClick={() => setActiveId(duplicateIntakeBatch(active.id))}><Copy size={17}/></button>
-              <button className="icon-button danger-icon" aria-label={`删除录入批次 ${active.name}`} onClick={() => { if (!window.confirm('删除这个录入批次？已进入正式计划的任务不会被删除。删除后可立即撤销。')) return; setDeletedBatchName(active.name); deleteIntakeBatch(active.id) }}><Trash2 size={17}/></button>
+              <button className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => { if (tutorialMode) { onTutorialBlocked?.('教程中先完成这批任务的排期'); return }; updateIntakeBatch(active.id, { status: 'pending' }); onNavigate(state.assignments.length ? 'today' : 'intake') }}><Save size={16}/>保存并退出</button>
+              <button className={`icon-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} aria-label={`复制录入批次 ${active.name}`} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中暂不复制批次') : setActiveId(duplicateIntakeBatch(active.id))}><Copy size={17}/></button>
+              <button className={`icon-button danger-icon ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} aria-label={`删除录入批次 ${active.name}`} onClick={() => { if (tutorialMode) { onTutorialBlocked?.('教程中暂不删除批次'); return }; if (!window.confirm('删除这个录入批次？已进入正式计划的任务不会被删除。删除后可立即撤销。')) return; setDeletedBatchName(active.name); deleteIntakeBatch(active.id) }}><Trash2 size={17}/></button>
             </div>
           </header>
 
@@ -260,34 +275,38 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
 
           <div className="intake-toolbar">
             <div>
-              <button className="primary-button" onClick={() => onAddTask(active.id)}><Plus size={16}/>添加任务</button>
-              <button className="secondary-button" onClick={() => { setImportSource('paste'); setImportResult(undefined); setPasteOpen(true) }}><ClipboardPaste size={16}/>自然语言 / 粘贴清单</button>
-              <button className="secondary-button" disabled={importBusy} onClick={() => fileRef.current?.click()}><Upload size={16}/>{importBusy ? '读取中' : '导入文件'}</button>
-              <button className="text-button" onClick={() => downloadTextFile('study-planner-import-template.csv', buildIntakeCsvTemplate(), 'text/csv')}><Download size={15}/>下载完整模板</button>
+              <button className={`primary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中先使用预置的新任务') : onAddTask(active.id)}><Plus size={16}/>添加任务</button>
+              <button className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => { if (tutorialMode) { onTutorialBlocked?.('教程中先使用预置的新任务'); return }; setImportSource('paste'); setImportResult(undefined); setPasteOpen(true) }}><ClipboardPaste size={16}/>自然语言 / 粘贴清单</button>
+              <button className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} disabled={!tutorialMode && importBusy} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中暂不导入其他文件') : fileRef.current?.click()}><Upload size={16}/>{importBusy ? '读取中' : '导入文件'}</button>
+              <button className={`text-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中暂不下载模板') : downloadTextFile('study-planner-import-template.csv', buildIntakeCsvTemplate(), 'text/csv')}><Download size={15}/>下载完整模板</button>
               <input ref={fileRef} hidden type="file" accept=".txt,.csv,.tsv,.xlsx,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => event.target.files?.[0] && void handleFile(event.target.files[0])}/>
             </div>
             <div className="intake-readiness">
-              {issueCount ? <span className="danger-text">{issueCount} 个字段问题</span> : <span className="success-text"><Check size={15}/>可以生成预览</span>}
-              <button className="primary-button" disabled={!pendingItems.length || Boolean(issueCount)} onClick={schedule}>
-                {selectedIds.length ? `安排所选 ${selectedIds.length} 项` : state.assignments.length ? '安排本批任务' : '生成第一份计划'}
+              {issueCount
+                ? <span className="danger-text">{issueCount} 个字段问题</span>
+                : showFirstScheduleCue
+                  ? <span className="success-text">任务已录入，下一步 ↘</span>
+                  : <span className="success-text"><Check size={15}/>可以生成预览</span>}
+              <button className="primary-button" data-tutorial-target="schedule-intake" data-tutorial-action="schedule-intake" disabled={!pendingItems.length || Boolean(issueCount)} onClick={schedule}>
+                {selectedIds.length ? `预览所选 ${selectedIds.length} 项排期` : '生成排期预览'}
               </button>
             </div>
           </div>
 
           {pendingItems.length ? <div className="intake-table-wrap">
             <table className="intake-table">
-              <thead><tr><th><input aria-label="选择全部待安排内容" type="checkbox" checked={selectedIds.length === pendingItems.length && pendingItems.length > 0} onChange={event => setSelectedIds(event.target.checked ? pendingItems.map(item => item.id) : [])}/></th><th>录入内容</th><th>数量</th><th>单项预计</th><th>规则</th><th>状态</th><th><span className="sr-only">操作</span></th></tr></thead>
+              <thead><tr><th><input aria-label="选择全部待安排内容" type="checkbox" disabled={tutorialMode} checked={selectedIds.length === pendingItems.length && pendingItems.length > 0} onChange={event => setSelectedIds(event.target.checked ? pendingItems.map(item => item.id) : [])}/></th><th>录入内容</th><th>数量</th><th>单项预计</th><th>规则</th><th>状态</th><th><span className="sr-only">操作</span></th></tr></thead>
               <tbody>{pendingItems.map(item => {
                 const issues = intakeDraftIssues(item, state)
                 const duplicate = duplicateSignatures.has(intakeDraftSignature(item))
                 return <tr key={item.id} id={`intake-item-${item.id}`} className={issues.length ? 'has-error' : ''}>
-                  <td><input aria-label={`选择 ${item.title}`} type="checkbox" checked={selectedIds.includes(item.id)} onChange={event => setSelectedIds(current => event.target.checked ? [...new Set([...current, item.id])] : current.filter(id => id !== item.id))}/></td>
+                  <td><input aria-label={`选择 ${item.title}`} type="checkbox" disabled={tutorialMode} checked={selectedIds.includes(item.id)} onChange={event => setSelectedIds(current => event.target.checked ? [...new Set([...current, item.id])] : current.filter(id => id !== item.id))}/></td>
                   <td><strong>{item.title || (item.kind === 'single' ? '未命名独立任务' : '未命名任务组')}</strong><small><span className="intake-kind-label">{item.kind === 'single' ? '独立任务' : '任务组'}</span>{item.subject}，{priorities.find(option => option.value === item.priority)?.label ?? item.priority}优先级{item.latestDate ? `，最晚 ${item.latestDate}` : item.desiredDate ? `，期望 ${item.desiredDate}` : ''}</small></td>
                   <td>{item.kind === 'single' ? '1' : item.recurring ? '按重复日期' : item.quantity}</td>
                   <td>{item.unitMinutes} 分钟</td>
                   <td>{item.kind === 'single' ? '独立任务' : item.recurring ? '重复任务' : item.allowSplit ? `可拆分标记 · 建议 ${item.splitSessionMinutes ?? 30} 分钟` : item.dailyMax ? `每天最多 ${item.dailyMax} 项` : '普通任务组'}</td>
                   <td>{issues.length ? <span className="danger-text">{issues.join('；')}</span> : duplicate ? <span className="warning-text">疑似重复</span> : <span className="success-text">已保存</span>}</td>
-                  <td><div className="row-actions"><button className="icon-button" aria-label={`编辑 ${item.title}`} onClick={() => { setDialogBatchId(active.id); if (item.kind === 'single') { setEditingSingle(item); setSingleDialogOpen(true) } else { setEditingItem(item); setDialogOpen(true) } }}><Pencil size={16}/></button><button className="icon-button danger-icon" aria-label={`删除 ${item.title}`} onClick={() => removeIntakeTaskGroup(active.id, item.id)}><X size={16}/></button></div></td>
+                  <td><div className="row-actions"><button className={`icon-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} aria-label={`编辑 ${item.title}`} onClick={() => { if (tutorialMode) { onTutorialBlocked?.('教程中预置任务保持不变'); return }; setDialogBatchId(active.id); if (item.kind === 'single') { setEditingSingle(item); setSingleDialogOpen(true) } else { setEditingItem(item); setDialogOpen(true) } }}><Pencil size={16}/></button><button className={`icon-button danger-icon ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} aria-label={`删除 ${item.title}`} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中预置任务不能删除') : removeIntakeTaskGroup(active.id, item.id)}><X size={16}/></button></div></td>
                 </tr>
               })}</tbody>
             </table>
@@ -296,8 +315,8 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
           {active.taskGroups.some(item => item.appliedAt) && <details className="intake-applied"><summary>已从本批次加入计划的内容（{active.taskGroups.filter(item => item.appliedAt).length}）</summary><ul>{active.taskGroups.filter(item => item.appliedAt).map(item => <li key={item.id}>{item.title}</li>)}</ul></details>}
 
           <div className="intake-next-step">
-            <div><strong>{state.assignments.length ? '当前正式计划不会被录入内容改动' : '还可以先完善目标和可用时间'}</strong><p>{state.assignments.length ? '需要时再安排本批任务，系统会先展示它对原计划的影响。' : '目标和容量设置完成后，第一次排期会更接近真实情况。'}</p></div>
-            <div>{!state.assignments.length && <><button className="secondary-button" onClick={() => onNavigate('goals')}>设置目标</button><button className="secondary-button" onClick={() => onNavigate('settings')}>设置可用时间</button></>}<button className="text-button" onClick={() => updateIntakeBatch(active.id, { status: 'archived' })}><Archive size={15}/>归档批次</button></div>
+            <div><strong>{state.assignments.length ? '录入内容尚未进入正式计划' : '还可以先完善目标和可用时间'}</strong><p>{state.assignments.length ? '确认排期后才会加入今日和月历。' : '设置好后，再生成第一份排期预览。'}</p></div>
+            <div>{!state.assignments.length && <><button className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中先完成当前录入排期') : onNavigate('goals')}>设置目标</button><button className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中先完成当前录入排期') : onNavigate('settings')}>设置可用时间</button></>}<button className={`text-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中暂不归档当前批次') : updateIntakeBatch(active.id, { status: 'archived' })}><Archive size={15}/>归档批次</button></div>
           </div>
         </>}
       </section>
@@ -306,7 +325,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
 
     <IntakeTaskDialog
       key={`${active?.id ?? 'none'}-${editingItem?.id ?? 'new'}`}
-      open={dialogOpen}
+      open={!tutorialMode && dialogOpen}
       state={state}
       initial={editingItem ?? active?.formDraft as TaskGroupDraft | undefined}
       onDraftChange={persistTaskGroupDraft}
@@ -323,7 +342,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
 
     <SingleTaskDialog
       key={`${dialogBatchId ?? active?.id ?? 'none'}-${editingSingle?.id ?? 'new-single'}`}
-      open={singleDialogOpen}
+      open={!tutorialMode && singleDialogOpen}
       state={state}
       creationMode="intake"
       initial={editingSingle ? {
