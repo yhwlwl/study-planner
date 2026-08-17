@@ -1,16 +1,20 @@
 import { useState } from 'react'
-import { AlertTriangle, CheckCircle2, Save, Sparkles } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Inbox, Save, Sparkles } from 'lucide-react'
 import { submitFeedback, type FeedbackType } from '../lib/supabase'
 import '../feedback.css'
 
 const feedbackOptions: Array<{ type: FeedbackType; title: string; description: string; icon: any }> = [
   { type: 'bug', title: 'Bug 反馈', description: '功能异常、显示问题、数据不一致或操作失败。', icon: AlertTriangle },
-  { type: 'feature', title: '新功能需求', description: '希望增加的能力、流程改进或新的使用方式。', icon: Sparkles },
+  { type: 'suggestion', title: '新功能需求', description: '希望增加的能力、新流程或新的使用方式。', icon: Sparkles },
+  { type: 'experience', title: '体验优化', description: '现有功能能用，但操作、文案、布局或流程可以更顺手。', icon: CheckCircle2 },
+  { type: 'other', title: '其他', description: '不属于以上类别的建议、感受或补充说明。', icon: Inbox },
 ]
 
 const placeholders: Record<FeedbackType, string> = {
   bug: '请描述你遇到的问题、当时正在做什么，以及你期望发生什么。',
-  feature: '请描述你希望增加的功能，以及它能帮你解决什么问题。',
+  suggestion: '请描述你希望增加的功能，以及它能帮你解决什么问题。',
+  experience: '请描述哪里用起来不够顺手，以及你希望怎样改进。',
+  other: '请写下你想告诉我们的内容。',
 }
 
 export function FeedbackPage() {
@@ -41,7 +45,7 @@ export function FeedbackPage() {
       <div>
         <span className="feedback-eyebrow">帮助我们改进</span>
         <h2>意见反馈</h2>
-        <p>选择反馈类型并告诉我们具体情况。提交后会直接进入反馈列表，不会改动你的学习计划。</p>
+        <p>选择最接近的反馈类型并告诉我们具体情况。提交后会直接进入反馈列表，不会改动你的学习计划。</p>
       </div>
     </section>
 
