@@ -855,7 +855,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const batch = stateDraft.intakeBatches.find(item => item.id === batchId)
       if (!batch) return
       appendIntakeDraft(batch, draft, source, now, id)
-    }, { history: false })
+    }, { history: false, tutorialAction: 'intake-import' })
     return id
   }, [commit])
 
@@ -866,7 +866,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const batch = stateDraft.intakeBatches.find(item => item.id === batchId)
       if (!batch) return
       appendIntakeDraft(batch, taskGroupDraftFromSingleTask(draft), 'manual', now, id, 'single')
-    }, { history: false })
+    }, { history: false, tutorialAction: 'intake-import' })
     return id
   }, [commit])
 

@@ -1,14 +1,20 @@
-import type { AppState, Assignment, Goal, IntakeBatch, IntakeTaskGroupDraft, PlanChangeEvent, TaskGroup } from '../types'
+import type { AppState, Assignment, Goal, IntakeBatch, IntakeTaskGroupDraft, PlanChangeEvent, TaskGroup, TaskGroupDraft } from '../types'
 import { SCHEMA_VERSION } from '../types'
 import { dateRange, resetNowProvider, setNowProvider, shiftDate, todayISO } from './date'
 import { defaultSettings } from './seed'
 import { updateGoalAndGroupLifecycle } from './goals'
 import { analyzePlan, suggestMoveDates } from './planner'
+import { parsePastedText } from './intake'
 
-export const TUTORIAL_VERSION = 1
+export const TUTORIAL_VERSION = 3
 export const TUTORIAL_NAMESPACE = `tutorial:v${TUTORIAL_VERSION}`
 export const TUTORIAL_GOAL_ID = 'tutorial-goal-math'
+export const TUTORIAL_NEW_GOAL_ID = 'tutorial-goal-new-work'
+export const TUTORIAL_NEW_GOAL_TITLE = '完成本周新增作业'
 export const TUTORIAL_EXECUTE_ASSIGNMENT_ID = 'tutorial-task-math-today'
+export const TUTORIAL_PARTIAL_ASSIGNMENT_ID = 'tutorial-task-review-partial'
+export const TUTORIAL_UNFINISHED_ASSIGNMENT_ID = 'tutorial-task-review-unfinished'
+export const TUTORIAL_INTAKE_BATCH_ID = 'tutorial-intake-batch'
 export const TUTORIAL_SESSION_KEY = `study-planner:tutorial-session-v${TUTORIAL_VERSION}`
 export const TUTORIAL_COMPLETED_KEY = `study-planner:tutorial-completed-v${TUTORIAL_VERSION}`
 
@@ -16,22 +22,34 @@ export type TutorialStep =
   | 'repair-entry'
   | 'repair-action'
   | 'repair-preview'
-  | 'goal'
-  | 'intake'
+  | 'repair-calendar'
+  | 'goal-existing'
+  | 'intake-entry'
+  | 'intake-source'
+  | 'intake-parse'
+  | 'intake-schedule'
   | 'intake-preview'
-  | 'execute'
+  | 'intake-calendar'
+  | 'execute-complete'
+  | 'execute-partial'
   | 'review-entry'
   | 'review-carry'
   | 'review-preview'
+  | 'review-calendar'
+  | 'stats'
+  | 'stats-detail'
   | 'future-entry'
   | 'future-action'
   | 'future-preview'
+  | 'future-calendar'
   | 'complete'
   | 'free'
 
 export const TUTORIAL_STEPS: TutorialStep[] = [
-  'repair-entry', 'repair-action', 'repair-preview', 'goal', 'intake', 'intake-preview', 'execute',
-  'review-entry', 'review-carry', 'review-preview', 'future-entry', 'future-action', 'future-preview', 'complete', 'free',
+  'repair-entry', 'repair-action', 'repair-preview', 'repair-calendar', 'goal-existing',
+  'intake-entry', 'intake-source', 'intake-parse', 'intake-schedule', 'intake-preview', 'intake-calendar',
+  'execute-complete', 'execute-partial', 'review-entry', 'review-carry', 'review-preview', 'review-calendar',
+  'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'complete', 'free',
 ]
 
 function isTutorialStep(value: unknown): value is TutorialStep {
@@ -48,6 +66,8 @@ export interface TutorialSession {
   returnNamespace: string
   returnHadData: boolean
   returnPage: 'today' | 'calendar' | 'tasks' | 'intake' | 'goals' | 'stats' | 'export' | 'guide' | 'settings'
+  highlightDates?: string[]
+  lastChangeLabel?: string
   startedAt: string
   updatedAt: string
 }
@@ -57,7 +77,9 @@ let volatileSession: TutorialSession | undefined
 const transientRecovery: Partial<Record<TutorialStep, TutorialStep>> = {
   'repair-action': 'repair-entry',
   'repair-preview': 'repair-entry',
-  'intake-preview': 'intake',
+  'intake-source': 'intake-entry',
+  'intake-parse': 'intake-entry',
+  'intake-preview': 'intake-schedule',
   'review-carry': 'review-entry',
   'review-preview': 'review-entry',
   'future-action': 'future-entry',
@@ -90,7 +112,12 @@ export function readTutorialSession(): TutorialSession | undefined {
     applyTutorialClock(parsed.anchorDate)
     const allowedPages: TutorialSession['returnPage'][] = ['today', 'calendar', 'tasks', 'intake', 'goals', 'stats', 'export', 'guide', 'settings']
     const returnPage = allowedPages.includes(parsed.returnPage as TutorialSession['returnPage']) ? parsed.returnPage as TutorialSession['returnPage'] : 'intake'
-    volatileSession = { ...parsed, returnHadData: Boolean(parsed.returnHadData), returnPage } as TutorialSession
+    volatileSession = {
+      ...parsed,
+      returnHadData: Boolean(parsed.returnHadData),
+      returnPage,
+      highlightDates: Array.isArray(parsed.highlightDates) ? parsed.highlightDates.filter(isISODate) : undefined,
+    } as TutorialSession
     return volatileSession
   } catch {
     try { storage()?.removeItem(TUTORIAL_SESSION_KEY) } catch { /* storage unavailable */ }
@@ -105,8 +132,7 @@ export function writeTutorialSession(session: TutorialSession) {
   try {
     storage()?.setItem(TUTORIAL_SESSION_KEY, JSON.stringify({ ...session, version: TUTORIAL_VERSION, updatedAt: new Date().toISOString() }))
   } catch {
-    // Storage may be unavailable in private/restricted browser contexts.
-    // The in-memory session still works for the current tab; refresh recovery simply degrades gracefully.
+    // Private / restricted contexts can still run the current-tab tutorial.
   }
 }
 
@@ -130,7 +156,7 @@ export function createTutorialSession(returnNamespace: string, returnHadData: bo
 export function advanceTutorialSession(session: TutorialSession, expected: TutorialStep | TutorialStep[], next: TutorialStep): TutorialSession {
   const allowed = Array.isArray(expected) ? expected : [expected]
   if (!allowed.includes(session.step)) return session
-  const updated = { ...session, step: next, updatedAt: new Date().toISOString() }
+  const updated = { ...session, step: next, highlightDates: undefined, lastChangeLabel: undefined, updatedAt: new Date().toISOString() }
   writeTutorialSession(updated)
   return updated
 }
@@ -141,9 +167,13 @@ export function clearTutorialSession(markCompleted = false) {
     storage()?.removeItem(TUTORIAL_SESSION_KEY)
     if (markCompleted) storage()?.setItem(TUTORIAL_COMPLETED_KEY, String(TUTORIAL_VERSION))
   } catch {
-    // Keep exit safe even when browser storage is unavailable.
+    // Exit remains safe even if storage is unavailable.
   }
   resetNowProvider()
+}
+
+export function markTutorialOfferDismissed() {
+  try { storage()?.setItem(TUTORIAL_COMPLETED_KEY, String(TUTORIAL_VERSION)) } catch { /* best effort */ }
 }
 
 export function tutorialCompleted() {
@@ -154,7 +184,7 @@ export function recoverTutorialSession(session: TutorialSession): TutorialSessio
   applyTutorialClock(session.anchorDate)
   const safeStep = transientRecovery[session.step] ?? session.step
   if (safeStep === session.step) return session
-  const recovered = { ...session, step: safeStep, updatedAt: new Date().toISOString() }
+  const recovered = { ...session, step: safeStep, highlightDates: undefined, lastChangeLabel: undefined, updatedAt: new Date().toISOString() }
   writeTutorialSession(recovered)
   return recovered
 }
@@ -163,20 +193,24 @@ export function tutorialRecoveryStep(step: TutorialStep): TutorialStep {
   return transientRecovery[step] ?? step
 }
 
-export function tutorialPageForStep(step: TutorialStep): 'today' | 'intake' | 'goals' {
-  if (step === 'goal') return 'goals'
-  if (step === 'intake' || step === 'intake-preview') return 'intake'
+export type TutorialPage = 'today' | 'calendar' | 'tasks' | 'intake' | 'goals' | 'stats'
+
+export function tutorialPageForStep(step: TutorialStep): TutorialPage {
+  if (['repair-calendar', 'intake-calendar', 'review-calendar', 'future-calendar'].includes(step)) return 'calendar'
+  if (step === 'goal-existing') return 'goals'
+  if (['intake-entry', 'intake-source', 'intake-parse', 'intake-schedule', 'intake-preview'].includes(step)) return 'intake'
+  if (['stats', 'stats-detail'].includes(step)) return 'stats'
   return 'today'
 }
 
 export function tutorialAllowsPage(step: TutorialStep, page: string): boolean {
-  if (step === 'free') return ['today', 'calendar', 'tasks', 'intake', 'goals', 'stats', 'export', 'guide', 'timer'].includes(page)
+  if (step === 'free') return ['today', 'calendar', 'tasks', 'intake', 'goals', 'stats', 'export', 'guide', 'timer', 'settings'].includes(page)
   return tutorialPageForStep(step) === page
 }
 
 export function tutorialAcceptsEvent(session: TutorialSession, event: PlanChangeEvent): boolean {
   if (session.step === 'repair-action') return event.type === 'execution-difference' && event.metadata?.requestedOutcome === 'fix-current'
-  if (session.step === 'intake') return event.type === 'new-task-insertion' && event.metadata?.intakeBatchId === 'tutorial-intake-batch'
+  if (session.step === 'intake-schedule') return event.type === 'new-task-insertion' && event.metadata?.intakeBatchId === TUTORIAL_INTAKE_BATCH_ID
   if (session.step === 'review-carry') return event.type === 'execution-difference' && event.metadata?.reviewDate === session.anchorDate
   if (session.step === 'future-action') return event.type === 'future-replanning'
   return false
@@ -185,7 +219,10 @@ export function tutorialAcceptsEvent(session: TutorialSession, event: PlanChange
 export function tutorialAllowsCommit(session: TutorialSession | undefined, action?: string, targetId?: string): boolean {
   if (!session) return false
   if (session.step === 'free') return true
-  return session.step === 'execute' && action === 'execute-task' && targetId === TUTORIAL_EXECUTE_ASSIGNMENT_ID
+  if (session.step === 'intake-parse' && action === 'intake-import') return true
+  if (session.step === 'execute-complete' && action === 'execute-task' && targetId === TUTORIAL_EXECUTE_ASSIGNMENT_ID) return true
+  if (session.step === 'execute-partial' && action === 'execute-task' && targetId === TUTORIAL_PARTIAL_ASSIGNMENT_ID) return true
+  return false
 }
 
 function stamp(anchorDate: string, hour = '08') {
@@ -236,7 +273,7 @@ function baseTutorialState(anchorDate: string): AppState {
     group({ id: 'tutorial-group-math', subject: '数学', title: '暑假数学复习', priority: 5, quantity: 4, unitMinutes: 60, targetDate: goalLatest, dueDate: goalLatest, activityType: 'math-paper', highIntensity: true }, anchorDate),
     group({ id: 'tutorial-group-english', subject: '英语', title: '英语阅读训练', priority: 3, quantity: 2, unitMinutes: 55 }, anchorDate),
     group({ id: 'tutorial-group-locked', subject: '物理', title: '老师指定复习', priority: 5, quantity: 1, unitMinutes: 45 }, anchorDate),
-    group({ id: 'tutorial-group-notes', subject: '语文', title: '课堂笔记整理', priority: 2, quantity: 1, unitMinutes: 20 }, anchorDate),
+    group({ id: 'tutorial-group-notes', subject: '语文', title: '课堂笔记整理', priority: 2, quantity: 2, unitMinutes: 25 }, anchorDate),
   ]
   const assignments: Assignment[] = [
     assignment({ id: 'tutorial-task-done', groupId: 'tutorial-group-math', index: 1, title: '暑假数学复习 01', scheduledDate: shiftDate(anchorDate, -2), estimatedMinutes: 60, status: 'done', progress: 100, actualMinutes: 58, completedAt: stamp(shiftDate(anchorDate, -2), '19'), timeEntries: [{ id: 'tutorial-time-done', minutes: 58, createdAt: stamp(shiftDate(anchorDate, -2), '19'), source: 'manual', countInStatistics: true }] }, anchorDate),
@@ -246,12 +283,13 @@ function baseTutorialState(anchorDate: string): AppState {
     assignment({ id: 'tutorial-task-english-today', groupId: 'tutorial-group-english', index: 1, title: '英语阅读训练 01', scheduledDate: anchorDate, estimatedMinutes: 55 }, anchorDate),
     assignment({ id: 'tutorial-task-english-future', groupId: 'tutorial-group-english', index: 2, title: '英语阅读训练 02', scheduledDate: shiftDate(anchorDate, 3), estimatedMinutes: 55 }, anchorDate),
     assignment({ id: 'tutorial-task-locked', groupId: 'tutorial-group-locked', index: 1, title: '老师指定复习', scheduledDate: anchorDate, estimatedMinutes: 45, status: 'done', progress: 100, actualMinutes: 45, completedAt: stamp(anchorDate, '09'), timeEntries: [{ id: 'tutorial-time-locked', minutes: 45, createdAt: stamp(anchorDate, '09'), source: 'manual', countInStatistics: true }], locked: true, intentStrength: 'locked', scheduleSource: 'manual' }, anchorDate),
-    assignment({ id: 'tutorial-task-review-leftover', groupId: 'tutorial-group-notes', index: 1, title: '整理课堂笔记', scheduledDate: anchorDate, estimatedMinutes: 20, intentStrength: 'manual', scheduleSource: 'manual' }, anchorDate),
+    assignment({ id: TUTORIAL_PARTIAL_ASSIGNMENT_ID, groupId: 'tutorial-group-notes', index: 1, title: '整理课堂笔记', scheduledDate: anchorDate, estimatedMinutes: 25, intentStrength: 'manual', scheduleSource: 'manual' }, anchorDate),
+    assignment({ id: TUTORIAL_UNFINISHED_ASSIGNMENT_ID, groupId: 'tutorial-group-notes', index: 2, title: '整理错题索引', scheduledDate: anchorDate, estimatedMinutes: 30, intentStrength: 'manual', scheduleSource: 'manual' }, anchorDate),
   ]
   const goals: Goal[] = [{
     id: TUTORIAL_GOAL_ID,
-    title: '5 天内完成暑假数学复习',
-    description: '教程目标：让你看到目标日期会真正参与排期与风险判断。',
+    title: '暑假数学 · 5 天内完成',
+    description: '教程示例目标：让你看到目标日期会真正参与排期与风险判断。',
     priority: 5,
     desiredDate: shiftDate(anchorDate, 4),
     latestDate: goalLatest,
@@ -266,12 +304,12 @@ function baseTutorialState(anchorDate: string): AppState {
     planName: '教程体验 · 被现实打乱的计划',
     startDate: start,
     endDate: end,
-    regularMinutes: 130,
-    studyMinutes: 180,
+    regularMinutes: 160,
+    studyMinutes: 210,
     travelMinutes: 0,
     freezeDays: 0,
-    regularMaxTasks: 6,
-    studyMaxTasks: 8,
+    regularMaxTasks: 7,
+    studyMaxTasks: 9,
     coreTargetDate: goalLatest,
     chemistryTargetDate: shiftDate(anchorDate, 10),
     planningMode: 'balanced',
@@ -302,51 +340,69 @@ function baseTutorialState(anchorDate: string): AppState {
   })
 }
 
-export function buildTutorialIntakeBatch(anchorDate: string): IntakeBatch {
+function shortDate(date: string) {
+  const [, month, day] = date.split('-').map(Number)
+  return `${month}月${day}日`
+}
+
+export function tutorialNaturalLanguageText(anchorDate: string) {
+  return [
+    '数学卷子 2 张，每张 60 分钟',
+    '英语阅读 3 篇，每篇 30 分钟',
+    `读书报告 1 份，每份 90 分钟，${shortDate(shiftDate(anchorDate, 7))}前完成`,
+    '整理物理错题 1 次，每次 45 分钟',
+  ].join('\n')
+}
+
+function tutorialParsedDrafts(anchorDate: string): TaskGroupDraft[] {
+  const result = parsePastedText(tutorialNaturalLanguageText(anchorDate))
+  return result.drafts.map((draft, index) => ({
+    ...draft,
+    latestDate: index === 2 ? shiftDate(anchorDate, 7) : draft.latestDate,
+    goalIds: [],
+  }))
+}
+
+function intakeItemFromDraft(draft: TaskGroupDraft, index: number, anchorDate: string, goalIds: string[] = []): IntakeTaskGroupDraft {
   const now = stamp(anchorDate, '12')
-  const latest = shiftDate(anchorDate, 10)
-  const items: IntakeTaskGroupDraft[] = [
-    {
-      id: 'tutorial-intake-physics', kind: 'group', title: '物理错题整理', subject: '物理', priority: 3,
-      unitMinutes: 35, activityType: 'normal', highIntensity: false, countInStats: true, quantity: 2,
-      goalIds: [], latestDate: latest, source: 'manual', createdAt: now, updatedAt: now,
-    },
-    {
-      id: 'tutorial-intake-reading', kind: 'single', title: '完成读书报告提纲', subject: '语文', priority: 2,
-      unitMinutes: 45, activityType: 'normal', highIntensity: false, countInStats: true, quantity: 1,
-      goalIds: [], latestDate: shiftDate(anchorDate, 8), source: 'manual', createdAt: now, updatedAt: now,
-    },
-    {
-      id: 'tutorial-intake-english', kind: 'group', title: '英语新作业', subject: '英语', priority: 3,
-      unitMinutes: 30, activityType: 'normal', highIntensity: false, countInStats: true, quantity: 2,
-      dailyMax: 1, goalIds: [], latestDate: latest, source: 'manual', createdAt: now, updatedAt: now,
-    },
-  ]
-  return { id: 'tutorial-intake-batch', name: '刚收到的新作业', status: 'editing', source: 'manual', taskGroups: items, createdAt: now, updatedAt: now }
+  return {
+    ...structuredClone(draft),
+    id: `tutorial-intake-item-${index + 1}`,
+    kind: 'group',
+    goalIds,
+    source: 'paste',
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+export function buildTutorialIntakeBatch(anchorDate: string, parsed = false, goalId?: string): IntakeBatch {
+  const now = stamp(anchorDate, '12')
+  const items = parsed ? tutorialParsedDrafts(anchorDate).map((draft, index) => intakeItemFromDraft(draft, index, anchorDate, goalId ? [goalId] : [])) : []
+  return { id: TUTORIAL_INTAKE_BATCH_ID, name: '刚收到的新作业', status: 'editing', source: parsed ? 'paste' : 'manual', taskGroups: items, createdAt: now, updatedAt: now }
 }
 
 export function ensureTutorialIntakeBatch(state: AppState, anchorDate: string): AppState {
-  if (state.intakeBatches.some(batch => batch.id === 'tutorial-intake-batch')) return state
+  if (state.intakeBatches.some(batch => batch.id === TUTORIAL_INTAKE_BATCH_ID)) return state
   const next = structuredClone(state) as AppState
-  next.intakeBatches = [...next.intakeBatches, buildTutorialIntakeBatch(anchorDate)]
+  next.intakeBatches = [...next.intakeBatches, buildTutorialIntakeBatch(anchorDate, false)]
   next.updatedAt = new Date().toISOString()
   return next
 }
 
+function ensureParsedTutorialBatch(state: AppState, anchorDate: string, goalId?: string) {
+  const batch = buildTutorialIntakeBatch(anchorDate, true, goalId)
+  state.intakeBatches = [...state.intakeBatches.filter(item => item.id !== TUTORIAL_INTAKE_BATCH_ID), batch]
+}
+
 function applyRepairedShape(state: AppState, anchorDate: string): AppState {
   const byId = new Map(state.assignments.map(item => [item.id, item]))
-  const overdue = byId.get('tutorial-task-overdue')!
-  overdue.previousDate = overdue.scheduledDate
-  overdue.scheduledDate = shiftDate(anchorDate, 1)
-  overdue.scheduleSource = 'replan'
-  const risk = byId.get('tutorial-task-goal-risk')!
-  risk.previousDate = risk.scheduledDate
-  risk.scheduledDate = shiftDate(anchorDate, 4)
-  risk.scheduleSource = 'replan'
-  const english = byId.get('tutorial-task-english-today')!
-  english.previousDate = english.scheduledDate
-  english.scheduledDate = shiftDate(anchorDate, 2)
-  english.scheduleSource = 'replan'
+  const overdue = byId.get('tutorial-task-overdue')
+  if (overdue) { overdue.previousDate = overdue.scheduledDate; overdue.scheduledDate = shiftDate(anchorDate, 1); overdue.scheduleSource = 'replan' }
+  const risk = byId.get('tutorial-task-goal-risk')
+  if (risk) { risk.previousDate = risk.scheduledDate; risk.scheduledDate = shiftDate(anchorDate, 4); risk.scheduleSource = 'replan' }
+  const english = byId.get('tutorial-task-english-today')
+  if (english) { english.previousDate = english.scheduledDate; english.scheduledDate = shiftDate(anchorDate, 2); english.scheduleSource = 'replan' }
   state.updatedAt = stamp(anchorDate, '13')
   return updateGoalAndGroupLifecycle(state)
 }
@@ -360,31 +416,58 @@ export function buildTutorialRepairedFrom(source: AppState, anchorDate: string):
 }
 
 function addCanonicalIntakeAssignments(state: AppState, anchorDate: string) {
-  const now = stamp(anchorDate, '13')
-  const canonicalGroupIds = new Set(['tutorial-added-physics', 'tutorial-added-reading', 'tutorial-added-english'])
+  const now = stamp(anchorDate, '14')
+  const canonicalGroupIds = new Set(['tutorial-added-math', 'tutorial-added-english', 'tutorial-added-report', 'tutorial-added-physics'])
   state.taskGroups = state.taskGroups.filter(item => !canonicalGroupIds.has(item.id))
   state.assignments = state.assignments.filter(item => !canonicalGroupIds.has(item.groupId))
-  const groupInputs: Array<{ group: TaskGroup; tasks: Assignment[] }> = [
+
+  const definitions: Array<{ group: TaskGroup; tasks: Assignment[] }> = [
     {
-      group: group({ id: 'tutorial-added-physics', subject: '物理', title: '物理错题整理', priority: 3, quantity: 2, unitMinutes: 35 }, anchorDate),
-      tasks: [1, 2].map(index => assignment({ id: `tutorial-added-physics-${index}`, groupId: 'tutorial-added-physics', index, title: `物理错题整理 ${String(index).padStart(2, '0')}`, estimatedMinutes: 35, scheduledDate: shiftDate(anchorDate, 6 + index) }, anchorDate)),
+      group: group({ id: 'tutorial-added-math', subject: '数学', title: '数学卷子', priority: 3, quantity: 2, unitMinutes: 60 }, anchorDate),
+      tasks: [1, 2].map(index => assignment({ id: `tutorial-added-math-${index}`, groupId: 'tutorial-added-math', index, title: `数学卷子 ${String(index).padStart(2, '0')}`, estimatedMinutes: 60, scheduledDate: shiftDate(anchorDate, index) }, anchorDate)),
     },
     {
-      group: group({ id: 'tutorial-added-reading', subject: '语文', title: '完成读书报告提纲', priority: 2, quantity: 1, unitMinutes: 45, hidden: true, hiddenStandalone: true }, anchorDate),
-      tasks: [assignment({ id: 'tutorial-added-reading-1', groupId: 'tutorial-added-reading', index: 1, title: '完成读书报告提纲', estimatedMinutes: 45, scheduledDate: shiftDate(anchorDate, 6), standalone: true }, anchorDate)],
+      group: group({ id: 'tutorial-added-english', subject: '英语', title: '英语阅读', priority: 3, quantity: 3, unitMinutes: 30 }, anchorDate),
+      tasks: [1, 2, 3].map(index => assignment({ id: `tutorial-added-english-${index}`, groupId: 'tutorial-added-english', index, title: `英语阅读 ${String(index).padStart(2, '0')}`, estimatedMinutes: 30, scheduledDate: shiftDate(anchorDate, index + 2) }, anchorDate)),
     },
     {
-      group: group({ id: 'tutorial-added-english', subject: '英语', title: '英语新作业', priority: 3, quantity: 2, unitMinutes: 30, dailyMax: 1 }, anchorDate),
-      tasks: [1, 2].map(index => assignment({ id: `tutorial-added-english-${index}`, groupId: 'tutorial-added-english', index, title: `英语新作业 ${String(index).padStart(2, '0')}`, estimatedMinutes: 30, scheduledDate: shiftDate(anchorDate, 5 + index) }, anchorDate)),
+      group: group({ id: 'tutorial-added-report', subject: '语文', title: '读书报告', priority: 3, quantity: 1, unitMinutes: 90, hidden: true, hiddenStandalone: true }, anchorDate),
+      tasks: [assignment({ id: 'tutorial-added-report-1', groupId: 'tutorial-added-report', index: 1, title: '读书报告', estimatedMinutes: 90, scheduledDate: shiftDate(anchorDate, 5), standalone: true }, anchorDate)],
+    },
+    {
+      group: group({ id: 'tutorial-added-physics', subject: '物理', title: '整理物理错题', priority: 3, quantity: 1, unitMinutes: 45, hidden: true, hiddenStandalone: true }, anchorDate),
+      tasks: [assignment({ id: 'tutorial-added-physics-1', groupId: 'tutorial-added-physics', index: 1, title: '整理物理错题', estimatedMinutes: 45, scheduledDate: shiftDate(anchorDate, 4), standalone: true }, anchorDate)],
     },
   ]
-  state.taskGroups.push(...groupInputs.map(item => item.group))
-  state.assignments.push(...groupInputs.flatMap(item => item.tasks))
-  const batch = buildTutorialIntakeBatch(anchorDate)
+  state.taskGroups.push(...definitions.map(item => item.group))
+  state.assignments.push(...definitions.flatMap(item => item.tasks))
+  const reportGoalId = 'tutorial-auto-goal-report'
+  state.goals = state.goals.filter(item => item.id !== reportGoalId)
+  state.goals.push({
+    id: reportGoalId,
+    title: '读书报告完成目标',
+    description: '由录入批次“刚收到的新作业”创建。',
+    priority: 3,
+    latestDate: shiftDate(anchorDate, 7),
+    status: 'active',
+    completionConditions: [{ id: 'tutorial-auto-condition-report', groupId: 'tutorial-added-report', mode: 'all' }],
+    linkedTaskGroupIds: ['tutorial-added-report'],
+    linkedAssignmentIds: [],
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  const batch = buildTutorialIntakeBatch(anchorDate, true)
   batch.status = 'applied'
   batch.updatedAt = now
-  batch.taskGroups = batch.taskGroups.map((item, index) => ({ ...item, appliedAt: now, appliedGroupId: groupInputs[index].group.id, appliedAssignmentId: item.kind === 'single' ? groupInputs[index].tasks[0].id : undefined }))
+  batch.taskGroups = batch.taskGroups.map((item, index) => ({
+    ...item,
+    appliedAt: now,
+    appliedGroupId: definitions[index]?.group.id,
+    appliedAssignmentId: definitions[index]?.tasks.length === 1 ? definitions[index].tasks[0].id : undefined,
+  }))
   state.intakeBatches = [batch]
+  state.updatedAt = now
 }
 
 function buildScheduledCheckpoint(anchorDate: string): AppState {
@@ -396,18 +479,27 @@ function buildScheduledCheckpoint(anchorDate: string): AppState {
 export function buildTutorialScheduledFrom(source: AppState, anchorDate: string): AppState {
   const state = structuredClone(source) as AppState
   addCanonicalIntakeAssignments(state, anchorDate)
-  state.updatedAt = stamp(anchorDate, '14')
+  return updateGoalAndGroupLifecycle(state)
+}
+
+function buildCompleteCheckpoint(anchorDate: string): AppState {
+  const state = buildScheduledCheckpoint(anchorDate)
+  const complete = state.assignments.find(task => task.id === TUTORIAL_EXECUTE_ASSIGNMENT_ID)!
+  complete.status = 'done'
+  complete.progress = 100
+  complete.actualMinutes = 52
+  complete.completedAt = stamp(anchorDate, '18')
+  complete.timeEntries = [{ id: 'tutorial-time-execute', minutes: 52, createdAt: stamp(anchorDate, '18'), source: 'manual', countInStatistics: true }]
   return updateGoalAndGroupLifecycle(state)
 }
 
 function buildExecutedCheckpoint(anchorDate: string): AppState {
-  const state = buildScheduledCheckpoint(anchorDate)
-  const item = state.assignments.find(task => task.id === TUTORIAL_EXECUTE_ASSIGNMENT_ID)!
-  item.status = 'done'
-  item.progress = 100
-  item.actualMinutes = 52
-  item.completedAt = stamp(anchorDate, '18')
-  item.timeEntries = [{ id: 'tutorial-time-execute', minutes: 52, createdAt: stamp(anchorDate, '18'), source: 'manual', countInStatistics: true }]
+  const state = buildCompleteCheckpoint(anchorDate)
+  const partial = state.assignments.find(task => task.id === TUTORIAL_PARTIAL_ASSIGNMENT_ID)!
+  partial.status = 'partial'
+  partial.progress = 50
+  partial.actualMinutes = 12
+  partial.timeEntries = [{ id: 'tutorial-time-partial', minutes: 12, createdAt: stamp(anchorDate, '18'), source: 'manual', countInStatistics: true }]
   return updateGoalAndGroupLifecycle(state)
 }
 
@@ -421,33 +513,28 @@ function buildReviewedCheckpoint(anchorDate: string): AppState {
   state.reviewRecords = [{
     id: 'tutorial-review', date: anchorDate, createdAt: stamp(anchorDate, '20'),
     completedCount: completedAssignmentIds.length, totalCount: plannedAssignmentIds.length, plannedMinutes, actualMinutes, inferredMinutes: 0,
-    plannedAssignmentIds, executedAssignmentIds: completedAssignmentIds, completedAssignmentIds, unfinishedAssignmentIds, durationSuggestionGroupIds: [],
+    plannedAssignmentIds, executedAssignmentIds: state.assignments.filter(task => plannedAssignmentIds.includes(task.id) && task.actualMinutes > 0).map(task => task.id), completedAssignmentIds, unfinishedAssignmentIds, durationSuggestionGroupIds: [],
   }]
+  let offset = 1
   for (const item of state.assignments.filter(task => task.scheduledDate === anchorDate && task.status !== 'done' && !task.locked)) {
     item.previousDate = anchorDate
-    item.scheduledDate = shiftDate(anchorDate, 1)
+    item.scheduledDate = shiftDate(anchorDate, offset)
     item.scheduleSource = 'carryover'
     item.intentStrength = 'manual'
+    offset += 1
   }
   return updateGoalAndGroupLifecycle(state)
 }
 
 export function buildTutorialFutureFrom(source: AppState, anchorDate: string): AppState {
   const state = structuredClone(source) as AppState
-  const english = state.assignments.find(item => item.id === 'tutorial-task-english-future')
-  const reading = state.assignments.find(item => item.id === 'tutorial-added-reading-1')
+  const candidates = state.assignments.filter(item => item.status !== 'done' && !item.locked && item.scheduledDate && item.scheduledDate > anchorDate)
   const movedAt = stamp(anchorDate, '21')
-  if (english && english.status !== 'done' && !english.locked) {
-    english.previousDate = english.scheduledDate
-    english.scheduledDate = shiftDate(anchorDate, 5)
-    english.scheduleSource = 'replan'
-    english.updatedAt = movedAt
-  }
-  if (reading && reading.status !== 'done' && !reading.locked) {
-    reading.previousDate = reading.scheduledDate
-    reading.scheduledDate = shiftDate(anchorDate, 3)
-    reading.scheduleSource = 'replan'
-    reading.updatedAt = movedAt
+  for (const [index, item] of candidates.slice(0, 2).entries()) {
+    item.previousDate = item.scheduledDate
+    item.scheduledDate = shiftDate(item.scheduledDate!, index === 0 ? 1 : -1)
+    item.scheduleSource = 'replan'
+    item.updatedAt = movedAt
   }
   state.updatedAt = movedAt
   return updateGoalAndGroupLifecycle(state)
@@ -459,73 +546,68 @@ export function buildTutorialState(anchorDate = todayISO()): AppState {
 
 export function buildTutorialCheckpoint(step: TutorialStep, anchorDate: string): AppState {
   if (['repair-entry', 'repair-action', 'repair-preview'].includes(step)) return baseTutorialState(anchorDate)
-  if (['goal', 'intake', 'intake-preview'].includes(step)) {
+  if (['repair-calendar', 'goal-existing'].includes(step)) return buildRepairedCheckpoint(anchorDate)
+  if (['intake-entry', 'intake-source', 'intake-parse'].includes(step)) return ensureTutorialIntakeBatch(buildRepairedCheckpoint(anchorDate), anchorDate)
+  if (['intake-schedule', 'intake-preview'].includes(step)) {
     const state = buildRepairedCheckpoint(anchorDate)
-    return step === 'goal' ? state : ensureTutorialIntakeBatch(state, anchorDate)
+    ensureParsedTutorialBatch(state, anchorDate)
+    return state
   }
-  if (step === 'execute') return buildScheduledCheckpoint(anchorDate)
+  if (['intake-calendar', 'execute-complete'].includes(step)) return buildScheduledCheckpoint(anchorDate)
+  if (step === 'execute-partial') return buildCompleteCheckpoint(anchorDate)
   if (['review-entry', 'review-carry', 'review-preview'].includes(step)) return buildExecutedCheckpoint(anchorDate)
-  if (['future-entry', 'future-action', 'future-preview'].includes(step)) return buildReviewedCheckpoint(anchorDate)
-  if (['complete', 'free'].includes(step)) return buildTutorialFutureFrom(buildReviewedCheckpoint(anchorDate), anchorDate)
+  if (['review-calendar', 'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview'].includes(step)) return buildReviewedCheckpoint(anchorDate)
+  if (['future-calendar', 'complete', 'free'].includes(step)) return buildTutorialFutureFrom(buildReviewedCheckpoint(anchorDate), anchorDate)
   return baseTutorialState(anchorDate)
 }
 
 export function tutorialIssueCount(state: AppState, anchorDate: string) {
-  const hard = analyzePlan(state, anchorDate).filter(issue => issue.level === 'danger').length
-  const overdue = state.assignments.filter(item => item.status !== 'done' && item.scheduledDate && item.scheduledDate < anchorDate).length
-  return hard + overdue
+  const overdue = state.assignments.some(item => item.status !== 'done' && item.scheduledDate && item.scheduledDate < anchorDate)
+  const capacityDanger = analyzePlan(state, anchorDate).some(issue => issue.level === 'danger' && (issue.message.includes('容量') || issue.message.includes('超过') || issue.message.includes('超载')))
+  const goal = state.goals.find(item => item.id === TUTORIAL_GOAL_ID)
+  const riskTask = state.assignments.find(item => item.id === 'tutorial-task-goal-risk')
+  const goalRisk = Boolean(goal && riskTask?.scheduledDate && riskTask.scheduledDate > goal.latestDate)
+  return Number(overdue) + Number(capacityDanger) + Number(goalRisk)
 }
 
-/**
- * Keep the tutorial event scope aligned with the deterministic before/after target.
- *
- * The generic direct-preview validator intentionally freezes past dates unless the
- * event explicitly names the unfinished assignment being carried out of history.
- * Tutorial repair uses a canonical target rather than the generic search result,
- * so deriving this scope prevents an otherwise-valid overdue repair from being
- * mistaken for an unauthorized historical rewrite. It also makes proposal counts
- * and affected-date explanations match what the tutorial actually changes.
- */
 export function tutorialEventForTarget(baseline: AppState, target: AppState, event: PlanChangeEvent): PlanChangeEvent {
   const beforeAssignments = new Map(baseline.assignments.map(item => [item.id, item]))
   const affectedAssignmentIds = new Set(event.affectedAssignmentIds)
   const affectedGroupIds = new Set(event.affectedGroupIds)
   const affectedDates = new Set(event.affectedDates)
-
   for (const item of target.assignments) {
     const before = beforeAssignments.get(item.id)
-    const changed = !before
-      || before.scheduledDate !== item.scheduledDate
-      || before.status !== item.status
-      || before.progress !== item.progress
-      || before.actualMinutes !== item.actualMinutes
+    const changed = !before || before.scheduledDate !== item.scheduledDate || before.status !== item.status || before.progress !== item.progress || before.actualMinutes !== item.actualMinutes
     if (!changed) continue
     affectedAssignmentIds.add(item.id)
     affectedGroupIds.add(item.groupId)
     if (before?.scheduledDate) affectedDates.add(before.scheduledDate)
     if (item.scheduledDate) affectedDates.add(item.scheduledDate)
   }
-
   const affectedGoalIds = new Set(event.affectedGoalIds)
   for (const goal of target.goals) {
-    if (goal.linkedAssignmentIds.some(id => affectedAssignmentIds.has(id))
-      || goal.linkedTaskGroupIds.some(id => affectedGroupIds.has(id))
-      || goal.completionConditions.some(condition => affectedGroupIds.has(condition.groupId))) {
-      affectedGoalIds.add(goal.id)
-    }
+    if (goal.linkedAssignmentIds.some(id => affectedAssignmentIds.has(id)) || goal.linkedTaskGroupIds.some(id => affectedGroupIds.has(id)) || goal.completionConditions.some(condition => affectedGroupIds.has(condition.groupId))) affectedGoalIds.add(goal.id)
   }
-
-  return {
-    ...event,
-    affectedAssignmentIds: [...affectedAssignmentIds],
-    affectedGroupIds: [...affectedGroupIds],
-    affectedGoalIds: [...affectedGoalIds],
-    affectedDates: [...affectedDates].sort(),
-  }
+  return { ...event, affectedAssignmentIds: [...affectedAssignmentIds], affectedGroupIds: [...affectedGroupIds], affectedGoalIds: [...affectedGoalIds], affectedDates: [...affectedDates].sort() }
 }
 
+function tutorialBatch(state: AppState) {
+  return state.intakeBatches.find(item => item.id === TUTORIAL_INTAKE_BATCH_ID)
+}
+
+function hasParsedTutorialIntake(state: AppState) {
+  const batch = tutorialBatch(state)
+  if (!batch || batch.taskGroups.length !== 4) return false
+  const signatures = batch.taskGroups.map(item => `${item.subject}:${item.title}:${item.quantity}:${item.unitMinutes}`)
+  return signatures.some(item => item.startsWith('数学:数学卷子:2:60'))
+    && signatures.some(item => item.startsWith('英语:英语阅读:3:30'))
+    && signatures.some(item => item.includes('读书报告:1:90'))
+    && signatures.some(item => item.includes('物理:整理物理错题:1:45'))
+}
+
+
 function hasAppliedTutorialIntake(state: AppState) {
-  const batch = state.intakeBatches.find(item => item.id === 'tutorial-intake-batch')
+  const batch = tutorialBatch(state)
   if (!batch || batch.status !== 'applied' || batch.taskGroups.some(item => !item.appliedAt)) return false
   return batch.taskGroups.every(item => {
     if (item.kind === 'single') return Boolean(item.appliedAssignmentId && state.assignments.some(task => task.id === item.appliedAssignmentId))
@@ -540,12 +622,10 @@ function hasReviewCarryCandidate(state: AppState, anchorDate: string) {
 }
 
 export function tutorialStateHealth(state: AppState, session: TutorialSession) {
-  // Health checks validate durable tutorial invariants at checkpoints. They must not
-  // turn harmless algorithm/UI variation into a surprise backwards jump.
   if (state.templateKind !== 'tutorial') return { ok: false as const, reason: '当前不是教程数据空间' }
   if (todayISO() !== session.anchorDate) return { ok: false as const, reason: '教程时钟没有保持在进入时的日期' }
 
-  const requiredIds = [TUTORIAL_GOAL_ID, TUTORIAL_EXECUTE_ASSIGNMENT_ID, 'tutorial-task-locked', 'tutorial-task-done', 'tutorial-task-overdue', 'tutorial-task-goal-risk', 'tutorial-task-review-leftover']
+  const requiredIds = [TUTORIAL_GOAL_ID, TUTORIAL_EXECUTE_ASSIGNMENT_ID, TUTORIAL_PARTIAL_ASSIGNMENT_ID, TUTORIAL_UNFINISHED_ASSIGNMENT_ID, 'tutorial-task-locked', 'tutorial-task-done', 'tutorial-task-overdue', 'tutorial-task-goal-risk']
   const ids = new Set([...state.goals.map(item => item.id), ...state.assignments.map(item => item.id)])
   const missing = requiredIds.filter(id => !ids.has(id))
   if (missing.length) return { ok: false as const, reason: `教程关键数据缺失：${missing.join(', ')}` }
@@ -553,57 +633,42 @@ export function tutorialStateHealth(state: AppState, session: TutorialSession) {
   const anchor = session.anchorDate
   const locked = state.assignments.find(item => item.id === 'tutorial-task-locked')
   const historical = state.assignments.find(item => item.id === 'tutorial-task-done')
-  const overdue = state.assignments.find(item => item.id === 'tutorial-task-overdue')
-  const leftover = state.assignments.find(item => item.id === 'tutorial-task-review-leftover')
-
-  // These two records demonstrate that repair/replan respects completed and locked work.
   if (!locked?.locked || locked.status !== 'done' || locked.scheduledDate !== anchor) return { ok: false as const, reason: '教程锁定完成任务状态异常' }
   if (historical?.status !== 'done' || historical.scheduledDate !== shiftDate(anchor, -2)) return { ok: false as const, reason: '教程历史完成记录异常' }
 
   const initial = ['repair-entry', 'repair-action', 'repair-preview'].includes(session.step)
   if (initial) {
-    // Do not pin the tutorial to an exact analyzer issue count. The fixture still
-    // carries the three teaching scenarios, while the analyzer may legitimately
-    // merge/split issue cards as scheduling rules evolve.
-    if (overdue?.scheduledDate !== shiftDate(anchor, -1)) return { ok: false as const, reason: '教程逾期问题被意外改变' }
+    const overdue = state.assignments.find(item => item.id === 'tutorial-task-overdue')
     const risk = state.assignments.find(item => item.id === 'tutorial-task-goal-risk')
+    if (overdue?.scheduledDate !== shiftDate(anchor, -1)) return { ok: false as const, reason: '教程逾期问题被意外改变' }
     if (!risk?.scheduledDate || risk.scheduledDate <= shiftDate(anchor, 5)) return { ok: false as const, reason: '教程目标风险被意外改变' }
-    if (leftover?.scheduledDate !== anchor) return { ok: false as const, reason: '教程复盘预留任务被意外改变' }
   } else {
-    // After applying repair we only require the teaching problems to be resolved,
-    // not specific target dates chosen by one exact engine revision.
+    const overdue = state.assignments.find(item => item.id === 'tutorial-task-overdue')
     if (!overdue?.scheduledDate || overdue.scheduledDate < anchor) return { ok: false as const, reason: '教程修复后的逾期任务仍在过去' }
-    if (analyzePlan(state, anchor).some(issue => issue.level === 'danger')) return { ok: false as const, reason: '教程修复 checkpoint 仍有硬冲突' }
-    if (leftover?.scheduledDate !== anchor && ['goal', 'intake', 'intake-preview', 'execute', 'review-entry', 'review-carry', 'review-preview'].includes(session.step)) {
-      return { ok: false as const, reason: '教程复盘预留任务提前被移动' }
-    }
   }
 
-  if (['intake', 'intake-preview'].includes(session.step) && !state.intakeBatches.some(batch => batch.id === 'tutorial-intake-batch')) {
-    return { ok: false as const, reason: '教程录入批次缺失' }
-  }
+  if (['intake-entry', 'intake-source', 'intake-parse'].includes(session.step) && !tutorialBatch(state)) return { ok: false as const, reason: '教程录入批次缺失' }
+  if (['intake-schedule', 'intake-preview'].includes(session.step) && !hasParsedTutorialIntake(state)) return { ok: false as const, reason: '教程自然语言录入结果缺失' }
 
-  if (['execute', 'review-entry', 'review-carry', 'review-preview', 'future-entry', 'future-action', 'future-preview', 'complete', 'free'].includes(session.step)) {
+  if (['intake-calendar', 'execute-complete', 'execute-partial', 'review-entry', 'review-carry', 'review-preview', 'review-calendar', 'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'complete', 'free'].includes(session.step)) {
     if (!hasAppliedTutorialIntake(state)) return { ok: false as const, reason: '教程新增任务 checkpoint 缺失或未应用' }
   }
 
-  if (['review-entry', 'review-carry', 'review-preview', 'future-entry', 'future-action', 'future-preview', 'complete', 'free'].includes(session.step)) {
+  if (['execute-partial', 'review-entry', 'review-carry', 'review-preview', 'review-calendar', 'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'complete', 'free'].includes(session.step)) {
     const executed = state.assignments.find(item => item.id === TUTORIAL_EXECUTE_ASSIGNMENT_ID)
-    if (executed?.status !== 'done' || executed.actualMinutes < 1 || executed.actualMinutes > 65 || executed.timeEntries.length === 0) {
-      return { ok: false as const, reason: '教程执行 checkpoint 异常' }
-    }
+    if (executed?.status !== 'done' || executed.actualMinutes < 1 || executed.actualMinutes > 65 || executed.timeEntries.length === 0) return { ok: false as const, reason: '教程完整完成任务 checkpoint 异常' }
   }
 
-  if (['review-entry', 'review-carry', 'review-preview'].includes(session.step) && !hasReviewCarryCandidate(state, anchor)) {
-    return { ok: false as const, reason: '教程复盘没有可顺延的未完成任务' }
+  if (['review-entry', 'review-carry', 'review-preview', 'review-calendar', 'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'complete', 'free'].includes(session.step)) {
+    const partial = state.assignments.find(item => item.id === TUTORIAL_PARTIAL_ASSIGNMENT_ID)
+    if (partial?.status !== 'partial' || partial.progress <= 0 || partial.progress >= 100 || partial.actualMinutes <= 0) return { ok: false as const, reason: '教程部分完成任务 checkpoint 异常' }
   }
 
-  if (['future-entry', 'future-action', 'future-preview', 'complete', 'free'].includes(session.step)) {
+  if (['review-entry', 'review-carry', 'review-preview'].includes(session.step) && !hasReviewCarryCandidate(state, anchor)) return { ok: false as const, reason: '教程复盘没有可顺延的未完成任务' }
+
+  if (['review-calendar', 'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'complete', 'free'].includes(session.step)) {
     if (!state.reviewRecords.some(item => item.date === anchor)) return { ok: false as const, reason: '教程复盘 checkpoint 缺失' }
-    if (state.assignments.some(item => item.scheduledDate === anchor && item.status !== 'done' && !item.locked)) {
-      return { ok: false as const, reason: '教程复盘后的未完成任务仍留在当天' }
-    }
-    if (analyzePlan(state, anchor).some(issue => issue.level === 'danger')) return { ok: false as const, reason: '教程复盘后出现新的硬冲突' }
+    if (state.assignments.some(item => item.scheduledDate === anchor && item.status !== 'done' && !item.locked)) return { ok: false as const, reason: '教程复盘后的未完成任务仍留在当天' }
   }
 
   return { ok: true as const }
