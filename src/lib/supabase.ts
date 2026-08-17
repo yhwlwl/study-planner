@@ -2,7 +2,7 @@ import { createClient, type Session, type SupabaseClient } from '@supabase/supab
 import type { AppState } from '../types'
 import { portableState } from './state'
 import { validateStateInput } from './state-schema'
-import { recordAnalyticsEvent, recordSignupConfirmedIfPending, rememberPendingSignup } from './analytics'
+import { recordAnalyticsEvent, recordSignupConfirmedIfPending, rememberPendingSignup, visitorId } from './analytics'
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const anon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
@@ -47,6 +47,23 @@ export async function signOut() {
   if (!supabase) return
   const { error } = await supabase.auth.signOut()
   if (error) throw error
+}
+
+export type FeedbackType = 'bug' | 'suggestion' | 'experience' | 'other'
+
+export async function submitFeedback(input: { type: FeedbackType; content: string }) {
+  if (!supabase) throw new Error('反馈服务暂不可用，请稍后重试。')
+  const content = input.content.trim()
+  if (!content) throw new Error('请填写反馈内容。')
+  if (content.length > 4000) throw new Error('反馈内容不能超过 4000 个字符。')
+  const session = await getSession()
+  const { error } = await supabase.from('feedback_submissions').insert({
+    feedback_type: input.type,
+    content,
+    user_id: session?.user.id ?? null,
+    visitor_id: typeof window === 'undefined' ? null : visitorId(),
+  })
+  if (error) throw new Error('反馈提交失败，请稍后重试。')
 }
 
 /**

@@ -9,6 +9,7 @@ import { initializeAnalytics, installVisitLogRetry, recordPageVisit } from './li
 import { announcePwaUpdate, configurePwaUpdater } from './lib/pwa-update'
 import { AppErrorBoundary } from './components/AppErrorBoundary'
 import './analytics.css'
+import './feedback-admin.css'
 
 const updateServiceWorker = registerSW({ immediate: true, onNeedRefresh: announcePwaUpdate })
 configurePwaUpdater(updateServiceWorker)
