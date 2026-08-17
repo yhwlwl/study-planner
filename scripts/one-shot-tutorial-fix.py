@@ -1,0 +1,214 @@
+from pathlib import Path
+import re
+
+
+def read(path: str) -> str:
+    return Path(path).read_text()
+
+
+def write(path: str, text: str) -> None:
+    Path(path).write_text(text)
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    text = read(path)
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f'{path}: expected exactly one match, got {count}: {old[:100]!r}')
+    write(path, text.replace(old, new, 1))
+
+
+# 1) 所有 Modal 直接挂到 document.body，避免被页面动画/transform 祖先限制 fixed 定位与滚动视口。
+path = 'src/components/Modal.tsx'
+text = read(path)
+if "import { createPortal } from 'react-dom'" not in text:
+    text = text.replace("import { X } from 'lucide-react'\n", "import { X } from 'lucide-react'\nimport { createPortal } from 'react-dom'\n", 1)
+text = text.replace('  return (\n    <div className="modal-backdrop">', '  return createPortal(\n    <div className="modal-backdrop">', 1)
+suffix = '    </div>\n  )\n}\n'
+if not text.endswith(suffix):
+    raise SystemExit('Modal.tsx: unexpected return suffix')
+text = text[:-len(suffix)] + '    </div>,\n    document.body,\n  )\n}\n'
+write(path, text)
+
+# 2) 教程目标关联改回真实录入编辑流程；stats-final 只保留旧会话兼容，不再属于当前引导路线。
+path = 'src/lib/tutorial.ts'
+text = read(path)
+text = text.replace("  'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'stats-final', 'complete', 'free',\n", "  'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'complete', 'free',\n", 1)
+text = text.replace("  return typeof value === 'string' && TUTORIAL_STEPS.includes(value as TutorialStep)\n", "  return typeof value === 'string' && (TUTORIAL_STEPS.includes(value as TutorialStep) || value === 'stats-final')\n", 1)
+text = text.replace("  'future-preview': 'future-entry',\n}", "  'future-preview': 'future-entry',\n  'stats-final': 'complete',\n}", 1)
+text = text.replace("  if (['goal-existing', 'goal-create', 'goal-link'].includes(step)) return 'goals'\n  if (['intake-entry', 'intake-source', 'intake-parse', 'intake-schedule', 'intake-preview'].includes(step)) return 'intake'\n  if (['stats', 'stats-detail', 'stats-final'].includes(step)) return 'stats'\n", "  if (['goal-existing', 'goal-create'].includes(step)) return 'goals'\n  if (['intake-entry', 'intake-source', 'intake-parse', 'goal-link', 'intake-schedule', 'intake-preview'].includes(step)) return 'intake'\n  if (['stats', 'stats-detail'].includes(step)) return 'stats'\n  if (step === 'stats-final') return 'today'\n", 1)
+write(path, text)
+
+# 3) 允许 goal-link 步骤通过真实 updateIntakeTaskGroup 提交，但仍由教程白名单约束到预置批次。
+replace_once(
+    'src/AppContext.tsx',
+    "    batch.updatedAt = nowISO()\n  }, { history: false }), [commit])\n\n  const removeIntakeTaskGroup",
+    "    batch.updatedAt = nowISO()\n  }, { history: false, tutorialAction: 'tutorial-goal-link', tutorialTargetId: batchId }), [commit])\n\n  const removeIntakeTaskGroup",
+)
+
+# 4) 删除 GoalsPage 教程专属“关联任务”按钮和专属弹窗。
+path = 'src/components/GoalsPage.tsx'
+text = read(path)
+text = text.replace(
+    "import { TUTORIAL_GOAL_ID, TUTORIAL_INTAKE_BATCH_ID, TUTORIAL_NEW_GOAL_ID, TUTORIAL_NEW_GOAL_TITLE, type TutorialStep } from '../lib/tutorial'",
+    "import { TUTORIAL_GOAL_ID, TUTORIAL_NEW_GOAL_ID, TUTORIAL_NEW_GOAL_TITLE, type TutorialStep } from '../lib/tutorial'",
+    1,
+)
+text = text.replace(
+    "export function GoalsPage({ onPrepared, tutorialMode = false, tutorialStep, onTutorialExistingViewed, onTutorialGoalCreated, onTutorialGoalLinked, onTutorialBlocked }: { onPrepared: (prepared: AppState, event: PlanChangeEvent) => void; tutorialMode?: boolean; tutorialStep?: TutorialStep; onTutorialExistingViewed?: () => void; onTutorialGoalCreated?: () => void; onTutorialGoalLinked?: () => void; onTutorialBlocked?: (message?: string) => void }) {",
+    "export function GoalsPage({ onPrepared, tutorialMode = false, tutorialStep, onTutorialExistingViewed, onTutorialGoalCreated, onTutorialBlocked }: { onPrepared: (prepared: AppState, event: PlanChangeEvent) => void; tutorialMode?: boolean; tutorialStep?: TutorialStep; onTutorialExistingViewed?: () => void; onTutorialGoalCreated?: () => void; onTutorialBlocked?: (message?: string) => void }) {",
+    1,
+)
+text = text.replace("  const [tutorialLinkOpen, setTutorialLinkOpen] = useState(false)\n  const [tutorialLinkIds, setTutorialLinkIds] = useState<string[]>([])\n", "", 1)
+text = text.replace("  const tutorialBatch = state.intakeBatches.find(batch => batch.id === TUTORIAL_INTAKE_BATCH_ID)\n  const tutorialItems = tutorialBatch?.taskGroups.filter(item => !item.appliedAt) ?? []\n", "", 1)
+text, count = re.subn(r"\n  useEffect\(\(\) => \{\n    if \(tutorialStep !== 'goal-link'\) \{\n      setTutorialLinkOpen\(false\)\n      setTutorialLinkIds\(\[\]\)\n    \}\n  \}, \[tutorialStep\]\)\n", "\n", text, count=1)
+if count != 1:
+    raise SystemExit(f'GoalsPage.tsx: tutorial-link effect match count {count}')
+text, count = re.subn(r"\n  const confirmTutorialLinks = \(\) => \{.*?\n  \}\n  const toggleArchive", "\n  const toggleArchive", text, count=1, flags=re.S)
+if count != 1:
+    raise SystemExit(f'GoalsPage.tsx: confirmTutorialLinks match count {count}')
+text = text.replace("        {tutorialMode && tutorialStep === 'goal-link' && goal.id === TUTORIAL_NEW_GOAL_ID && <div className=\"button-wrap\"><button className=\"primary-button\" data-tutorial-target=\"tutorial-goal-link\" onClick={() => { setTutorialLinkIds([]); setTutorialLinkOpen(true) }}>关联任务</button></div>}\n", "", 1)
+text, count = re.subn(r"\n    <Modal open=\{tutorialLinkOpen\} title=\"关联任务到目标\".*?\n    </Modal>\n  </div>\n}\n\nfunction GoalDialog", "\n  </div>\n}\n\nfunction GoalDialog", text, count=1, flags=re.S)
+if count != 1:
+    raise SystemExit(f'GoalsPage.tsx: synthetic link modal match count {count}')
+if 'tutorialLinkOpen' in text or 'tutorialLinkIds' in text or 'confirmTutorialLinks' in text or 'tutorial-goal-link-confirm' in text:
+    raise SystemExit('GoalsPage.tsx: synthetic tutorial goal-link UI was not fully removed')
+write(path, text)
+
+# 5) IntakePage 使用真实的“编辑录入项 → 加入目标 → 保存修改”流程；四个导入项逐个真实关联。
+path = 'src/components/IntakePage.tsx'
+text = read(path)
+text = text.replace("import type { TutorialStep } from '../lib/tutorial'", "import { TUTORIAL_NEW_GOAL_ID, type TutorialStep } from '../lib/tutorial'", 1)
+text = text.replace(
+    "export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAddRequestHandled, tutorialMode = false, tutorialStep, tutorialText, onTutorialNaturalOpen, onTutorialParsed, onTutorialImported, onStartTutorial, onTutorialBlocked }: {",
+    "export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAddRequestHandled, tutorialMode = false, tutorialStep, tutorialText, onTutorialNaturalOpen, onTutorialParsed, onTutorialImported, onTutorialGoalLinked, onStartTutorial, onTutorialBlocked }: {",
+    1,
+)
+text = text.replace("  onTutorialImported?: () => void\n  onStartTutorial?: () => void", "  onTutorialImported?: () => void\n  onTutorialGoalLinked?: () => void\n  onStartTutorial?: () => void", 1)
+text = text.replace("  const tutorialCanSchedule = tutorialMode && tutorialStep === 'intake-schedule'\n", "  const tutorialCanSchedule = tutorialMode && tutorialStep === 'intake-schedule'\n  const tutorialCanLinkGoal = tutorialMode && tutorialStep === 'goal-link'\n", 1)
+text = text.replace("  const pendingItems = active?.taskGroups.filter(item => !item.appliedAt) ?? []\n", "  const pendingItems = active?.taskGroups.filter(item => !item.appliedAt) ?? []\n  const tutorialUnlinkedItem = tutorialCanLinkGoal ? pendingItems.find(item => item.kind !== 'single' && !item.goalIds.includes(TUTORIAL_NEW_GOAL_ID)) : undefined\n", 1)
+text = text.replace(
+    "                const duplicate = duplicateSignatures.has(intakeDraftSignature(item))\n                return <tr",
+    "                const duplicate = duplicateSignatures.has(intakeDraftSignature(item))\n                const tutorialCanEditGoalLinkItem = tutorialCanLinkGoal && tutorialUnlinkedItem?.id === item.id && item.kind !== 'single'\n                return <tr",
+    1,
+)
+old_edit = "<button className={`icon-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} aria-label={`编辑 ${item.title}`} onClick={() => { if (tutorialMode) { onTutorialBlocked?.('教程中预置任务保持不变'); return }; setDialogBatchId(active.id); if (item.kind === 'single') { setEditingSingle(item); setSingleDialogOpen(true) } else { setEditingItem(item); setDialogOpen(true) } }}><Pencil size={16}/></button>"
+new_edit = "<button data-tutorial-target={tutorialCanEditGoalLinkItem ? 'tutorial-goal-link-edit' : undefined} className={`icon-button ${tutorialMode && !tutorialCanEditGoalLinkItem ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode && !tutorialCanEditGoalLinkItem || undefined} aria-label={`编辑 ${item.title}`} onClick={() => { if (tutorialMode && !tutorialCanEditGoalLinkItem) { onTutorialBlocked?.('教程中请按顺序关联高亮的待排期任务'); return }; setDialogBatchId(active.id); if (item.kind === 'single') { setEditingSingle(item); setSingleDialogOpen(true) } else { setEditingItem(item); setDialogOpen(true) } }}><Pencil size={16}/></button>"
+if text.count(old_edit) != 1:
+    raise SystemExit(f'IntakePage.tsx: edit button match count {text.count(old_edit)}')
+text = text.replace(old_edit, new_edit, 1)
+text = text.replace("      open={!tutorialMode && dialogOpen}\n      state={state}\n      initial={editingItem ?? active?.formDraft as TaskGroupDraft | undefined}", "      open={dialogOpen && (!tutorialMode || tutorialCanLinkGoal)}\n      state={state}\n      initial={editingItem ?? active?.formDraft as TaskGroupDraft | undefined}\n      tutorialGoalId={tutorialCanLinkGoal ? TUTORIAL_NEW_GOAL_ID : undefined}", 1)
+old_save = """      onSave={(draft, keepOpen) => {
+        const targetBatchId = dialogBatchId ?? active?.id
+        if (!targetBatchId) return
+        if (editingItem) updateIntakeTaskGroup(targetBatchId, editingItem.id, draft)
+        else addIntakeTaskGroup(targetBatchId, draft)
+        updateIntakeBatch(targetBatchId, { formDraft: undefined })
+        if (!keepOpen || editingItem) { setDialogOpen(false); setEditingItem(undefined); setDialogBatchId(undefined) }
+      }}
+"""
+new_save = """      onSave={(draft, keepOpen) => {
+        const targetBatchId = dialogBatchId ?? active?.id
+        if (!targetBatchId) return
+        if (tutorialCanLinkGoal && editingItem && !draft.goalIds.includes(TUTORIAL_NEW_GOAL_ID)) {
+          onTutorialBlocked?.('请先在“加入目标”中勾选刚创建的目标，再保存修改')
+          return
+        }
+        const completesTutorialGoalLink = Boolean(tutorialCanLinkGoal && editingItem
+          && pendingItems.every(item => item.id === editingItem.id ? draft.goalIds.includes(TUTORIAL_NEW_GOAL_ID) : item.goalIds.includes(TUTORIAL_NEW_GOAL_ID)))
+        if (editingItem) updateIntakeTaskGroup(targetBatchId, editingItem.id, draft)
+        else addIntakeTaskGroup(targetBatchId, draft)
+        updateIntakeBatch(targetBatchId, { formDraft: undefined })
+        if (!keepOpen || editingItem) { setDialogOpen(false); setEditingItem(undefined); setDialogBatchId(undefined) }
+        if (completesTutorialGoalLink) onTutorialGoalLinked?.()
+      }}
+"""
+if text.count(old_save) != 1:
+    raise SystemExit(f'IntakePage.tsx: save handler match count {text.count(old_save)}')
+text = text.replace(old_save, new_save, 1)
+text = text.replace(
+    "function IntakeTaskDialog({ open, state, initial, onDraftChange, onClose, onSave }: {\n  open: boolean\n  state: AppState\n  initial?: IntakeTaskGroupDraft | Partial<TaskGroupDraft>\n  onDraftChange?: (draft: Partial<TaskGroupDraft>) => void",
+    "function IntakeTaskDialog({ open, state, initial, tutorialGoalId, onDraftChange, onClose, onSave }: {\n  open: boolean\n  state: AppState\n  initial?: IntakeTaskGroupDraft | Partial<TaskGroupDraft>\n  tutorialGoalId?: string\n  onDraftChange?: (draft: Partial<TaskGroupDraft>) => void",
+    1,
+)
+old_goal_field = "{state.goals.length > 0 && <fieldset className=\"field span-2 goal-link-field\"><legend>加入目标（可选）</legend>{state.goals.filter(goal => goal.status !== 'archived').map(goal => <label key={goal.id}><input type=\"checkbox\" checked={form.goalIds.includes(goal.id)} onChange={event => patch('goalIds', event.target.checked ? [...new Set([...form.goalIds, goal.id])] : form.goalIds.filter(id => id !== goal.id))}/><span>{goal.title}，最晚 {goal.latestDate}</span></label>)}</fieldset>}"
+new_goal_field = "{state.goals.length > 0 && <fieldset data-tutorial-target={tutorialGoalId ? 'tutorial-goal-link-field' : undefined} className=\"field span-2 goal-link-field\"><legend>加入目标（可选）</legend>{state.goals.filter(goal => goal.status !== 'archived').map(goal => <label key={goal.id}><input type=\"checkbox\" checked={form.goalIds.includes(goal.id)} onChange={event => patch('goalIds', event.target.checked ? [...new Set([...form.goalIds, goal.id])] : form.goalIds.filter(id => id !== goal.id))}/><span>{goal.title}，最晚 {goal.latestDate}</span></label>)}</fieldset>}"
+if text.count(old_goal_field) != 1:
+    raise SystemExit(f'IntakePage.tsx: goal field match count {text.count(old_goal_field)}')
+text = text.replace(old_goal_field, new_goal_field, 1)
+write(path, text)
+
+# 6) App：删除重复的“刚录入的任务”教程板块；关联步骤走 IntakePage；最后一次统计不再出现。
+path = 'src/App.tsx'
+text = read(path)
+text = text.replace('TUTORIAL_EXECUTE_ASSIGNMENT_ID, TUTORIAL_PARTIAL_ASSIGNMENT_ID, TUTORIAL_INTAKE_BATCH_ID, TUTORIAL_NAMESPACE,', 'TUTORIAL_EXECUTE_ASSIGNMENT_ID, TUTORIAL_PARTIAL_ASSIGNMENT_ID, TUTORIAL_NAMESPACE,', 1)
+text = text.replace("      'tasks-intake': { target: 'tutorial-task-intake-list', text: '现在任务已经记下来了，但还没有进入日历。', actionLabel: '继续：新建目标', onAction: tutorialIntakeSeen },", "      'tasks-intake': { text: '现在任务已经记下来了，但还没有进入日历。', actionLabel: '继续：新建目标', onAction: tutorialIntakeSeen },", 1)
+text = text.replace("      'goal-link': { target: 'tutorial-goal-link', text: '目标会影响这些任务之后的排期和风险判断。' },", "      'goal-link': { target: 'tutorial-goal-link-field|tutorial-goal-link-edit', text: '按真实录入流程关联目标：依次编辑高亮的待排期任务，在“加入目标”中勾选刚创建的目标并保存。' },", 1)
+text = text.replace("      'future-calendar': { text: '这次不是救火，而是主动重新规划后面的节奏。', actionLabel: '继续：再看统计', onAction: () => advanceTutorialStable('future-calendar', 'stats-final') },\n      'stats-final': { text: '最后再看一次统计：计划变化和真实执行会一起留在这里，方便之后继续调整。', actionLabel: '完成体验', onAction: () => advanceTutorialStable('stats-final', 'complete') },", "      'future-calendar': { text: '这次不是救火，而是主动重新规划后面的节奏。', actionLabel: '完成体验', onAction: () => advanceTutorialStable('future-calendar', 'complete') },", 1)
+text = text.replace("      'stats-final': '回到统计看结果',\n", "", 1)
+text = text.replace("      : ['goal-existing', 'goal-create', 'goal-link'].includes(tutorialStepValue) ? '02 · 目标'\n        : tutorialStepValue === 'tasks-intake' || tutorialStepValue.startsWith('intake') ? '03 · 录入与排期'", "      : ['goal-existing', 'goal-create'].includes(tutorialStepValue) ? '02 · 目标'\n        : tutorialStepValue === 'goal-link' || tutorialStepValue === 'tasks-intake' || tutorialStepValue.startsWith('intake') ? '03 · 录入与排期'", 1)
+text = text.replace("          {page === 'tasks' && <TasksPage onOpenIntake={() => navigate('intake')} onPrepared={openPrepared} tutorialMode={tutorialRestricted} tutorialStep={tutorialStepValue} onTutorialIntakeSeen={tutorialIntakeSeen} onTutorialBlocked={tutorialNotice}/>}", "          {page === 'tasks' && <TasksPage onOpenIntake={() => navigate('intake')} onPrepared={openPrepared} tutorialMode={tutorialRestricted} onTutorialBlocked={tutorialNotice}/>}", 1)
+text = text.replace("onTutorialImported={advanceTutorialAfterImport} onStartTutorial={() => setTutorialOfferOpen(true)}", "onTutorialImported={advanceTutorialAfterImport} onTutorialGoalLinked={tutorialGoalLinked} onStartTutorial={() => setTutorialOfferOpen(true)}", 1)
+text = text.replace("onTutorialGoalCreated={tutorialGoalCreated} onTutorialGoalLinked={tutorialGoalLinked} onTutorialBlocked={tutorialNotice}", "onTutorialGoalCreated={tutorialGoalCreated} onTutorialBlocked={tutorialNotice}", 1)
+text = text.replace("tutorialMode={tutorialRestricted && (tutorialStepValue === 'stats' || tutorialStepValue === 'stats-detail' || tutorialStepValue === 'stats-final')}", "tutorialMode={tutorialRestricted && (tutorialStepValue === 'stats' || tutorialStepValue === 'stats-detail')}", 1)
+text = text.replace("function TasksPage({ onOpenIntake, onPrepared, tutorialMode = false, tutorialStep, onTutorialIntakeSeen, onTutorialBlocked }: { onOpenIntake: () => void; onPrepared: (state: AppState, event: PlanChangeEvent) => void; tutorialMode?: boolean; tutorialStep?: TutorialStep; onTutorialIntakeSeen?: () => void; onTutorialBlocked?: (message?: string) => void }) {", "function TasksPage({ onOpenIntake, onPrepared, tutorialMode = false, onTutorialBlocked }: { onOpenIntake: () => void; onPrepared: (state: AppState, event: PlanChangeEvent) => void; tutorialMode?: boolean; onTutorialBlocked?: (message?: string) => void }) {", 1)
+text, count = re.subn(r"\n  const tutorialPendingItems = tutorialMode && tutorialStep === 'tasks-intake' \? state\.intakeBatches\.find\(batch => batch\.id === TUTORIAL_INTAKE_BATCH_ID\)\?\.taskGroups\.filter\(item => !item\.appliedAt\) \?\? \[\] : \[\]", "", text, count=1)
+if count != 1:
+    raise SystemExit(f'App.tsx: tutorialPendingItems match count {count}')
+text, count = re.subn(r"\n    \{tutorialMode && tutorialStep === 'tasks-intake' && <section className=\"section-block\" data-tutorial-target=\"tutorial-task-intake-list\">.*?</section>\}\n", "\n", text, count=1, flags=re.S)
+if count != 1:
+    raise SystemExit(f'App.tsx: duplicate intake section match count {count}')
+if 'tutorial-task-intake-list' in text or 'tutorial-tasks-continue' in text:
+    raise SystemExit('App.tsx: duplicate tutorial intake block still present')
+write(path, text)
+
+# 7) 移动端教程弹窗：教练卡有上限，正文始终是可触摸纵向滚动区；footer 固定在可见视口内。
+path = 'src/tutorial.css'
+text = read(path)
+marker = '/* v0.9.1 tutorial: mobile modal scroll safety */'
+if marker not in text:
+    text += """
+
+/* v0.9.1 tutorial: mobile modal scroll safety */
+@media (max-width: 760px) {
+  .modal-card.modal-mobile-fullscreen .tutorial-modal-coachmark-slot {
+    max-height: min(30svh, 220px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .modal-card.modal-mobile-fullscreen .modal-body {
+    touch-action: pan-y;
+  }
+}
+"""
+write(path, text)
+
+# 8) 教程测试：当前路线不再含 stats-final；goal-link 页面必须是真实录入页；旧 stats-final 会话自动恢复到 complete。
+path = 'tests/tutorial.test.ts'
+text = read(path)
+text = text.replace("  'stats', 'stats-detail', 'future-entry', 'future-calendar', 'stats-final', 'complete', 'free',\n", "  'stats', 'stats-detail', 'future-entry', 'future-calendar', 'complete', 'free',\n", 1)
+text = text.replace("      'stats','stats-detail','future-entry','future-action','future-preview','future-calendar','stats-final','complete','free',\n", "      'stats','stats-detail','future-entry','future-action','future-preview','future-calendar','complete','free',\n", 1)
+text = text.replace("    expect(tutorialPageForStep('goal-create')).toBe('goals')\n    expect(tutorialPageForStep('stats-final')).toBe('stats')", "    expect(tutorialPageForStep('goal-create')).toBe('goals')\n    expect(tutorialPageForStep('goal-link')).toBe('intake')\n    expect(recoverTutorialSession(session('stats-final')).step).toBe('complete')", 1)
+text = text.replace("    expect(buildTutorialCheckpoint('stats-final', anchor).reviewRecords.some(item => item.date === anchor)).toBe(true)\n", "", 1)
+write(path, text)
+
+# 9) 防回归：Modal 必须在 body portal；当前引导路线不得重新出现 stats-final。
+Path('tests/modal.test.tsx').write_text("""import { render, screen } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
+import { Modal } from '../src/components/Modal'
+
+describe('Modal viewport portal', () => {
+  it('renders the modal at document.body so transformed page ancestors cannot trap fixed positioning', () => {
+    const host = document.createElement('div')
+    host.style.transform = 'translateY(1px)'
+    document.body.appendChild(host)
+    const view = render(<Modal open title="测试弹窗" onClose={() => undefined} mobileFullscreen><div>正文</div><div className="modal-actions"><button>底部动作</button></div></Modal>, { container: host })
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.parentElement).toBe(document.body.querySelector('.modal-backdrop'))
+    expect(document.body.querySelector('.modal-footer')).not.toBeNull()
+    view.unmount()
+    host.remove()
+  })
+})
+""")
