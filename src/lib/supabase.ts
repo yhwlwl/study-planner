@@ -70,11 +70,50 @@ export interface CloudSnapshot {
   revision: number
 }
 
+type SupabaseErrorShape = { code?: string; message?: string; details?: string; hint?: string }
+
+/**
+ * 前端可能先于 Supabase schema migration 发布。若 revision 列暂时不存在，
+ * 云端恢复不能因此整体失效；只在明确的“缺少 revision 列”错误下退回旧协议。
+ */
+export function isMissingCloudRevisionColumn(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const candidate = error as SupabaseErrorShape
+  const text = [candidate.message, candidate.details, candidate.hint].filter(Boolean).join(' ')
+  return candidate.code === '42703'
+    || candidate.code === 'PGRST204'
+    || (/\brevision\b/i.test(text) && /(does not exist|not found|schema cache|不存在|未找到)/i.test(text))
+}
+
 async function resolveUserId(userId?: string): Promise<string> {
   if (userId) return userId
   const session = await getSession()
   if (!session) throw new Error('请先登录')
   return session.user.id
+}
+
+function validateCloudSnapshot(raw: unknown, revision: unknown): CloudSnapshot {
+  const validation = validateStateInput(raw, 'cloud')
+  if (!validation.success || !validation.data) throw new Error(`云端快照结构无效：${validation.issues.slice(0, 3).join('；')}`)
+  return { state: validation.data, revision: Math.max(1, Number(revision) || 1) }
+}
+
+async function uploadLegacySnapshot(
+  resolvedUserId: string,
+  payload: ReturnType<typeof preparePortableState> & { lastCloudSyncAt: string; updatedAt: string },
+  stateUpdatedAt: string,
+  now: string,
+  expectedRevision?: number,
+): Promise<{ savedAt: string; revision: number }> {
+  if (!supabase) throw new Error('Supabase 尚未配置')
+  const { error } = await supabase.from('study_snapshots').upsert({
+    user_id: resolvedUserId,
+    data: payload,
+    client_updated_at: stateUpdatedAt,
+    updated_at: now,
+  }, { onConflict: 'user_id' })
+  if (error) throw error
+  return { savedAt: now, revision: Math.max(1, (expectedRevision ?? 0) + 1) }
 }
 
 export async function uploadSnapshot(state: AppState, userId?: string, expectedRevision?: number): Promise<{ savedAt: string; revision: number }> {
@@ -89,6 +128,7 @@ export async function uploadSnapshot(state: AppState, userId?: string, expectedR
       user_id: resolvedUserId, data: payload, client_updated_at: state.updatedAt, updated_at: now, revision: nextRevision,
     })
     if (error) {
+      if (isMissingCloudRevisionColumn(error)) return uploadLegacySnapshot(resolvedUserId, payload, state.updatedAt, now)
       if (error.code === '23505') throw new CloudRevisionConflictError(0)
       throw error
     }
@@ -97,7 +137,10 @@ export async function uploadSnapshot(state: AppState, userId?: string, expectedR
   const { data, error } = await supabase.from('study_snapshots').update({
     data: payload, client_updated_at: state.updatedAt, updated_at: now, revision: nextRevision,
   }).eq('user_id', resolvedUserId).eq('revision', expectedRevision).select('revision').maybeSingle()
-  if (error) throw error
+  if (error) {
+    if (isMissingCloudRevisionColumn(error)) return uploadLegacySnapshot(resolvedUserId, payload, state.updatedAt, now, expectedRevision)
+    throw error
+  }
   if (!data) throw new CloudRevisionConflictError(expectedRevision)
   return { savedAt: now, revision: Number(data.revision) }
 }
@@ -105,10 +148,14 @@ export async function uploadSnapshot(state: AppState, userId?: string, expectedR
 export async function downloadSnapshot(userId?: string): Promise<CloudSnapshot | undefined> {
   if (!supabase) throw new Error('Supabase 尚未配置')
   const resolvedUserId = await resolveUserId(userId)
-  const { data, error } = await supabase.from('study_snapshots').select('data, revision').eq('user_id', resolvedUserId).maybeSingle()
-  if (error) throw error
-  if (!data) return undefined
-  const validation = validateStateInput(data.data, 'cloud')
-  if (!validation.success || !validation.data) throw new Error(`云端快照结构无效：${validation.issues.slice(0, 3).join('；')}`)
-  return { state: validation.data, revision: Math.max(1, Number(data.revision) || 1) }
+  const current = await supabase.from('study_snapshots').select('data, revision').eq('user_id', resolvedUserId).maybeSingle()
+  if (current.error) {
+    if (!isMissingCloudRevisionColumn(current.error)) throw current.error
+    const legacy = await supabase.from('study_snapshots').select('data').eq('user_id', resolvedUserId).maybeSingle()
+    if (legacy.error) throw legacy.error
+    if (!legacy.data) return undefined
+    return validateCloudSnapshot(legacy.data.data, 1)
+  }
+  if (!current.data) return undefined
+  return validateCloudSnapshot(current.data.data, current.data.revision)
 }
