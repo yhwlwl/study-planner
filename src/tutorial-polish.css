@@ -1,0 +1,147 @@
+/* 教程细节修正：只处理教程相关的移动端溢出与目标详情可读性。 */
+.intake-import-bulk > *,
+.intake-import-bulk label,
+.intake-import-bulk .numeric-input {
+  min-width: 0;
+  max-width: 100%;
+}
+.intake-import-bulk input,
+.intake-import-bulk select,
+.intake-import-bulk .numeric-input,
+.intake-import-bulk .numeric-input input {
+  width: 100%;
+  min-width: 0 !important;
+  max-width: 100%;
+}
+
+/* 目标详情不要复用目标卡片的大块布局，改成紧凑的阅读型详情。 */
+.modal-card:has(.tutorial-goal-detail) {
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(82dvh, 760px);
+}
+.modal-card:has(.tutorial-goal-detail) .modal-body {
+  padding: 16px 18px 10px;
+}
+.modal-card:has(.tutorial-goal-detail) .modal-header h2 {
+  font-size: 18px;
+  letter-spacing: -.01em;
+}
+.tutorial-goal-detail {
+  display: grid;
+  gap: 14px;
+}
+.tutorial-goal-detail .goal-date-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+  margin: 0;
+}
+.tutorial-goal-detail .goal-date-grid > div {
+  min-width: 0;
+  min-height: 86px;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+}
+.tutorial-goal-detail .goal-date-grid small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.tutorial-goal-detail .goal-date-grid strong {
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.tutorial-goal-detail > p {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--primary-soft) 72%, var(--surface));
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.tutorial-goal-detail > div:last-child > strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.tutorial-goal-detail ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 7px;
+}
+.tutorial-goal-detail li {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.modal-card:has(.tutorial-goal-detail) .modal-footer {
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+@media (max-width: 640px) {
+  /* Safari 的日期控件有较大的 intrinsic width；改单列彻底避免字段越界。 */
+  .intake-import-bulk {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .intake-import-bulk > button,
+  .intake-import-bulk > .text-button {
+    grid-column: 1 !important;
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .modal-backdrop:has(.tutorial-goal-detail) {
+    place-items: center;
+    padding: calc(12px + env(safe-area-inset-top)) 10px calc(12px + env(safe-area-inset-bottom));
+  }
+  .modal-card:has(.tutorial-goal-detail) {
+    width: 100%;
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    border-radius: 18px;
+    padding-bottom: 0;
+  }
+  .modal-card:has(.tutorial-goal-detail) .modal-header {
+    padding: 13px 14px;
+  }
+  .modal-card:has(.tutorial-goal-detail) .modal-body {
+    padding: 13px 12px 10px;
+  }
+  .tutorial-goal-detail {
+    gap: 11px;
+  }
+  .tutorial-goal-detail .goal-date-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .tutorial-goal-detail .goal-date-grid > div {
+    min-height: 76px;
+    padding: 10px 11px;
+  }
+  .tutorial-goal-detail .goal-date-grid strong {
+    font-size: 17px;
+  }
+  .tutorial-goal-detail li {
+    padding: 9px 10px;
+  }
+  .modal-card:has(.tutorial-goal-detail) .modal-actions {
+    margin-top: 8px;
+    padding-bottom: 0;
+  }
+}
