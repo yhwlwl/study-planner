@@ -27,13 +27,22 @@ jobs:
           npm version 0.9.1 --no-git-tag-version
           python - <<'PY'
           from pathlib import Path
-          path = Path('src/lib/constants.ts')
-          text = path.read_text()
+
+          constants = Path('src/lib/constants.ts')
+          text = constants.read_text()
           old = "export const APP_VERSION = '0.9.0'"
           new = "export const APP_VERSION = '0.9.1'"
           if text.count(old) != 1:
               raise SystemExit(f'constants.ts: expected one old version, got {text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
+          constants.write_text(text.replace(old, new, 1))
+
+          validation = Path('scripts/validate-v08.mjs')
+          text = validation.read_text()
+          old = "add('版本与迁移', '发布版本为 0.9.0', pkg.version === '0.9.0', `package.json: ${pkg.version}`)"
+          new = "const appVersion = read('src/lib/constants.ts').match(/APP_VERSION\\s*=\\s*'([^']+)'/)?.[1]\nadd('版本与迁移', `发布版本与应用显示版本一致（${pkg.version}）`, appVersion === pkg.version, `package.json: ${pkg.version}；APP_VERSION: ${appVersion ?? '缺失'}`)"
+          if text.count(old) != 1:
+              raise SystemExit(f'validate-v08.mjs: expected one legacy version assertion, got {text.count(old)}')
+          validation.write_text(text.replace(old, new, 1))
           PY
           grep -q '"version": "0.9.1"' package.json
           test "$(grep -c '"version": "0.9.1"' package-lock.json)" -ge 2
