@@ -81,7 +81,7 @@ function FeedbackList({ scope, refreshKey }: { scope: 'mine' | 'admin'; refreshK
 
   if (loading) return <div className="feedback-empty"><RefreshCw size={18}/><span>正在加载反馈…</span></div>
   if (error) return <div className="feedback-status error" role="alert">{error}</div>
-  if (records.length === 0) return <div className="feedback-empty"><Inbox size={20}/><span>{scope === 'admin' ? '暂时还没有反馈。' : '你还没有提交过反馈。'}</span></div>
+  if (records.length === 0) return <div className="feedback-empty"><Inbox size={20}/><span>{scope === 'admin' ? '暂时还没有反馈。' : '当前还没有你提交过的反馈。'}</span></div>
 
   return <div className="feedback-history-list">
     {records.map(record => <article className="feedback-history-card" key={record.id}>
@@ -167,7 +167,7 @@ export function FeedbackPage() {
       setContent('')
       setScreenshots([])
       setRefreshKey(value => value + 1)
-      const extra = result.failedCount > 0 ? `反馈已提交；${result.failedCount} 张截图上传失败，可在“我的反馈”中确认。` : '已收到，感谢你的反馈。'
+      const extra = result.failedCount > 0 ? `反馈已提交；${result.failedCount} 张截图上传失败，可在“我的反馈”中确认。` : '已收到，感谢你的反馈。可在“我的反馈”中查看处理状态和回复。'
       setStatus({ kind: 'success', message: extra })
     } catch (error) {
       setStatus({ kind: 'error', message: error instanceof Error ? error.message : '提交失败，请稍后重试。' })
@@ -231,8 +231,8 @@ export function FeedbackPage() {
     </form>}
 
     {view === 'mine' && <section className="feedback-panel">
-      <div className="feedback-panel-head"><div><h3>我的反馈</h3><p>查看你提交过的反馈、处理状态、截图和开发者回复。</p></div>{signedIn && <button className="ghost-button" type="button" onClick={() => setRefreshKey(value => value + 1)}><RefreshCw size={15}/>刷新</button>}</div>
-      {!sessionReady ? <div className="feedback-empty"><RefreshCw size={18}/><span>正在确认登录状态…</span></div> : signedIn ? <FeedbackList scope="mine" refreshKey={refreshKey}/> : <div className="feedback-empty"><Inbox size={20}/><span>登录后即可查看“我的反馈”和开发者回复。</span></div>}
+      <div className="feedback-panel-head"><div><h3>我的反馈</h3><p>{signedIn ? '显示你的账号反馈，以及这台浏览器在登录前提交的游客反馈。' : '未登录也可以查看这台浏览器提交过的反馈和开发者回复；清除浏览器数据或换设备后无法恢复本机游客记录。'}</p></div>{sessionReady && <button className="ghost-button" type="button" onClick={() => setRefreshKey(value => value + 1)}><RefreshCw size={15}/>刷新</button>}</div>
+      {!sessionReady ? <div className="feedback-empty"><RefreshCw size={18}/><span>正在准备反馈记录…</span></div> : <FeedbackList scope="mine" refreshKey={refreshKey}/>}
     </section>}
 
     {view === 'admin' && isAdmin && <section className="feedback-panel">
