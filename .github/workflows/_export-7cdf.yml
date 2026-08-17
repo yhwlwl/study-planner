@@ -1,0 +1,25 @@
+name: temporary export 7cdf source
+on:
+  push:
+    branches:
+      - agent/tutorial-v4-base-7cdf
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tutorial-7cdf-source
+          path: |
+            src
+            tests
+            scripts
+            package.json
+            package-lock.json
+            tsconfig.json
+            tsconfig.check.json
+            tsconfig.node.json
+            vitest.config.ts
+            vite.config.ts
+          retention-days: 1
