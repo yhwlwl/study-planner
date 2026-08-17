@@ -26,6 +26,8 @@ type ViewMode = 'chart' | 'table'
 
 interface StatsPageProps {
   onOpenReplan?: (date: string) => void
+  tutorialMode?: boolean
+  onTutorialExpanded?: () => void
 }
 interface SubjectRow {
   subject: Subject
@@ -263,10 +265,11 @@ function FullscreenChart({ title, rows, onClose, onSelect }: { title: string; ro
   return <div className="stats-fullscreen" role="dialog" aria-modal="true" aria-label={`${title}全屏详情`}><header><div><span>统计详情</span><h2>{title}</h2></div><div><ViewToggle value={mode} onChange={setMode}/><button className="icon-button" aria-label="关闭全屏统计" onClick={onClose}><X size={19}/></button></div></header><main>{mode === 'table' ? <DailyTable rows={rows} onSelect={onSelect}/> : <ResponsiveContainer width="100%" height="100%"><ComposedChart data={rows} onClick={(event: any) => event?.activePayload?.[0] && onSelect(event.activePayload[0].payload.date)}><CartesianGrid strokeDasharray="3 3" vertical={false}/><XAxis dataKey="shortLabel"/><YAxis tickFormatter={(value: number) => `${Math.round(value / 60)}h`}/><Tooltip content={<ChartTooltip/>}/><Legend/><Bar dataKey="actual" name="实际" fill="#2563eb" radius={[6, 6, 0, 0]}/><Line type="monotone" dataKey="planned" name="计划" stroke="#94a3b8" strokeWidth={2} dot={false}/><Line type="monotone" dataKey="movingAverage" name="7日均值" stroke="#8b5cf6" strokeWidth={2} dot={false}/></ComposedChart></ResponsiveContainer>}</main></div>
 }
 
-export function StatsPage({ onOpenReplan }: StatsPageProps) {
+export function StatsPage({ onOpenReplan, tutorialMode = false, onTutorialExpanded }: StatsPageProps) {
   const { state, updateTimeEntry, deleteTimeEntry } = useApp()
   const [tab, setTab] = useState<StatsTab>('overview')
   const [preset, setPreset] = useState<RangePreset>(() => {
+    if (tutorialMode) return 'today'
     const saved = window.localStorage.getItem('study-planner:stats-range')
     return saved === 'today' || saved === '7d' || saved === 'week' || saved === 'all' || saved === 'custom' ? saved : '7d'
   })
@@ -284,7 +287,7 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
   const [ledgerEdit, setLedgerEdit] = useState<{ assignmentId: string; entryId: string; minutes: number; date: string }>()
   const [reportNotice, setReportNotice] = useState('')
 
-  useEffect(() => { window.localStorage.setItem('study-planner:stats-range', preset) }, [preset])
+  useEffect(() => { if (!tutorialMode) window.localStorage.setItem('study-planner:stats-range', preset) }, [preset, tutorialMode])
 
   const groupMap = useMemo(() => new Map(state.taskGroups.map(group => [group.id, group])), [state.taskGroups])
   const range = rangeForPreset(preset, state.settings.startDate, state.settings.endDate, customStart, customEnd)
@@ -424,14 +427,14 @@ export function StatsPage({ onOpenReplan }: StatsPageProps) {
     {reportNotice && <div className="export-notice stats-report-notice" role="status"><CheckCircle2 size={17}/><span>{reportNotice}</span></div>}
 
     {tab === 'overview' && <>
-      <section className="stats-kpi-grid">
+      <section className="stats-kpi-grid" data-tutorial-target={tutorialMode ? "tutorial-stats-summary" : undefined}>
         <MetricCard icon={Clock3} label="今日真实学习" value={minutesText(todayRow?.actual ?? 0)} detail={`计划 ${minutesText(todayRow?.planned ?? 0)} · 推断 ${minutesText(todayRow?.inferred ?? 0)} · 额外 ${minutesText(todayRow?.extraActual ?? 0)}`} tone={(todayRow?.actual ?? 0) >= (todayRow?.planned ?? Infinity) ? 'success' : 'default'}/>
         <MetricCard icon={CheckCircle2} label={`${rangeLabel}完成率`} value={`${Math.round(totals.taskCompletion)}% / ${Math.round(totals.workloadCompletion)}%`} detail="任务数 / 时间加权" tone={totals.workloadCompletion >= 80 ? 'success' : totals.workloadCompletion < 50 ? 'warning' : 'default'}/>
         <MetricCard icon={Activity} label="累计真实学习" value={minutesText(allDaily.reduce((sum, row) => sum + row.actual, 0))} detail={`当前范围 ${minutesText(totals.actual)} · 推断 ${minutesText(totals.inferred)} · 不计入统计 ${minutesText(totals.extra)}`}/>
         <MetricCard icon={Target} label="预计完成" value={overallPrediction === '已完成' ? '全部完成' : overallPrediction ? fmtDate(overallPrediction, 'M月d日') : '存在未排期'} detail={`优先级5：${corePrediction === '已完成' ? '已完成' : corePrediction ? fmtDate(corePrediction, 'M月d日') : '待排期'}`} tone={goalRows.some(row => row.latestRisk) ? 'warning' : 'success'}/>
       </section>
 
-      <details className="stats-overview-more"><summary>查看连续记录和学习热力图</summary><div className="stats-overview-more-body">
+      <details className="stats-overview-more" data-tutorial-target={tutorialMode ? "tutorial-stats-expand" : undefined} onToggle={event => { if (tutorialMode && event.currentTarget.open) onTutorialExpanded?.() }}><summary>查看连续记录和学习热力图</summary><div className="stats-overview-more-body">
       <section className="stats-streak-row"><div><Flame size={20}/><strong>{learningStreak} 天</strong><span>连续学习（每天至少30分钟）</span></div><div><Target size={20}/><strong>{targetStreak} 天</strong><span>连续达标（完成计划50%）</span></div><div><Focus size={20}/><strong>{totals.focusSessions} 次</strong><span>{rangeLabel}有效专注 · 平均 {minutesText(averageFocus)}</span></div></section>
 
       <section className="stats-insights"><header><div><TrendingUp size={20}/><div><h3>本周洞察</h3><p>只展示能影响下一步行动的数据变化。</p></div></div></header><div>{insights.length ? insights.map((item, index) => <article key={index} className={item.tone}><div>{item.tone === 'warning' ? <AlertTriangle size={18}/> : item.tone === 'positive' ? <CheckCircle2 size={18}/> : <Activity size={18}/>}<span><strong>{item.title}</strong><small>{item.detail}</small></span></div>{item.action && <button className="secondary-button" onClick={() => item.action === 'replan' ? onOpenReplan?.(todayISO()) : setTab('subjects')}>{item.action === 'replan' ? '查看调整建议' : '查看科目分析'}<ChevronRight size={15}/></button>}</article>) : <p className="muted-text">积累更多实际记录后，这里会自动产生趋势洞察。</p>}</div></section>

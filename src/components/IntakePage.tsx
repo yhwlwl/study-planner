@@ -16,6 +16,7 @@ import { Modal } from './Modal'
 import { NumericInput } from './NumericInput'
 import { SingleTaskDialog } from './SingleTaskDialog'
 import type { TaskCreationKind } from './AddTaskDialog'
+import type { TutorialStep } from '../lib/tutorial'
 
 const priorities: Array<{ value: Priority; label: string }> = [
   { value: 5, label: '核心' }, { value: 3, label: '高' }, { value: 2, label: '中' }, { value: 1, label: '低' }, { value: 0, label: '可选' },
@@ -36,13 +37,17 @@ function emptyDraft(state: AppState): TaskGroupDraft {
   }
 }
 
-export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAddRequestHandled, tutorialMode = false, onStartTutorial, onTutorialBlocked }: {
+export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAddRequestHandled, tutorialMode = false, tutorialStep, tutorialText, onTutorialParsed, onTutorialImported, onStartTutorial, onTutorialBlocked }: {
   onPrepared: (state: AppState, event: PlanChangeEvent) => void
   onNavigate: (page: 'today' | 'tasks' | 'intake' | 'goals' | 'settings') => void
   onAddTask: (batchId?: string) => void
   addRequest?: { id: string; kind: TaskCreationKind; batchId?: string }
   onAddRequestHandled: () => void
   tutorialMode?: boolean
+  tutorialStep?: TutorialStep
+  tutorialText?: string
+  onTutorialParsed?: () => void
+  onTutorialImported?: () => void
   onStartTutorial?: () => void
   onTutorialBlocked?: (message?: string) => void
 }) {
@@ -70,6 +75,8 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
   const fileRef = useRef<HTMLInputElement>(null)
   const handledAddRequestId = useRef<string>()
   const [showFirstScheduleCue, setShowFirstScheduleCue] = useState(false)
+  const tutorialNaturalEntry = tutorialMode && (tutorialStep === 'intake-source' || tutorialStep === 'intake-parse')
+  const tutorialCanSchedule = tutorialMode && tutorialStep === 'intake-schedule'
 
   useEffect(() => {
     if (activeId && activeBatches.some(batch => batch.id === activeId)) return
@@ -78,6 +85,14 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
   }, [activeBatches, activeId])
 
   const active = activeBatches.find(batch => batch.id === activeId)
+
+  useEffect(() => {
+    if (!tutorialNaturalEntry || !active || !tutorialText) return
+    setImportSource('paste')
+    setPasteText(tutorialText)
+    if (tutorialStep === 'intake-source') setImportResult(undefined)
+    setPasteOpen(true)
+  }, [tutorialNaturalEntry, tutorialStep, active?.id, tutorialText])
   const pendingItems = active?.taskGroups.filter(item => !item.appliedAt) ?? []
   const summary = intakeSummary(active?.taskGroups ?? [])
   const capacity = dateRange(state.settings.startDate, state.settings.endDate)
@@ -194,6 +209,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
     setPasteText('')
     setPasteOpen(false)
     if (!added) window.alert('没有新增内容。请检查重复项或导入错误。')
+    else if (tutorialMode && tutorialStep === 'intake-parse') onTutorialImported?.()
   }
 
   const handleFile = async (file: File) => {
@@ -276,7 +292,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
           <div className="intake-toolbar">
             <div>
               <button className={`primary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中先使用预置的新任务') : onAddTask(active.id)}><Plus size={16}/>添加任务</button>
-              <button className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => { if (tutorialMode) { onTutorialBlocked?.('教程中先使用预置的新任务'); return }; setImportSource('paste'); setImportResult(undefined); setPasteOpen(true) }}><ClipboardPaste size={16}/>自然语言 / 粘贴清单</button>
+              <button data-tutorial-target={tutorialNaturalEntry ? 'tutorial-natural-input' : undefined} className={`secondary-button ${tutorialMode && !tutorialNaturalEntry ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode && !tutorialNaturalEntry || undefined} onClick={() => { if (tutorialMode && !tutorialNaturalEntry) { onTutorialBlocked?.(); return }; setImportSource('paste'); setImportResult(undefined); if (tutorialText) setPasteText(tutorialText); setPasteOpen(true) }}><ClipboardPaste size={16}/>自然语言 / 粘贴清单</button>
               <button className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} disabled={!tutorialMode && importBusy} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中暂不导入其他文件') : fileRef.current?.click()}><Upload size={16}/>{importBusy ? '读取中' : '导入文件'}</button>
               <button className={`text-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中暂不下载模板') : downloadTextFile('study-planner-import-template.csv', buildIntakeCsvTemplate(), 'text/csv')}><Download size={15}/>下载完整模板</button>
               <input ref={fileRef} hidden type="file" accept=".txt,.csv,.tsv,.xlsx,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => event.target.files?.[0] && void handleFile(event.target.files[0])}/>
@@ -287,7 +303,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
                 : showFirstScheduleCue
                   ? <span className="success-text">任务已录入，下一步 ↘</span>
                   : <span className="success-text"><Check size={15}/>可以生成预览</span>}
-              <button className="primary-button" data-tutorial-target="schedule-intake" data-tutorial-action="schedule-intake" disabled={!pendingItems.length || Boolean(issueCount)} onClick={schedule}>
+              <button className={`primary-button ${tutorialMode && !tutorialCanSchedule ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode && !tutorialCanSchedule || undefined} data-tutorial-target={tutorialCanSchedule ? "schedule-intake" : undefined} data-tutorial-action="schedule-intake" disabled={!pendingItems.length || Boolean(issueCount)} onClick={() => tutorialMode && !tutorialCanSchedule ? onTutorialBlocked?.() : schedule()}>
                 {selectedIds.length ? `预览所选 ${selectedIds.length} 项排期` : '生成排期预览'}
               </button>
             </div>
@@ -369,14 +385,14 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
 
     <Modal open={pasteOpen} title={importResult ? '确认导入结果' : '自然语言录入 / 粘贴清单'} onClose={() => { setPasteOpen(false); setImportResult(undefined) }} wide mobileFullscreen>
       {!importResult ? <div className="intake-paste-form">
-        <label className="field"><span>每行一个任务，或直接粘贴表格</span><textarea autoFocus rows={12} value={pasteText} onChange={event => setPasteText(event.target.value)} placeholder={'数学卷 8 套，每套 90 分钟\n物理错题整理 12 次，每次 30 分钟\n\n也可以粘贴列：任务组、科目、数量、预计时长、优先级'}/><small>系统只解析并生成预览，不会直接修改正式计划。</small></label>
-      </div> : <ImportPreview result={importResult} onChange={setImportResult}/>} 
+        <label className="field"><span>每行一个任务，或直接粘贴表格</span><textarea data-tutorial-target={tutorialNaturalEntry ? 'tutorial-natural-text' : undefined} autoFocus rows={12} value={pasteText} readOnly={tutorialNaturalEntry} onChange={event => setPasteText(event.target.value)} placeholder={'数学卷 8 套，每套 90 分钟\n物理错题整理 12 次，每次 30 分钟\n\n也可以粘贴列：任务组、科目、数量、预计时长、优先级'}/><small>系统只解析并生成预览，不会直接修改正式计划。</small></label>
+      </div> : <fieldset className="tutorial-import-preview-fieldset" disabled={tutorialNaturalEntry}><ImportPreview result={importResult} onChange={setImportResult}/></fieldset>}
       <div className="modal-actions intake-import-actions">
-        <label className="checkbox-field"><input type="checkbox" checked={skipDuplicates} onChange={event => setSkipDuplicates(event.target.checked)}/><span>跳过与当前批次相同的任务组</span></label>
+        <label className="checkbox-field"><input type="checkbox" disabled={tutorialNaturalEntry} checked={skipDuplicates} onChange={event => setSkipDuplicates(event.target.checked)}/><span>跳过与当前批次相同的任务组</span></label>
         <button className="secondary-button" onClick={() => { setPasteOpen(false); setImportResult(undefined) }}>取消</button>
         {importResult && importSource === 'paste' && <button className="secondary-button" onClick={() => setImportResult(undefined)}>返回修改原文</button>}
-        {!importResult ? <button className="primary-button" disabled={!pasteText.trim()} onClick={() => setImportResult(parsePastedText(pasteText))}>解析并预览</button>
-          : <button className="primary-button" disabled={!importResult.drafts.length || !active} onClick={() => importDrafts(importResult, importSource)}>加入当前批次</button>}
+        {!importResult ? <button className="primary-button" data-tutorial-target={tutorialStep === 'intake-source' ? 'tutorial-parse' : undefined} disabled={!pasteText.trim()} onClick={() => { setImportResult(parsePastedText(pasteText)); if (tutorialStep === 'intake-source') onTutorialParsed?.() }}>解析并预览</button>
+          : <button className="primary-button" data-tutorial-target={tutorialStep === 'intake-parse' ? 'tutorial-import-confirm' : undefined} disabled={!importResult.drafts.length || !active} onClick={() => importDrafts(importResult, importSource)}>加入当前批次</button>}
       </div>
     </Modal>
   </div>
