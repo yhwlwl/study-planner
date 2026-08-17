@@ -395,7 +395,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
         <button className="secondary-button" onClick={() => { setPasteOpen(false); setImportResult(undefined) }}>取消</button>
         {importResult && importSource === 'paste' && <button className="secondary-button" onClick={() => setImportResult(undefined)}>返回修改原文</button>}
         {!importResult ? <button className="primary-button" data-tutorial-target={tutorialStep === 'intake-source' ? 'tutorial-parse' : undefined} disabled={!pasteText.trim()} onClick={() => { setImportResult(parsePastedText(pasteText)); if (tutorialStep === 'intake-source') onTutorialParsed?.() }}>解析并预览</button>
-          : <button className="primary-button" data-tutorial-target={tutorialStep === 'intake-parse' ? 'tutorial-import-confirm' : undefined} disabled={!importResult.drafts.length || !active} onClick={() => importDrafts(importResult, importSource)}>加入当前批次</button>}
+          : <button className="primary-button" data-tutorial-target={tutorialStep === 'intake-parse' ? 'tutorial-import-confirm' : undefined} disabled={!importResult.drafts.length || !active} onClick={() => importDrafts(importResult, importSource)}>{tutorialMode && tutorialStep === 'intake-parse' ? '确认录入' : '加入当前批次'}</button>}
       </div>
     </Modal>
   </div>

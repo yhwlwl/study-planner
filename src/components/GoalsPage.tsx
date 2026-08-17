@@ -4,20 +4,66 @@ import type { AppState, Goal, GoalCondition, GoalConditionMode, GoalDraft, PlanC
 import { useApp } from '../AppContext'
 import { goalProgress } from '../lib/goals'
 import { uid } from '../lib/id'
-import { fmtDate, minutesText } from '../lib/date'
-import { TUTORIAL_GOAL_ID, type TutorialStep } from '../lib/tutorial'
+import { fmtDate, minutesText, shiftDate, todayISO } from '../lib/date'
+import { TUTORIAL_GOAL_ID, TUTORIAL_INTAKE_BATCH_ID, TUTORIAL_NEW_GOAL_ID, TUTORIAL_NEW_GOAL_TITLE, type TutorialStep } from '../lib/tutorial'
 import { Modal } from './Modal'
 import { NumericInput } from './NumericInput'
 
-export function GoalsPage({ onPrepared, tutorialMode = false, tutorialStep, onTutorialExistingViewed, onTutorialBlocked }: { onPrepared: (prepared: AppState, event: PlanChangeEvent) => void; tutorialMode?: boolean; tutorialStep?: TutorialStep; onTutorialExistingViewed?: () => void; onTutorialBlocked?: (message?: string) => void }) {
+export function GoalsPage({ onPrepared, tutorialMode = false, tutorialStep, onTutorialExistingViewed, onTutorialGoalCreated, onTutorialGoalLinked, onTutorialBlocked }: { onPrepared: (prepared: AppState, event: PlanChangeEvent) => void; tutorialMode?: boolean; tutorialStep?: TutorialStep; onTutorialExistingViewed?: () => void; onTutorialGoalCreated?: () => void; onTutorialGoalLinked?: () => void; onTutorialBlocked?: (message?: string) => void }) {
   const { state, commit, prepareGoalChange, prepareGoalDelete, updateGoalMetadata } = useApp()
   const [editing, setEditing] = useState<Goal | null | undefined>()
   const [detailGoal, setDetailGoal] = useState<Goal>()
+  const [tutorialLinkOpen, setTutorialLinkOpen] = useState(false)
+  const [tutorialLinkIds, setTutorialLinkIds] = useState<string[]>([])
   const goals = useMemo(() => [...state.goals].sort((a,b) => (a.status === 'archived' ? 1 : 0) - (b.status === 'archived' ? 1 : 0) || a.latestDate.localeCompare(b.latestDate)), [state.goals])
   const assignmentMap = useMemo(() => new Map(state.assignments.map(item => [item.id, item])), [state.assignments])
   const groupMap = useMemo(() => new Map(state.taskGroups.map(item => [item.id, item])), [state.taskGroups])
+  const tutorialBatch = state.intakeBatches.find(batch => batch.id === TUTORIAL_INTAKE_BATCH_ID)
+  const tutorialItems = tutorialBatch?.taskGroups.filter(item => !item.appliedAt) ?? []
+  const tutorialAnchor = todayISO()
+  const tutorialGoalDefaults: GoalDraft = {
+    title: TUTORIAL_NEW_GOAL_TITLE,
+    description: '把刚才录入的新作业放进同一个完成目标。',
+    priority: 3,
+    desiredDate: shiftDate(tutorialAnchor, 5),
+    latestDate: shiftDate(tutorialAnchor, 7),
+    completionConditions: [],
+    linkedTaskGroupIds: [],
+    linkedAssignmentIds: [],
+  }
+  const tutorialCanCreate = tutorialMode && tutorialStep === 'goal-create'
+
+  useEffect(() => {
+    if (tutorialStep !== 'goal-link') {
+      setTutorialLinkOpen(false)
+      setTutorialLinkIds([])
+    }
+  }, [tutorialStep])
 
   const save = (draft: GoalDraft, goalId?: string) => {
+    if (tutorialCanCreate && !goalId) {
+      const now = new Date().toISOString()
+      commit(next => {
+        next.goals = next.goals.filter(goal => goal.id !== TUTORIAL_NEW_GOAL_ID)
+        next.goals.push({
+          id: TUTORIAL_NEW_GOAL_ID,
+          title: tutorialGoalDefaults.title,
+          description: tutorialGoalDefaults.description,
+          priority: tutorialGoalDefaults.priority,
+          desiredDate: tutorialGoalDefaults.desiredDate,
+          latestDate: tutorialGoalDefaults.latestDate,
+          status: 'active',
+          completionConditions: [],
+          linkedTaskGroupIds: [],
+          linkedAssignmentIds: [],
+          createdAt: now,
+          updatedAt: now,
+        })
+      }, { tutorialAction: 'tutorial-goal-create', tutorialTargetId: TUTORIAL_NEW_GOAL_ID })
+      setEditing(undefined)
+      onTutorialGoalCreated?.()
+      return
+    }
     const existing = goalId ? state.goals.find(goal => goal.id === goalId) : undefined
     if (!existing && draft.completionConditions.length === 0 && draft.linkedAssignmentIds.length === 0) {
       const now = new Date().toISOString()
@@ -51,6 +97,20 @@ export function GoalsPage({ onPrepared, tutorialMode = false, tutorialStep, onTu
     setEditing(undefined)
     onPrepared(prepared.state, prepared.event)
   }
+  const confirmTutorialLinks = () => {
+    if (!tutorialBatch || tutorialLinkIds.length !== tutorialItems.length || !tutorialItems.length) return
+    const selected = new Set(tutorialLinkIds)
+    const now = new Date().toISOString()
+    commit(next => {
+      const batch = next.intakeBatches.find(item => item.id === TUTORIAL_INTAKE_BATCH_ID)
+      if (!batch) return
+      batch.taskGroups = batch.taskGroups.map(item => selected.has(item.id) ? { ...item, goalIds: Array.from(new Set([...item.goalIds, TUTORIAL_NEW_GOAL_ID])), updatedAt: now } : item)
+      batch.updatedAt = now
+    }, { tutorialAction: 'tutorial-goal-link', tutorialTargetId: TUTORIAL_INTAKE_BATCH_ID })
+    setTutorialLinkOpen(false)
+    setTutorialLinkIds([])
+    onTutorialGoalLinked?.()
+  }
   const toggleArchive = (goal: Goal) => commit(draft => {
     const item = draft.goals.find(candidate => candidate.id === goal.id)
     if (!item || item.status === 'active') return
@@ -64,7 +124,7 @@ export function GoalsPage({ onPrepared, tutorialMode = false, tutorialStep, onTu
   }
 
   return <div className="goals-page">
-    <div className="section-toolbar"><div><h2>目标</h2><p>目标定义要完成什么以及期望与最晚日期；修改目标只生成建议，不直接移动任务。</p></div><button className={`primary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中先查看现有目标') : setEditing(null)}><Plus size={17}/>创建目标</button></div>
+    <div className="section-toolbar"><div><h2>目标</h2><p>目标定义要完成什么以及期望与最晚日期；修改目标只生成建议，不直接移动任务。</p></div><button data-tutorial-target={tutorialCanCreate ? 'tutorial-goal-create' : undefined} className={`primary-button ${tutorialMode && !tutorialCanCreate ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode && !tutorialCanCreate || undefined} onClick={() => tutorialMode && !tutorialCanCreate ? onTutorialBlocked?.('教程中先完成当前这一步') : setEditing(null)}><Plus size={17}/>新建目标</button></div>
     {goals.length === 0 ? <div className="empty-state"><h3>还没有目标</h3><p>{tutorialMode ? '教程数据正在恢复，请稍候。' : '创建目标后，可以为一个或多个任务组设置全部、百分比或数量完成条件。'}</p><button className={`primary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中先查看现有目标') : setEditing(null)}>创建第一个目标</button></div> : <div className="goal-grid">{goals.map(goal => {
       const progress = goalProgress(state, goal)
       const linkedGroups = new Set([...goal.linkedTaskGroupIds, ...goal.completionConditions.map(item => item.groupId)])
@@ -76,12 +136,19 @@ export function GoalsPage({ onPrepared, tutorialMode = false, tutorialStep, onTu
         <details><summary>完成条件（{goal.completionConditions.length}）</summary><div className="goal-condition-list">{progress.conditionDetails.map(detail => <div key={detail.conditionId}><strong>{groupMap.get(detail.groupId)?.title ?? '已删除任务组'}</strong><span>{detail.mode === 'all' ? '全部完成' : detail.mode === 'percentage' ? `完成 ${goal.completionConditions.find(item => item.id === detail.conditionId)?.value ?? 0}%` : `完成 ${goal.completionConditions.find(item => item.id === detail.conditionId)?.value ?? 0} 项`} · 当前 {detail.completed}/{detail.required}</span><details><summary>查看计入的具体任务（{detail.countedAssignmentIds.length}）</summary><ul>{detail.countedAssignmentIds.map(id => <li key={id}>{assignmentMap.get(id)?.title ?? id}</li>)}</ul></details></div>)}</div></details>
         {goal.linkedAssignmentIds.length > 0 && <details><summary>直接关联任务（{goal.linkedAssignmentIds.length}）</summary><ul>{goal.linkedAssignmentIds.map(id => <li key={id}>{assignmentMap.get(id)?.title ?? id}</li>)}</ul></details>}
         {shared.length > 0 && <details><summary>共享任务组的其他目标（{shared.length}）</summary><ul>{shared.map(item => <li key={item.id}>{item.title} · 最晚 {fmtDate(item.latestDate)}</li>)}</ul></details>}
+        {tutorialMode && tutorialStep === 'goal-link' && goal.id === TUTORIAL_NEW_GOAL_ID && <div className="button-wrap"><button className="primary-button" data-tutorial-target="tutorial-goal-link" onClick={() => { setTutorialLinkIds([]); setTutorialLinkOpen(true) }}>关联任务</button></div>}
       </article>
     })}</div>}
-    <GoalDialog open={editing !== undefined} state={state} initial={editing ?? undefined} onClose={() => setEditing(undefined)} onSave={save}/>
+    <GoalDialog open={editing !== undefined} state={state} initial={editing ?? undefined} tutorialDefaults={tutorialCanCreate && editing === null ? tutorialGoalDefaults : undefined} readOnly={tutorialCanCreate && editing === null} onClose={() => setEditing(undefined)} onSave={save}/>
     <Modal open={Boolean(detailGoal)} title={detailGoal?.title ?? '目标详情'} onClose={closeDetail} wide>
       {detailGoal && (() => { const progress = goalProgress(state, detailGoal); return <div className="tutorial-goal-detail"><div className="goal-date-grid"><div><small>期望完成</small><strong>{detailGoal.desiredDate ? fmtDate(detailGoal.desiredDate) : '未设置'}</strong></div><div><small>最晚完成</small><strong>{fmtDate(detailGoal.latestDate)}</strong></div><div><small>当前进度</small><strong>{progress.completedCount} / {progress.requiredCount}</strong></div><div><small>预计完成</small><strong>{progress.expectedCompletion ? fmtDate(progress.expectedCompletion) : '尚无法预计'}</strong></div></div><p>关联任务组：{new Set([...detailGoal.linkedTaskGroupIds, ...detailGoal.completionConditions.map(item => item.groupId)]).size} 个；剩余工作约 {minutesText(progress.estimatedRemainingMinutes)}。</p><div><strong>关联任务</strong><ul>{state.assignments.filter(item => detailGoal.linkedAssignmentIds.includes(item.id) || detailGoal.linkedTaskGroupIds.includes(item.groupId) || detailGoal.completionConditions.some(condition => condition.groupId === item.groupId)).slice(0, 12).map(item => <li key={item.id}>{item.title} · {item.status === 'done' ? '已完成' : item.scheduledDate ? fmtDate(item.scheduledDate) : '待排期'}</li>)}</ul></div></div> })()}
       <div className="modal-actions"><button className="secondary-button" onClick={closeDetail}>关闭</button></div>
+    </Modal>
+    <Modal open={tutorialLinkOpen} title="关联任务到目标" onClose={() => setTutorialLinkOpen(false)} wide mobileFullscreen>
+      <div className="form-stack"><p className="muted-text">只选择刚才录入、仍处于待排期状态的内容。确认后，目标会成为这些任务排期与风险判断的约束。</p>
+        <div className="goal-condition-list">{tutorialItems.map(item => <label className="checkbox-field" key={item.id}><input type="checkbox" checked={tutorialLinkIds.includes(item.id)} onChange={event => setTutorialLinkIds(current => event.target.checked ? [...new Set([...current, item.id])] : current.filter(id => id !== item.id))}/><span><strong>{item.title}{item.quantity > 1 ? ` ×${item.quantity}` : ''}</strong><small>{item.subject} · 每项 {item.unitMinutes} 分钟 · 待排期</small></span></label>)}</div>
+      </div>
+      <div className="modal-actions"><button className="secondary-button" onClick={() => setTutorialLinkOpen(false)}>取消</button><button className="primary-button" data-tutorial-target="tutorial-goal-link-confirm" disabled={!tutorialItems.length || tutorialLinkIds.length !== tutorialItems.length} onClick={confirmTutorialLinks}>确认关联</button></div>
     </Modal>
   </div>
 }
