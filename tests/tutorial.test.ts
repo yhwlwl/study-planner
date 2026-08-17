@@ -7,6 +7,8 @@ import {
   TUTORIAL_EXECUTE_ASSIGNMENT_ID,
   TUTORIAL_GOAL_ID,
   TUTORIAL_INTAKE_BATCH_ID,
+  TUTORIAL_NEW_GOAL_ID,
+  TUTORIAL_NEW_GOAL_TITLE,
   TUTORIAL_PARTIAL_ASSIGNMENT_ID,
   TUTORIAL_STEPS,
   TUTORIAL_UNFINISHED_ASSIGNMENT_ID,
@@ -77,23 +79,25 @@ function futureEvent(state: ReturnType<typeof buildTutorialCheckpoint>, preferen
 }
 
 const stableSteps: TutorialStep[] = [
-  'repair-entry', 'repair-calendar', 'goal-existing', 'intake-entry',
+  'repair-entry', 'repair-calendar', 'goal-existing', 'intake-entry', 'tasks-intake', 'goal-create', 'goal-link',
   'intake-schedule', 'intake-calendar', 'execute-complete', 'execute-partial', 'review-entry', 'review-calendar',
-  'stats', 'stats-detail', 'future-entry', 'future-calendar', 'complete', 'free',
+  'stats', 'stats-detail', 'future-entry', 'future-calendar', 'stats-final', 'complete', 'free',
 ]
 
-describe('tutorial v2 flow and checkpoints', () => {
+describe('tutorial v4 flow and checkpoints', () => {
   it('keeps the exact guided route in the required order', () => {
     expect(TUTORIAL_STEPS).toEqual([
       'repair-entry','repair-action','repair-preview','repair-calendar','goal-existing',
-      'intake-entry','intake-source','intake-parse','intake-schedule','intake-preview','intake-calendar',
+      'intake-entry','intake-source','intake-parse','tasks-intake','goal-create','goal-link','intake-schedule','intake-preview','intake-calendar',
       'execute-complete','execute-partial','review-entry','review-carry','review-preview','review-calendar',
-      'stats','stats-detail','future-entry','future-action','future-preview','future-calendar','complete','free',
+      'stats','stats-detail','future-entry','future-action','future-preview','future-calendar','stats-final','complete','free',
     ])
     expect(tutorialPageForStep('repair-calendar')).toBe('calendar')
     expect(tutorialPageForStep('goal-existing')).toBe('goals')
     expect(tutorialPageForStep('intake-entry')).toBe('intake')
-    expect(tutorialPageForStep('stats')).toBe('stats')
+    expect(tutorialPageForStep('tasks-intake')).toBe('tasks')
+    expect(tutorialPageForStep('goal-create')).toBe('goals')
+    expect(tutorialPageForStep('stats-final')).toBe('stats')
   })
 
   it('builds a healthy deterministic checkpoint for every stable stage', () => {
@@ -154,17 +158,28 @@ describe('tutorial v2 flow and checkpoints', () => {
     resetNowProvider()
   })
 
-  it('keeps parsed intake, formal scheduling, execution, review and stats checkpoints distinct', () => {
+  it('keeps intake, task view, goal creation/linking, scheduling, execution, review and stats checkpoints distinct', () => {
     setNowProvider(() => new Date(`${anchor}T12:00:00`))
-    const parsed = buildTutorialCheckpoint('intake-schedule', anchor)
-    const batch = parsed.intakeBatches.find(item => item.id === TUTORIAL_INTAKE_BATCH_ID)!
+    const tasks = buildTutorialCheckpoint('tasks-intake', anchor)
+    const batch = tasks.intakeBatches.find(item => item.id === TUTORIAL_INTAKE_BATCH_ID)!
     expect(batch.taskGroups).toHaveLength(4)
     expect(batch.taskGroups.every(item => !item.appliedAt && item.goalIds.length === 0)).toBe(true)
+    expect(tasks.goals.some(item => item.id === TUTORIAL_NEW_GOAL_ID)).toBe(false)
+
+    const goalLink = buildTutorialCheckpoint('goal-link', anchor)
+    expect(goalLink.goals.find(item => item.id === TUTORIAL_NEW_GOAL_ID)).toMatchObject({ title: TUTORIAL_NEW_GOAL_TITLE, status: 'active' })
+    expect(goalLink.intakeBatches.find(item => item.id === TUTORIAL_INTAKE_BATCH_ID)?.taskGroups.every(item => item.goalIds.length === 0)).toBe(true)
+
+    const linked = buildTutorialCheckpoint('intake-schedule', anchor)
+    expect(linked.intakeBatches.find(item => item.id === TUTORIAL_INTAKE_BATCH_ID)?.taskGroups.every(item => item.goalIds.includes(TUTORIAL_NEW_GOAL_ID))).toBe(true)
 
     const scheduled = buildTutorialCheckpoint('intake-calendar', anchor)
     expect(scheduled.intakeBatches.find(item => item.id === TUTORIAL_INTAKE_BATCH_ID)?.status).toBe('applied')
     expect(scheduled.assignments.filter(item => item.groupId.startsWith('tutorial-added-'))).toHaveLength(7)
     expect(scheduled.goals.some(item => item.title === '读书报告完成目标')).toBe(true)
+    const commonGoal = scheduled.goals.find(item => item.id === TUTORIAL_NEW_GOAL_ID)!
+    expect(commonGoal.linkedTaskGroupIds).toHaveLength(4)
+    expect(commonGoal.completionConditions).toHaveLength(4)
 
     const complete = buildTutorialCheckpoint('execute-partial', anchor)
     expect(complete.assignments.find(item => item.id === TUTORIAL_EXECUTE_ASSIGNMENT_ID)).toMatchObject({ status: 'done', actualMinutes: 52 })
@@ -177,6 +192,7 @@ describe('tutorial v2 flow and checkpoints', () => {
     const stats = buildTutorialCheckpoint('stats', anchor)
     expect(stats.reviewRecords.some(item => item.date === anchor)).toBe(true)
     expect(stats.assignments.some(item => item.scheduledDate === anchor && item.status !== 'done' && !item.locked)).toBe(false)
+    expect(buildTutorialCheckpoint('stats-final', anchor).reviewRecords.some(item => item.date === anchor)).toBe(true)
     resetNowProvider()
   })
 
@@ -208,7 +224,7 @@ describe('tutorial v2 flow and checkpoints', () => {
   })
 })
 
-describe('tutorial v2 recovery and action gates', () => {
+describe('tutorial v4 recovery and action gates', () => {
   it('pins tutorial today to entry day and recovers every transient step safely', () => {
     clearTutorialSession()
     const created = createTutorialSession('guest', false, anchor, 'today')
@@ -238,8 +254,9 @@ describe('tutorial v2 recovery and action gates', () => {
 
   it('allows only the explicit tutorial mutations before free exploration', () => {
     expect(tutorialAllowsCommit(session('intake-parse'), 'intake-import')).toBe(true)
-    expect(tutorialAllowsCommit(session('goal-create'), 'goal-create')).toBe(false)
-    expect(tutorialAllowsCommit(session('goal-link'), 'goal-link')).toBe(false)
+    expect(tutorialAllowsCommit(session('goal-create'), 'tutorial-goal-create', TUTORIAL_NEW_GOAL_ID)).toBe(true)
+    expect(tutorialAllowsCommit(session('goal-link'), 'tutorial-goal-link', TUTORIAL_INTAKE_BATCH_ID)).toBe(true)
+    expect(tutorialAllowsCommit(session('goal-create'), 'tutorial-goal-link', TUTORIAL_INTAKE_BATCH_ID)).toBe(false)
     expect(tutorialAllowsCommit(session('execute-complete'), 'execute-task', TUTORIAL_EXECUTE_ASSIGNMENT_ID)).toBe(true)
     expect(tutorialAllowsCommit(session('execute-complete'), 'execute-task', TUTORIAL_PARTIAL_ASSIGNMENT_ID)).toBe(false)
     expect(tutorialAllowsCommit(session('execute-partial'), 'execute-task', TUTORIAL_PARTIAL_ASSIGNMENT_ID)).toBe(true)
