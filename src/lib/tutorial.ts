@@ -6,7 +6,7 @@ import { updateGoalAndGroupLifecycle } from './goals'
 import { analyzePlan, suggestMoveDates } from './planner'
 import { parsePastedText } from './intake'
 
-export const TUTORIAL_VERSION = 3
+export const TUTORIAL_VERSION = 4
 export const TUTORIAL_NAMESPACE = `tutorial:v${TUTORIAL_VERSION}`
 export const TUTORIAL_GOAL_ID = 'tutorial-goal-math'
 export const TUTORIAL_NEW_GOAL_ID = 'tutorial-goal-new-work'
@@ -27,6 +27,9 @@ export type TutorialStep =
   | 'intake-entry'
   | 'intake-source'
   | 'intake-parse'
+  | 'tasks-intake'
+  | 'goal-create'
+  | 'goal-link'
   | 'intake-schedule'
   | 'intake-preview'
   | 'intake-calendar'
@@ -42,14 +45,15 @@ export type TutorialStep =
   | 'future-action'
   | 'future-preview'
   | 'future-calendar'
+  | 'stats-final'
   | 'complete'
   | 'free'
 
 export const TUTORIAL_STEPS: TutorialStep[] = [
   'repair-entry', 'repair-action', 'repair-preview', 'repair-calendar', 'goal-existing',
-  'intake-entry', 'intake-source', 'intake-parse', 'intake-schedule', 'intake-preview', 'intake-calendar',
+  'intake-entry', 'intake-source', 'intake-parse', 'tasks-intake', 'goal-create', 'goal-link', 'intake-schedule', 'intake-preview', 'intake-calendar',
   'execute-complete', 'execute-partial', 'review-entry', 'review-carry', 'review-preview', 'review-calendar',
-  'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'complete', 'free',
+  'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'stats-final', 'complete', 'free',
 ]
 
 function isTutorialStep(value: unknown): value is TutorialStep {
@@ -197,9 +201,10 @@ export type TutorialPage = 'today' | 'calendar' | 'tasks' | 'intake' | 'goals' |
 
 export function tutorialPageForStep(step: TutorialStep): TutorialPage {
   if (['repair-calendar', 'intake-calendar', 'review-calendar', 'future-calendar'].includes(step)) return 'calendar'
-  if (step === 'goal-existing') return 'goals'
+  if (step === 'tasks-intake') return 'tasks'
+  if (['goal-existing', 'goal-create', 'goal-link'].includes(step)) return 'goals'
   if (['intake-entry', 'intake-source', 'intake-parse', 'intake-schedule', 'intake-preview'].includes(step)) return 'intake'
-  if (['stats', 'stats-detail'].includes(step)) return 'stats'
+  if (['stats', 'stats-detail', 'stats-final'].includes(step)) return 'stats'
   return 'today'
 }
 
@@ -220,6 +225,8 @@ export function tutorialAllowsCommit(session: TutorialSession | undefined, actio
   if (!session) return false
   if (session.step === 'free') return true
   if (session.step === 'intake-parse' && action === 'intake-import') return true
+  if (session.step === 'goal-create' && action === 'tutorial-goal-create' && targetId === TUTORIAL_NEW_GOAL_ID) return true
+  if (session.step === 'goal-link' && action === 'tutorial-goal-link' && targetId === TUTORIAL_INTAKE_BATCH_ID) return true
   if (session.step === 'execute-complete' && action === 'execute-task' && targetId === TUTORIAL_EXECUTE_ASSIGNMENT_ID) return true
   if (session.step === 'execute-partial' && action === 'execute-task' && targetId === TUTORIAL_PARTIAL_ASSIGNMENT_ID) return true
   return false
@@ -395,6 +402,37 @@ function ensureParsedTutorialBatch(state: AppState, anchorDate: string, goalId?:
   state.intakeBatches = [...state.intakeBatches.filter(item => item.id !== TUTORIAL_INTAKE_BATCH_ID), batch]
 }
 
+function tutorialNewGoal(anchorDate: string): Goal {
+  const now = stamp(anchorDate, '13')
+  return {
+    id: TUTORIAL_NEW_GOAL_ID,
+    title: TUTORIAL_NEW_GOAL_TITLE,
+    description: '教程示例目标：把刚录入的一批新作业放进同一个完成目标。',
+    priority: 3,
+    desiredDate: shiftDate(anchorDate, 5),
+    latestDate: shiftDate(anchorDate, 7),
+    status: 'active',
+    completionConditions: [],
+    linkedTaskGroupIds: [],
+    linkedAssignmentIds: [],
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+function buildTutorialIntakePreparation(anchorDate: string, stage: 'parsed' | 'goal' | 'linked'): AppState {
+  const state = buildRepairedCheckpoint(anchorDate)
+  ensureParsedTutorialBatch(state, anchorDate)
+  if (stage !== 'parsed') {
+    state.goals = [...state.goals.filter(item => item.id !== TUTORIAL_NEW_GOAL_ID), tutorialNewGoal(anchorDate)]
+  }
+  if (stage === 'linked') {
+    const batch = state.intakeBatches.find(item => item.id === TUTORIAL_INTAKE_BATCH_ID)
+    if (batch) batch.taskGroups = batch.taskGroups.map(item => ({ ...item, goalIds: [TUTORIAL_NEW_GOAL_ID], updatedAt: stamp(anchorDate, '13') }))
+  }
+  return updateGoalAndGroupLifecycle(state)
+}
+
 function applyRepairedShape(state: AppState, anchorDate: string): AppState {
   const byId = new Map(state.assignments.map(item => [item.id, item]))
   const overdue = byId.get('tutorial-task-overdue')
@@ -441,6 +479,10 @@ function addCanonicalIntakeAssignments(state: AppState, anchorDate: string) {
   ]
   state.taskGroups.push(...definitions.map(item => item.group))
   state.assignments.push(...definitions.flatMap(item => item.tasks))
+  const commonGoal = tutorialNewGoal(anchorDate)
+  commonGoal.linkedTaskGroupIds = definitions.map(item => item.group.id)
+  commonGoal.completionConditions = definitions.map((item, index) => ({ id: `tutorial-new-condition-${index + 1}`, groupId: item.group.id, mode: 'all' as const }))
+  state.goals = [...state.goals.filter(item => item.id !== TUTORIAL_NEW_GOAL_ID), commonGoal]
   const reportGoalId = 'tutorial-auto-goal-report'
   state.goals = state.goals.filter(item => item.id !== reportGoalId)
   state.goals.push({
@@ -457,7 +499,7 @@ function addCanonicalIntakeAssignments(state: AppState, anchorDate: string) {
     updatedAt: now,
   })
 
-  const batch = buildTutorialIntakeBatch(anchorDate, true)
+  const batch = buildTutorialIntakeBatch(anchorDate, true, TUTORIAL_NEW_GOAL_ID)
   batch.status = 'applied'
   batch.updatedAt = now
   batch.taskGroups = batch.taskGroups.map((item, index) => ({
@@ -548,16 +590,14 @@ export function buildTutorialCheckpoint(step: TutorialStep, anchorDate: string):
   if (['repair-entry', 'repair-action', 'repair-preview'].includes(step)) return baseTutorialState(anchorDate)
   if (['repair-calendar', 'goal-existing'].includes(step)) return buildRepairedCheckpoint(anchorDate)
   if (['intake-entry', 'intake-source', 'intake-parse'].includes(step)) return ensureTutorialIntakeBatch(buildRepairedCheckpoint(anchorDate), anchorDate)
-  if (['intake-schedule', 'intake-preview'].includes(step)) {
-    const state = buildRepairedCheckpoint(anchorDate)
-    ensureParsedTutorialBatch(state, anchorDate)
-    return state
-  }
+  if (['tasks-intake', 'goal-create'].includes(step)) return buildTutorialIntakePreparation(anchorDate, 'parsed')
+  if (step === 'goal-link') return buildTutorialIntakePreparation(anchorDate, 'goal')
+  if (['intake-schedule', 'intake-preview'].includes(step)) return buildTutorialIntakePreparation(anchorDate, 'linked')
   if (['intake-calendar', 'execute-complete'].includes(step)) return buildScheduledCheckpoint(anchorDate)
   if (step === 'execute-partial') return buildCompleteCheckpoint(anchorDate)
   if (['review-entry', 'review-carry', 'review-preview'].includes(step)) return buildExecutedCheckpoint(anchorDate)
   if (['review-calendar', 'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview'].includes(step)) return buildReviewedCheckpoint(anchorDate)
-  if (['future-calendar', 'complete', 'free'].includes(step)) return buildTutorialFutureFrom(buildReviewedCheckpoint(anchorDate), anchorDate)
+  if (['future-calendar', 'stats-final', 'complete', 'free'].includes(step)) return buildTutorialFutureFrom(buildReviewedCheckpoint(anchorDate), anchorDate)
   return baseTutorialState(anchorDate)
 }
 
@@ -606,6 +646,22 @@ function hasParsedTutorialIntake(state: AppState) {
 }
 
 
+function hasTutorialNewGoal(state: AppState) {
+  return state.goals.some(goal => goal.id === TUTORIAL_NEW_GOAL_ID && goal.title === TUTORIAL_NEW_GOAL_TITLE && goal.status === 'active')
+}
+
+function hasLinkedTutorialIntake(state: AppState) {
+  const batch = tutorialBatch(state)
+  return Boolean(batch?.taskGroups.length === 4 && batch.taskGroups.every(item => item.goalIds.includes(TUTORIAL_NEW_GOAL_ID)))
+}
+
+function hasAppliedTutorialGoal(state: AppState) {
+  const batch = tutorialBatch(state)
+  const goal = state.goals.find(item => item.id === TUTORIAL_NEW_GOAL_ID)
+  const groupIds = batch?.taskGroups.map(item => item.appliedGroupId).filter((id): id is string => Boolean(id)) ?? []
+  return Boolean(goal && groupIds.length === 4 && groupIds.every(groupId => goal.linkedTaskGroupIds.includes(groupId) && goal.completionConditions.some(condition => condition.groupId === groupId)))
+}
+
 function hasAppliedTutorialIntake(state: AppState) {
   const batch = tutorialBatch(state)
   if (!batch || batch.status !== 'applied' || batch.taskGroups.some(item => !item.appliedAt)) return false
@@ -648,25 +704,28 @@ export function tutorialStateHealth(state: AppState, session: TutorialSession) {
   }
 
   if (['intake-entry', 'intake-source', 'intake-parse'].includes(session.step) && !tutorialBatch(state)) return { ok: false as const, reason: '教程录入批次缺失' }
-  if (['intake-schedule', 'intake-preview'].includes(session.step) && !hasParsedTutorialIntake(state)) return { ok: false as const, reason: '教程自然语言录入结果缺失' }
+  if (['tasks-intake', 'goal-create', 'goal-link', 'intake-schedule', 'intake-preview'].includes(session.step) && !hasParsedTutorialIntake(state)) return { ok: false as const, reason: '教程自然语言录入结果缺失' }
+  if (['goal-link', 'intake-schedule', 'intake-preview'].includes(session.step) && !hasTutorialNewGoal(state)) return { ok: false as const, reason: '教程新目标缺失' }
+  if (['intake-schedule', 'intake-preview'].includes(session.step) && !hasLinkedTutorialIntake(state)) return { ok: false as const, reason: '教程新任务尚未关联共同目标' }
 
-  if (['intake-calendar', 'execute-complete', 'execute-partial', 'review-entry', 'review-carry', 'review-preview', 'review-calendar', 'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'complete', 'free'].includes(session.step)) {
+  if (['intake-calendar', 'execute-complete', 'execute-partial', 'review-entry', 'review-carry', 'review-preview', 'review-calendar', 'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'stats-final', 'complete', 'free'].includes(session.step)) {
     if (!hasAppliedTutorialIntake(state)) return { ok: false as const, reason: '教程新增任务 checkpoint 缺失或未应用' }
+    if (!hasAppliedTutorialGoal(state)) return { ok: false as const, reason: '教程共同目标没有随任务排期建立正式关联' }
   }
 
-  if (['execute-partial', 'review-entry', 'review-carry', 'review-preview', 'review-calendar', 'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'complete', 'free'].includes(session.step)) {
+  if (['execute-partial', 'review-entry', 'review-carry', 'review-preview', 'review-calendar', 'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'stats-final', 'complete', 'free'].includes(session.step)) {
     const executed = state.assignments.find(item => item.id === TUTORIAL_EXECUTE_ASSIGNMENT_ID)
     if (executed?.status !== 'done' || executed.actualMinutes < 1 || executed.actualMinutes > 65 || executed.timeEntries.length === 0) return { ok: false as const, reason: '教程完整完成任务 checkpoint 异常' }
   }
 
-  if (['review-entry', 'review-carry', 'review-preview', 'review-calendar', 'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'complete', 'free'].includes(session.step)) {
+  if (['review-entry', 'review-carry', 'review-preview', 'review-calendar', 'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'stats-final', 'complete', 'free'].includes(session.step)) {
     const partial = state.assignments.find(item => item.id === TUTORIAL_PARTIAL_ASSIGNMENT_ID)
     if (partial?.status !== 'partial' || partial.progress <= 0 || partial.progress >= 100 || partial.actualMinutes <= 0) return { ok: false as const, reason: '教程部分完成任务 checkpoint 异常' }
   }
 
   if (['review-entry', 'review-carry', 'review-preview'].includes(session.step) && !hasReviewCarryCandidate(state, anchor)) return { ok: false as const, reason: '教程复盘没有可顺延的未完成任务' }
 
-  if (['review-calendar', 'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'complete', 'free'].includes(session.step)) {
+  if (['review-calendar', 'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'stats-final', 'complete', 'free'].includes(session.step)) {
     if (!state.reviewRecords.some(item => item.date === anchor)) return { ok: false as const, reason: '教程复盘 checkpoint 缺失' }
     if (state.assignments.some(item => item.scheduledDate === anchor && item.status !== 'done' && !item.locked)) return { ok: false as const, reason: '教程复盘后的未完成任务仍留在当天' }
   }
