@@ -181,3 +181,17 @@
 @media (max-width: 640px) {
   .tutorial-modal-coachmark-slot { padding: 0 12px 8px; }
 }
+
+
+/* v0.9.1 tutorial: mobile modal scroll safety */
+@media (max-width: 760px) {
+  .modal-card.modal-mobile-fullscreen .tutorial-modal-coachmark-slot {
+    max-height: min(30svh, 220px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .modal-card.modal-mobile-fullscreen .modal-body {
+    touch-action: pan-y;
+  }
+}

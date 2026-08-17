@@ -17,7 +17,7 @@ import { cloneActiveState, hydratePortableState } from './lib/state'
 import { buildBlankState, buildGuestDemoState, normalizeState } from './lib/seed'
 import { deleteRecoverySnapshot, listRecoverySnapshots, loadLocalState, preserveRecoverySnapshot, type DataRecoverySnapshot } from './lib/db'
 import {
-  TUTORIAL_EXECUTE_ASSIGNMENT_ID, TUTORIAL_PARTIAL_ASSIGNMENT_ID, TUTORIAL_INTAKE_BATCH_ID, TUTORIAL_NAMESPACE, advanceTutorialSession, buildTutorialCheckpoint, buildTutorialState,
+  TUTORIAL_EXECUTE_ASSIGNMENT_ID, TUTORIAL_PARTIAL_ASSIGNMENT_ID, TUTORIAL_NAMESPACE, advanceTutorialSession, buildTutorialCheckpoint, buildTutorialState,
   clearTutorialSession, createTutorialSession, ensureTutorialIntakeBatch, isTutorialNamespace, readTutorialSession, recoverTutorialSession,
   tutorialAcceptsEvent, tutorialAllowsPage, tutorialCompleted, tutorialIssueCount, tutorialNaturalLanguageText, tutorialPageForStep, tutorialRecoveryStep, tutorialStateHealth, markTutorialOfferDismissed,
   writeTutorialSession, type TutorialSession, type TutorialStep,
@@ -1040,9 +1040,9 @@ export default function App() {
       'intake-entry': { target: 'tutorial-natural-input', text: '现实里可以直接把一批事情这样告诉计划器。现在试着让它识别。' },
       'intake-source': { target: 'tutorial-parse', text: '示例文字已经填好且保持只读。点“解析并预览”。' },
       'intake-parse': { target: 'tutorial-import-confirm', text: '自然语言已经变成结构化任务。确认后，它们只会进入待排期区。' },
-      'tasks-intake': { target: 'tutorial-task-intake-list', text: '现在任务已经记下来了，但还没有进入日历。', actionLabel: '继续：新建目标', onAction: tutorialIntakeSeen },
+      'tasks-intake': { text: '现在任务已经记下来了，但还没有进入日历。', actionLabel: '继续：新建目标', onAction: tutorialIntakeSeen },
       'goal-create': { target: 'tutorial-goal-create', text: '现在给刚才那批任务一个共同的完成目标。' },
-      'goal-link': { target: 'tutorial-goal-link', text: '目标会影响这些任务之后的排期和风险判断。' },
+      'goal-link': { target: 'tutorial-goal-link-field|tutorial-goal-link-edit', text: '按真实录入流程关联目标：依次编辑高亮的待排期任务，在“加入目标”中勾选刚创建的目标并保存。' },
       'intake-schedule': { target: 'schedule-intake', text: '任务和目标都准备好了，现在让计划器安排时间。' },
       'intake-preview': { target: 'proposal-primary', text: '确认后，这些任务才正式进入日历。' },
       'intake-calendar': { text: '刚才录入的任务，现在已经真正进入计划。', actionLabel: '继续：执行今天', onAction: () => advanceTutorialStable('intake-calendar', 'execute-complete') },
@@ -1057,8 +1057,7 @@ export default function App() {
       'future-entry': { target: 'replan-center', text: '没有出问题，也可以主动改变后面的节奏。' },
       'future-action': { target: 'future-submit|future-replan', text: '四种偏好都保留显示。选择一个方向，生成一次未来重排。' },
       'future-preview': { target: 'proposal-primary', text: '这次不是救火。对比未来安排前后，再确认应用。' },
-      'future-calendar': { text: '这次不是救火，而是主动重新规划后面的节奏。', actionLabel: '继续：再看统计', onAction: () => advanceTutorialStable('future-calendar', 'stats-final') },
-      'stats-final': { text: '最后再看一次统计：计划变化和真实执行会一起留在这里，方便之后继续调整。', actionLabel: '完成体验', onAction: () => advanceTutorialStable('stats-final', 'complete') },
+      'future-calendar': { text: '这次不是救火，而是主动重新规划后面的节奏。', actionLabel: '完成体验', onAction: () => advanceTutorialStable('future-calendar', 'complete') },
       complete: { text: '你已经走完一次真实的计划循环。\n\n目标 → 录入 → 排期 → 执行 → 复盘 → 调整', actionLabel: '开始我的计划', onAction: () => { void exitTutorial(true) }, secondaryLabel: '继续看看', onSecondary: () => { const updated = advanceTutorialOnly('complete', 'free'); if (updated) setPage('today') } },
     }
     const headlines: Partial<Record<TutorialStep, string>> = {
@@ -1088,12 +1087,11 @@ export default function App() {
       'future-action': '选择未来节奏',
       'future-preview': '对比未来重排',
       'future-calendar': '看主动重排结果',
-      'stats-final': '回到统计看结果',
       complete: '完整计划循环走完了',
     }
     const phase = tutorialStepValue.startsWith('repair') ? '01 · 修复计划'
-      : ['goal-existing', 'goal-create', 'goal-link'].includes(tutorialStepValue) ? '02 · 目标'
-        : tutorialStepValue === 'tasks-intake' || tutorialStepValue.startsWith('intake') ? '03 · 录入与排期'
+      : ['goal-existing', 'goal-create'].includes(tutorialStepValue) ? '02 · 目标'
+        : tutorialStepValue === 'goal-link' || tutorialStepValue === 'tasks-intake' || tutorialStepValue.startsWith('intake') ? '03 · 录入与排期'
           : tutorialStepValue.startsWith('execute') ? '04 · 执行'
             : tutorialStepValue.startsWith('review') ? '05 · 复盘'
               : tutorialStepValue.startsWith('stats') ? '06 · 统计'
@@ -1139,11 +1137,11 @@ export default function App() {
         <div className="page-content">
           {page === 'today' && <TodayPage onNavigate={navigate} onPrepared={openPrepared} onAddTask={date => openAddTask(date, 'prefer-date')} onReview={openReview} todayOverride={tutorialSession?.anchorDate} tutorialMode={tutorialRestricted} tutorialStep={tutorialStepValue} tutorialTargetId={tutorialStepValue === 'execute-partial' ? TUTORIAL_PARTIAL_ASSIGNMENT_ID : TUTORIAL_EXECUTE_ASSIGNMENT_ID} onTutorialTaskRecorded={mode => { if (mode === 'complete') advanceTutorialStable('execute-complete', 'execute-partial'); else advanceTutorialStable('execute-partial', 'review-entry') }} onTutorialBlocked={tutorialNotice}/>}
           {page === 'calendar' && <CalendarPage onPrepared={openPrepared} onOpenAdjustment={date => openAdjustment(date, 'current-conflicts')} onAddTask={date => openAddTask(date, 'prefer-date')} tutorialMode={tutorialRestricted} tutorialHighlightDates={tutorialSession?.highlightDates} onTutorialBlocked={tutorialNotice}/>}
-          {page === 'tasks' && <TasksPage onOpenIntake={() => navigate('intake')} onPrepared={openPrepared} tutorialMode={tutorialRestricted} tutorialStep={tutorialStepValue} onTutorialIntakeSeen={tutorialIntakeSeen} onTutorialBlocked={tutorialNotice}/>}
+          {page === 'tasks' && <TasksPage onOpenIntake={() => navigate('intake')} onPrepared={openPrepared} tutorialMode={tutorialRestricted} onTutorialBlocked={tutorialNotice}/>}
           <Suspense fallback={<div className="page-loading"><div className="spinner"/><p>正在载入页面……</p></div>}>
-            {page === 'intake' && <IntakePage onPrepared={openPrepared} onNavigate={target => navigate(target)} onAddTask={batchId => openAddTask(undefined, 'system', batchId)} addRequest={intakeAddRequest} onAddRequestHandled={() => setIntakeAddRequest(undefined)} tutorialMode={tutorialRestricted && tutorialPageForStep(tutorialStepValue!) === 'intake'} tutorialStep={tutorialStepValue} tutorialText={tutorialSession ? tutorialNaturalLanguageText(tutorialSession.anchorDate) : undefined} onTutorialNaturalOpen={() => advanceTutorialStable('intake-entry', 'intake-source')} onTutorialParsed={() => advanceTutorialStable('intake-source', 'intake-parse')} onTutorialImported={advanceTutorialAfterImport} onStartTutorial={() => setTutorialOfferOpen(true)} onTutorialBlocked={tutorialNotice}/>}
-            {page === 'goals' && <GoalsPage onPrepared={openPrepared} tutorialMode={tutorialRestricted && tutorialPageForStep(tutorialStepValue!) === 'goals'} tutorialStep={tutorialStepValue} onTutorialExistingViewed={() => { void enterTutorialIntake() }} onTutorialGoalCreated={tutorialGoalCreated} onTutorialGoalLinked={tutorialGoalLinked} onTutorialBlocked={tutorialNotice}/>}
-            {page === 'stats' && <StatsPage onOpenReplan={date => openAdjustment(date, 'current-conflicts')} tutorialMode={tutorialRestricted && (tutorialStepValue === 'stats' || tutorialStepValue === 'stats-detail' || tutorialStepValue === 'stats-final')} onTutorialExpanded={tutorialStatsExpanded}/>}
+            {page === 'intake' && <IntakePage onPrepared={openPrepared} onNavigate={target => navigate(target)} onAddTask={batchId => openAddTask(undefined, 'system', batchId)} addRequest={intakeAddRequest} onAddRequestHandled={() => setIntakeAddRequest(undefined)} tutorialMode={tutorialRestricted && tutorialPageForStep(tutorialStepValue!) === 'intake'} tutorialStep={tutorialStepValue} tutorialText={tutorialSession ? tutorialNaturalLanguageText(tutorialSession.anchorDate) : undefined} onTutorialNaturalOpen={() => advanceTutorialStable('intake-entry', 'intake-source')} onTutorialParsed={() => advanceTutorialStable('intake-source', 'intake-parse')} onTutorialImported={advanceTutorialAfterImport} onTutorialGoalLinked={tutorialGoalLinked} onStartTutorial={() => setTutorialOfferOpen(true)} onTutorialBlocked={tutorialNotice}/>}
+            {page === 'goals' && <GoalsPage onPrepared={openPrepared} tutorialMode={tutorialRestricted && tutorialPageForStep(tutorialStepValue!) === 'goals'} tutorialStep={tutorialStepValue} onTutorialExistingViewed={() => { void enterTutorialIntake() }} onTutorialGoalCreated={tutorialGoalCreated} onTutorialBlocked={tutorialNotice}/>}
+            {page === 'stats' && <StatsPage onOpenReplan={date => openAdjustment(date, 'current-conflicts')} tutorialMode={tutorialRestricted && (tutorialStepValue === 'stats' || tutorialStepValue === 'stats-detail')} onTutorialExpanded={tutorialStatsExpanded}/>}
             {page === 'export' && <ExportPage onNavigate={target => navigate(target)}/>}
             {page === 'guide' && <GuidePage onNavigate={target => navigate(target)} onStartTutorial={() => setTutorialOfferOpen(true)}/>}
           </Suspense>
@@ -2235,7 +2233,7 @@ function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask, tutorialMode = 
   </>
 }
 
-function TasksPage({ onOpenIntake, onPrepared, tutorialMode = false, tutorialStep, onTutorialIntakeSeen, onTutorialBlocked }: { onOpenIntake: () => void; onPrepared: (state: AppState, event: PlanChangeEvent) => void; tutorialMode?: boolean; tutorialStep?: TutorialStep; onTutorialIntakeSeen?: () => void; onTutorialBlocked?: (message?: string) => void }) {
+function TasksPage({ onOpenIntake, onPrepared, tutorialMode = false, onTutorialBlocked }: { onOpenIntake: () => void; onPrepared: (state: AppState, event: PlanChangeEvent) => void; tutorialMode?: boolean; onTutorialBlocked?: (message?: string) => void }) {
   const { state, editTaskGroup, updateAssignment, finishAssignment, prepareAssignmentDelete, prepareTaskGroupEdit, prepareTaskGroupDelete, prepareDurationChange } = useApp()
   const [mode, setMode] = useState<'tasks' | 'groups'>('tasks')
   const [search, setSearch] = useState('')
@@ -2254,7 +2252,6 @@ function TasksPage({ onOpenIntake, onPrepared, tutorialMode = false, tutorialSte
   const groupMap = useMemo(() => new Map(state.taskGroups.map(group => [group.id, group])), [state.taskGroups])
   const subjects = Array.from(new Set([...state.settings.customSubjects, ...state.taskGroups.map(group => group.subject)])).sort()
   const today = todayISO()
-  const tutorialPendingItems = tutorialMode && tutorialStep === 'tasks-intake' ? state.intakeBatches.find(batch => batch.id === TUTORIAL_INTAKE_BATCH_ID)?.taskGroups.filter(item => !item.appliedAt) ?? [] : []
   const query = search.trim().toLowerCase()
   const groups = state.taskGroups.filter(group => !group.hiddenStandalone && (showHidden || !group.hidden) && (priority === 'all' || group.priority === priority) && (subject === 'all' || group.subject === subject) && (`${group.subject}${group.title}${group.notes ?? ''}`.toLowerCase().includes(query)))
   const taskCounts = useMemo(() => {
@@ -2400,11 +2397,6 @@ function TasksPage({ onOpenIntake, onPrepared, tutorialMode = false, tutorialSte
       <div className="tasks-toolbar-note"><Inbox size={17}/><span>添加新任务请前往“录入”</span><button className={`text-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.() : onOpenIntake()}>打开录入</button></div>
     </section>
 
-    {tutorialMode && tutorialStep === 'tasks-intake' && <section className="section-block" data-tutorial-target="tutorial-task-intake-list">
-      <div className="section-title"><div><h2>刚录入的任务</h2><p>这些内容已经记下来了，但还没有正式日期。录入 ≠ 排期。</p></div><span className="status-pill">待排期 {tutorialPendingItems.length} 组</span></div>
-      <div className="assignment-list">{tutorialPendingItems.map(item => <article className="assignment-list-card needs-attention" key={item.id}><div className="assignment-list-main"><div><strong>{item.title}{item.quantity > 1 ? ` ×${item.quantity}` : ''}</strong><span>{item.subject} · 每项 {item.unitMinutes} 分钟</span></div><span className="status-pill">待排期</span></div></article>)}</div>
-      <div className="button-wrap"><button className="primary-button" data-tutorial-target="tutorial-tasks-continue" onClick={onTutorialIntakeSeen}>继续：新建目标</button></div>
-    </section>}
 
     {mode === 'tasks' ? <>
       <div className="task-inbox-summary"><div><strong>任务收件箱</strong><span>待处理：未排期或已逾期的任务。</span></div><div><b>{taskCounts.attention}</b><small>项待处理</small></div></div>

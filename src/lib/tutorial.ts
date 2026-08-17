@@ -53,11 +53,11 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   'repair-entry', 'repair-action', 'repair-preview', 'repair-calendar', 'goal-existing',
   'intake-entry', 'intake-source', 'intake-parse', 'tasks-intake', 'goal-create', 'goal-link', 'intake-schedule', 'intake-preview', 'intake-calendar',
   'execute-complete', 'execute-partial', 'review-entry', 'review-carry', 'review-preview', 'review-calendar',
-  'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'stats-final', 'complete', 'free',
+  'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'complete', 'free',
 ]
 
 function isTutorialStep(value: unknown): value is TutorialStep {
-  return typeof value === 'string' && TUTORIAL_STEPS.includes(value as TutorialStep)
+  return typeof value === 'string' && (TUTORIAL_STEPS.includes(value as TutorialStep) || value === 'stats-final')
 }
 function isISODate(value: unknown): value is string {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T12:00:00`))
@@ -88,6 +88,7 @@ const transientRecovery: Partial<Record<TutorialStep, TutorialStep>> = {
   'review-preview': 'review-entry',
   'future-action': 'future-entry',
   'future-preview': 'future-entry',
+  'stats-final': 'complete',
 }
 
 function storage() {
@@ -202,9 +203,10 @@ export type TutorialPage = 'today' | 'calendar' | 'tasks' | 'intake' | 'goals' |
 export function tutorialPageForStep(step: TutorialStep): TutorialPage {
   if (['repair-calendar', 'intake-calendar', 'review-calendar', 'future-calendar'].includes(step)) return 'calendar'
   if (step === 'tasks-intake') return 'tasks'
-  if (['goal-existing', 'goal-create', 'goal-link'].includes(step)) return 'goals'
-  if (['intake-entry', 'intake-source', 'intake-parse', 'intake-schedule', 'intake-preview'].includes(step)) return 'intake'
-  if (['stats', 'stats-detail', 'stats-final'].includes(step)) return 'stats'
+  if (['goal-existing', 'goal-create'].includes(step)) return 'goals'
+  if (['intake-entry', 'intake-source', 'intake-parse', 'goal-link', 'intake-schedule', 'intake-preview'].includes(step)) return 'intake'
+  if (['stats', 'stats-detail'].includes(step)) return 'stats'
+  if (step === 'stats-final') return 'today'
   return 'today'
 }
 

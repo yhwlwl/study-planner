@@ -4,27 +4,27 @@
     "p95_500_ms": 5000,
     "p95_1000_ms": 20000
   },
-  "generatedAt": "2026-08-16T02:24:39.598Z",
+  "generatedAt": "2026-08-17T08:22:41.914Z",
   "environment": {
-    "platform": "win32",
-    "node": "v24.13.0",
-    "cpu": "Intel(R) Core(TM) i7-7500U CPU @ 2.70GHz",
+    "platform": "linux",
+    "node": "v22.23.2",
+    "cpu": "AMD EPYC 9V74 80-Core Processor",
     "logicalCpus": 4,
-    "totalMemoryGb": 7.9
+    "totalMemoryGb": 15.6
   },
   "cases": [
     {
       "count": 100,
       "days": 30,
       "samplesMs": [
-        3.23,
-        5.29,
-        4.23,
-        2.76,
-        3.24
+        2.49,
+        1.53,
+        3.48,
+        1.79,
+        1.63
       ],
-      "p50Ms": 3.24,
-      "p95Ms": 5.29,
+      "p50Ms": 1.79,
+      "p95Ms": 3.48,
       "maxUnscheduled": 0,
       "stable": true
     },
@@ -32,14 +32,14 @@
       "count": 500,
       "days": 90,
       "samplesMs": [
-        24.92,
-        23.32,
-        24.65,
-        28,
-        31.04
+        7.83,
+        9.5,
+        7.71,
+        10.07,
+        10.5
       ],
-      "p50Ms": 24.92,
-      "p95Ms": 31.04,
+      "p50Ms": 9.5,
+      "p95Ms": 10.5,
       "maxUnscheduled": 0,
       "stable": true
     },
@@ -47,14 +47,14 @@
       "count": 1000,
       "days": 180,
       "samplesMs": [
-        33.95,
-        43.44,
-        36.66,
-        38.89,
-        33.43
+        16.84,
+        15.74,
+        16.98,
+        16.86,
+        15.21
       ],
-      "p50Ms": 36.66,
-      "p95Ms": 43.44,
+      "p50Ms": 16.84,
+      "p95Ms": 16.98,
       "maxUnscheduled": 0,
       "stable": true
     }
@@ -63,7 +63,7 @@
     "totalTasks": 500,
     "existingTasks": 450,
     "newTasks": 50,
-    "elapsedMs": 155,
+    "elapsedMs": 66.93,
     "movedExisting": 0
   }
 }

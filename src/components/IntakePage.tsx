@@ -16,7 +16,7 @@ import { Modal } from './Modal'
 import { NumericInput } from './NumericInput'
 import { SingleTaskDialog } from './SingleTaskDialog'
 import type { TaskCreationKind } from './AddTaskDialog'
-import type { TutorialStep } from '../lib/tutorial'
+import { TUTORIAL_NEW_GOAL_ID, type TutorialStep } from '../lib/tutorial'
 
 const priorities: Array<{ value: Priority; label: string }> = [
   { value: 5, label: '核心' }, { value: 3, label: '高' }, { value: 2, label: '中' }, { value: 1, label: '低' }, { value: 0, label: '可选' },
@@ -37,7 +37,7 @@ function emptyDraft(state: AppState): TaskGroupDraft {
   }
 }
 
-export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAddRequestHandled, tutorialMode = false, tutorialStep, tutorialText, onTutorialNaturalOpen, onTutorialParsed, onTutorialImported, onStartTutorial, onTutorialBlocked }: {
+export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAddRequestHandled, tutorialMode = false, tutorialStep, tutorialText, onTutorialNaturalOpen, onTutorialParsed, onTutorialImported, onTutorialGoalLinked, onStartTutorial, onTutorialBlocked }: {
   onPrepared: (state: AppState, event: PlanChangeEvent) => void
   onNavigate: (page: 'today' | 'tasks' | 'intake' | 'goals' | 'settings') => void
   onAddTask: (batchId?: string) => void
@@ -49,6 +49,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
   onTutorialNaturalOpen?: () => void
   onTutorialParsed?: () => void
   onTutorialImported?: () => void
+  onTutorialGoalLinked?: () => void
   onStartTutorial?: () => void
   onTutorialBlocked?: (message?: string) => void
 }) {
@@ -80,6 +81,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
   const tutorialNaturalEntry = tutorialMode && (tutorialStep === 'intake-source' || tutorialStep === 'intake-parse')
   const tutorialNaturalAllowed = tutorialNaturalChoice || tutorialNaturalEntry
   const tutorialCanSchedule = tutorialMode && tutorialStep === 'intake-schedule'
+  const tutorialCanLinkGoal = tutorialMode && tutorialStep === 'goal-link'
 
   useEffect(() => {
     if (activeId && activeBatches.some(batch => batch.id === activeId)) return
@@ -97,6 +99,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
     setPasteOpen(true)
   }, [tutorialNaturalEntry, tutorialStep, active?.id, tutorialText])
   const pendingItems = active?.taskGroups.filter(item => !item.appliedAt) ?? []
+  const tutorialUnlinkedItem = tutorialCanLinkGoal ? pendingItems.find(item => item.kind !== 'single' && !item.goalIds.includes(TUTORIAL_NEW_GOAL_ID)) : undefined
   const summary = intakeSummary(active?.taskGroups ?? [])
   const capacity = dateRange(state.settings.startDate, state.settings.endDate)
     .reduce((sum, date) => sum + getCapacity(state, date) * state.settings.targetUtilization, 0)
@@ -318,6 +321,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
               <tbody>{pendingItems.map(item => {
                 const issues = intakeDraftIssues(item, state)
                 const duplicate = duplicateSignatures.has(intakeDraftSignature(item))
+                const tutorialCanEditGoalLinkItem = tutorialCanLinkGoal && tutorialUnlinkedItem?.id === item.id && item.kind !== 'single'
                 return <tr key={item.id} id={`intake-item-${item.id}`} className={issues.length ? 'has-error' : ''}>
                   <td><input aria-label={`选择 ${item.title}`} type="checkbox" disabled={tutorialMode} checked={selectedIds.includes(item.id)} onChange={event => setSelectedIds(current => event.target.checked ? [...new Set([...current, item.id])] : current.filter(id => id !== item.id))}/></td>
                   <td><strong>{item.title || (item.kind === 'single' ? '未命名独立任务' : '未命名任务组')}</strong><small><span className="intake-kind-label">{item.kind === 'single' ? '独立任务' : '任务组'}</span>{item.subject}，{priorities.find(option => option.value === item.priority)?.label ?? item.priority}优先级{item.latestDate ? `，最晚 ${item.latestDate}` : item.desiredDate ? `，期望 ${item.desiredDate}` : ''}</small></td>
@@ -325,7 +329,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
                   <td>{item.unitMinutes} 分钟</td>
                   <td>{item.kind === 'single' ? '独立任务' : item.recurring ? '重复任务' : item.allowSplit ? `可拆分标记 · 建议 ${item.splitSessionMinutes ?? 30} 分钟` : item.dailyMax ? `每天最多 ${item.dailyMax} 项` : '普通任务组'}</td>
                   <td>{issues.length ? <span className="danger-text">{issues.join('；')}</span> : duplicate ? <span className="warning-text">疑似重复</span> : <span className="success-text">已保存</span>}</td>
-                  <td><div className="row-actions"><button className={`icon-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} aria-label={`编辑 ${item.title}`} onClick={() => { if (tutorialMode) { onTutorialBlocked?.('教程中预置任务保持不变'); return }; setDialogBatchId(active.id); if (item.kind === 'single') { setEditingSingle(item); setSingleDialogOpen(true) } else { setEditingItem(item); setDialogOpen(true) } }}><Pencil size={16}/></button><button className={`icon-button danger-icon ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} aria-label={`删除 ${item.title}`} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中预置任务不能删除') : removeIntakeTaskGroup(active.id, item.id)}><X size={16}/></button></div></td>
+                  <td><div className="row-actions"><button data-tutorial-target={tutorialCanEditGoalLinkItem ? 'tutorial-goal-link-edit' : undefined} className={`icon-button ${tutorialMode && !tutorialCanEditGoalLinkItem ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode && !tutorialCanEditGoalLinkItem || undefined} aria-label={`编辑 ${item.title}`} onClick={() => { if (tutorialMode && !tutorialCanEditGoalLinkItem) { onTutorialBlocked?.('教程中请按顺序关联高亮的待排期任务'); return }; setDialogBatchId(active.id); if (item.kind === 'single') { setEditingSingle(item); setSingleDialogOpen(true) } else { setEditingItem(item); setDialogOpen(true) } }}><Pencil size={16}/></button><button className={`icon-button danger-icon ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} aria-label={`删除 ${item.title}`} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中预置任务不能删除') : removeIntakeTaskGroup(active.id, item.id)}><X size={16}/></button></div></td>
                 </tr>
               })}</tbody>
             </table>
@@ -344,18 +348,26 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
 
     <IntakeTaskDialog
       key={`${active?.id ?? 'none'}-${editingItem?.id ?? 'new'}`}
-      open={!tutorialMode && dialogOpen}
+      open={dialogOpen && (!tutorialMode || tutorialCanLinkGoal)}
       state={state}
       initial={editingItem ?? active?.formDraft as TaskGroupDraft | undefined}
+      tutorialGoalId={tutorialCanLinkGoal ? TUTORIAL_NEW_GOAL_ID : undefined}
       onDraftChange={persistTaskGroupDraft}
       onClose={() => { setDialogOpen(false); setEditingItem(undefined); setDialogBatchId(undefined) }}
       onSave={(draft, keepOpen) => {
         const targetBatchId = dialogBatchId ?? active?.id
         if (!targetBatchId) return
+        if (tutorialCanLinkGoal && editingItem && !draft.goalIds.includes(TUTORIAL_NEW_GOAL_ID)) {
+          onTutorialBlocked?.('请先在“加入目标”中勾选刚创建的目标，再保存修改')
+          return
+        }
+        const completesTutorialGoalLink = Boolean(tutorialCanLinkGoal && editingItem
+          && pendingItems.every(item => item.id === editingItem.id ? draft.goalIds.includes(TUTORIAL_NEW_GOAL_ID) : item.goalIds.includes(TUTORIAL_NEW_GOAL_ID)))
         if (editingItem) updateIntakeTaskGroup(targetBatchId, editingItem.id, draft)
         else addIntakeTaskGroup(targetBatchId, draft)
         updateIntakeBatch(targetBatchId, { formDraft: undefined })
         if (!keepOpen || editingItem) { setDialogOpen(false); setEditingItem(undefined); setDialogBatchId(undefined) }
+        if (completesTutorialGoalLink) onTutorialGoalLinked?.()
       }}
     />
 
@@ -451,10 +463,11 @@ function ImportPreview({ result, onChange }: { result: IntakeImportResult; onCha
   </div>
 }
 
-function IntakeTaskDialog({ open, state, initial, onDraftChange, onClose, onSave }: {
+function IntakeTaskDialog({ open, state, initial, tutorialGoalId, onDraftChange, onClose, onSave }: {
   open: boolean
   state: AppState
   initial?: IntakeTaskGroupDraft | Partial<TaskGroupDraft>
+  tutorialGoalId?: string
   onDraftChange?: (draft: Partial<TaskGroupDraft>) => void
   onClose: () => void
   onSave: (draft: TaskGroupDraft, keepOpen: boolean) => void
@@ -514,7 +527,7 @@ function IntakeTaskDialog({ open, state, initial, onDraftChange, onClose, onSave
         {state.taskGroups.length > 0 && <fieldset className="field span-2 prerequisite-picker"><legend>前置任务组（可选）</legend>{state.taskGroups.filter(group => group.status !== 'archived').map(group => <label key={group.id}><input type="checkbox" checked={(form.prerequisiteGroupIds ?? []).includes(group.id)} onChange={event => patch('prerequisiteGroupIds', event.target.checked ? [...new Set([...(form.prerequisiteGroupIds ?? []), group.id])] : (form.prerequisiteGroupIds ?? []).filter(id => id !== group.id))}/><span>{group.subject}，{group.title}</span></label>)}</fieldset>}
       </div></details>}
 
-      {state.goals.length > 0 && <fieldset className="field span-2 goal-link-field"><legend>加入目标（可选）</legend>{state.goals.filter(goal => goal.status !== 'archived').map(goal => <label key={goal.id}><input type="checkbox" checked={form.goalIds.includes(goal.id)} onChange={event => patch('goalIds', event.target.checked ? [...new Set([...form.goalIds, goal.id])] : form.goalIds.filter(id => id !== goal.id))}/><span>{goal.title}，最晚 {goal.latestDate}</span></label>)}</fieldset>}
+      {state.goals.length > 0 && <fieldset data-tutorial-target={tutorialGoalId ? 'tutorial-goal-link-field' : undefined} className="field span-2 goal-link-field"><legend>加入目标（可选）</legend>{state.goals.filter(goal => goal.status !== 'archived').map(goal => <label key={goal.id}><input type="checkbox" checked={form.goalIds.includes(goal.id)} onChange={event => patch('goalIds', event.target.checked ? [...new Set([...form.goalIds, goal.id])] : form.goalIds.filter(id => id !== goal.id))}/><span>{goal.title}，最晚 {goal.latestDate}</span></label>)}</fieldset>}
       <label className="field span-2"><span>备注</span><textarea rows={3} value={form.notes ?? ''} onChange={event => patch('notes', event.target.value || undefined)}/></label>
       <div className="form-note span-2">保存只会更新当前录入批次，不会生成排期或改变正式计划。</div>
     </div>

@@ -907,7 +907,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     batch.status = 'editing'
     batch.lastEditedItemId = itemId
     batch.updatedAt = nowISO()
-  }, { history: false }), [commit])
+  }, { history: false, tutorialAction: 'tutorial-goal-link', tutorialTargetId: batchId }), [commit])
 
   const removeIntakeTaskGroup = useCallback((batchId: string, itemId: string) => commit(draft => {
     const batch = draft.intakeBatches.find(item => item.id === batchId)

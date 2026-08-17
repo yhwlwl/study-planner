@@ -81,7 +81,7 @@ function futureEvent(state: ReturnType<typeof buildTutorialCheckpoint>, preferen
 const stableSteps: TutorialStep[] = [
   'repair-entry', 'repair-calendar', 'goal-existing', 'intake-entry', 'tasks-intake', 'goal-create', 'goal-link',
   'intake-schedule', 'intake-calendar', 'execute-complete', 'execute-partial', 'review-entry', 'review-calendar',
-  'stats', 'stats-detail', 'future-entry', 'future-calendar', 'stats-final', 'complete', 'free',
+  'stats', 'stats-detail', 'future-entry', 'future-calendar', 'complete', 'free',
 ]
 
 describe('tutorial v4 flow and checkpoints', () => {
@@ -90,14 +90,15 @@ describe('tutorial v4 flow and checkpoints', () => {
       'repair-entry','repair-action','repair-preview','repair-calendar','goal-existing',
       'intake-entry','intake-source','intake-parse','tasks-intake','goal-create','goal-link','intake-schedule','intake-preview','intake-calendar',
       'execute-complete','execute-partial','review-entry','review-carry','review-preview','review-calendar',
-      'stats','stats-detail','future-entry','future-action','future-preview','future-calendar','stats-final','complete','free',
+      'stats','stats-detail','future-entry','future-action','future-preview','future-calendar','complete','free',
     ])
     expect(tutorialPageForStep('repair-calendar')).toBe('calendar')
     expect(tutorialPageForStep('goal-existing')).toBe('goals')
     expect(tutorialPageForStep('intake-entry')).toBe('intake')
     expect(tutorialPageForStep('tasks-intake')).toBe('tasks')
     expect(tutorialPageForStep('goal-create')).toBe('goals')
-    expect(tutorialPageForStep('stats-final')).toBe('stats')
+    expect(tutorialPageForStep('goal-link')).toBe('intake')
+    expect(recoverTutorialSession(session('stats-final')).step).toBe('complete')
   })
 
   it('builds a healthy deterministic checkpoint for every stable stage', () => {
@@ -192,7 +193,6 @@ describe('tutorial v4 flow and checkpoints', () => {
     const stats = buildTutorialCheckpoint('stats', anchor)
     expect(stats.reviewRecords.some(item => item.date === anchor)).toBe(true)
     expect(stats.assignments.some(item => item.scheduledDate === anchor && item.status !== 'done' && !item.locked)).toBe(false)
-    expect(buildTutorialCheckpoint('stats-final', anchor).reviewRecords.some(item => item.date === anchor)).toBe(true)
     resetNowProvider()
   })
 
