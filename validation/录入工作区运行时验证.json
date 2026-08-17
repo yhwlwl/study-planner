@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-17T08:47:17.301Z",
+  "generatedAt": "2026-08-17T09:01:08.311Z",
   "checks": {
     "continuousIntakePersists": true,
     "formalPlanRemainsUntouched": true,
@@ -8,7 +8,7 @@
   },
   "measurements": {
     "count": 1000,
-    "p95Ms": 0.012,
-    "maxMs": 0.525
+    "p95Ms": 0.01,
+    "maxMs": 0.489
   }
 }

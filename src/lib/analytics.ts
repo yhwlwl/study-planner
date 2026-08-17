@@ -1,4 +1,4 @@
-const APP_VERSION = '0.9.0'
+import { APP_VERSION } from './constants'
 const SESSION_KEY = 'study-planner:visit-session-id'
 const VISITOR_KEY = 'study-planner:visitor-id'
 const ATTRIBUTION_KEY = 'study-planner:first-attribution-v1'
