@@ -92,8 +92,28 @@ async function resolveUserId(userId?: string): Promise<string> {
   return session.user.id
 }
 
+/**
+ * v0.8/v0.9 过渡期曾有快照写入旧的 manual-intent 别名 `soft`。
+ * 当前领域模型只保留 normal/manual/locked，因此在云端入口做一次无损兼容归一，
+ * 让旧快照能够进入后续 normalizeState；未知值仍交给严格 schema 拒绝。
+ */
+function normalizeLegacyCloudSnapshot(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
+  const snapshot = raw as Record<string, unknown>
+  if (!Array.isArray(snapshot.assignments)) return raw
+  let changed = false
+  const assignments = snapshot.assignments.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return item
+    const assignment = item as Record<string, unknown>
+    if (assignment.intentStrength !== 'soft') return item
+    changed = true
+    return { ...assignment, intentStrength: 'manual' }
+  })
+  return changed ? { ...snapshot, assignments } : raw
+}
+
 function validateCloudSnapshot(raw: unknown, revision: unknown): CloudSnapshot {
-  const validation = validateStateInput(raw, 'cloud')
+  const validation = validateStateInput(normalizeLegacyCloudSnapshot(raw), 'cloud')
   if (!validation.success || !validation.data) throw new Error(`云端快照结构无效：${validation.issues.slice(0, 3).join('；')}`)
   return { state: validation.data, revision: Math.max(1, Number(revision) || 1) }
 }

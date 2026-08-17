@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { buildBlankState } from '../src/lib/seed'
+import { buildBlankState, buildGuestDemoState } from '../src/lib/seed'
 
 const mocked = vi.hoisted(() => {
   const auth = {
@@ -101,6 +101,28 @@ describe('Supabase 云端快照包装接口', () => {
     const snapshot = await api.downloadSnapshot('user-1')
     expect(snapshot?.revision).toBe(7)
     expect(snapshot?.state.schemaVersion).toBe(state.schemaVersion)
+  })
+
+  it('下载旧快照时将历史 intentStrength=soft 无损归一为 manual', async () => {
+    const state = buildGuestDemoState()
+    ;(state.assignments[0] as unknown as { intentStrength: string }).intentStrength = 'soft'
+    const chain = chainWithMaybeSingle({ data: { data: state, revision: 3 }, error: null })
+    mocked.client.from.mockReturnValue({ select: vi.fn(() => chain) })
+    const api = await loadModule()
+
+    const snapshot = await api.downloadSnapshot('user-1')
+    expect(snapshot?.revision).toBe(3)
+    expect(snapshot?.state.assignments[0].intentStrength).toBe('manual')
+  })
+
+  it('未知 intentStrength 仍由严格 schema 拒绝', async () => {
+    const state = buildGuestDemoState()
+    ;(state.assignments[0] as unknown as { intentStrength: string }).intentStrength = 'unexpected'
+    const chain = chainWithMaybeSingle({ data: { data: state, revision: 3 }, error: null })
+    mocked.client.from.mockReturnValue({ select: vi.fn(() => chain) })
+    const api = await loadModule()
+
+    await expect(api.downloadSnapshot('user-1')).rejects.toThrow('assignments.0.intentStrength')
   })
 
   it('revision 列尚未迁移时自动回退旧版下载协议', async () => {
