@@ -1,11 +1,11 @@
-import { useState, type FormEvent } from 'react'
-import { Bug, CheckCircle2, Lightbulb, Send } from 'lucide-react'
+import { useState } from 'react'
+import { AlertTriangle, CheckCircle2, Save, Sparkles } from 'lucide-react'
 import { submitFeedback, type FeedbackType } from '../lib/supabase'
 import '../feedback.css'
 
-const feedbackOptions: Array<{ type: FeedbackType; title: string; description: string; icon: typeof Bug }> = [
-  { type: 'bug', title: 'Bug 反馈', description: '功能异常、显示问题、数据不一致或操作失败。', icon: Bug },
-  { type: 'feature', title: '新功能需求', description: '希望增加的能力、流程改进或新的使用方式。', icon: Lightbulb },
+const feedbackOptions: Array<{ type: FeedbackType; title: string; description: string; icon: any }> = [
+  { type: 'bug', title: 'Bug 反馈', description: '功能异常、显示问题、数据不一致或操作失败。', icon: AlertTriangle },
+  { type: 'feature', title: '新功能需求', description: '希望增加的能力、流程改进或新的使用方式。', icon: Sparkles },
 ]
 
 const placeholders: Record<FeedbackType, string> = {
@@ -19,7 +19,7 @@ export function FeedbackPage() {
   const [submitting, setSubmitting] = useState(false)
   const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string }>()
 
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
+  const submit = async (event: { preventDefault(): void }) => {
     event.preventDefault()
     const trimmed = content.trim()
     if (!trimmed || submitting) return
@@ -81,7 +81,7 @@ export function FeedbackPage() {
       <div className="feedback-submit-row">
         <p>反馈仅用于改进产品；请不要填写密码、验证码等敏感信息。</p>
         <button className="primary-button" type="submit" disabled={submitting || !content.trim()}>
-          <Send size={16}/>{submitting ? '正在提交…' : '提交反馈'}
+          <Save size={16}/>{submitting ? '正在提交…' : '提交反馈'}
         </button>
       </div>
     </form>
