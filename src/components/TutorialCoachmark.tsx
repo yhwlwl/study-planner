@@ -121,6 +121,8 @@ export function TutorialCoachmark({ step, config, onRestart, onExit }: {
     let target: HTMLElement | undefined
     let cancelled = false
     let removeInteractionListener: (() => void) | undefined
+    let mutationObserver: MutationObserver | undefined
+    let locateFrame: number | undefined
     const timers: number[] = []
     const targetKey = effectiveConfig?.target ?? ''
 
@@ -130,6 +132,10 @@ export function TutorialCoachmark({ step, config, onRestart, onExit }: {
       if (cancelled) return
       const found = findTarget(effectiveConfig?.target)
       if (!found) {
+        target?.classList.remove('tutorial-highlight')
+        target = undefined
+        removeInteractionListener?.()
+        removeInteractionListener = undefined
         setPortalPlacement(current => current?.targetKey === targetKey ? null : current)
         return
       }
@@ -162,11 +168,40 @@ export function TutorialCoachmark({ step, config, onRestart, onExit }: {
         found.scrollIntoView({ behavior: 'smooth', block: modalCard ? 'nearest' : 'center', inline: 'nearest' })
       }
     }
+
+    const scheduleLocate = () => {
+      if (cancelled) return
+      if (locateFrame !== undefined) window.cancelAnimationFrame(locateFrame)
+      locateFrame = window.requestAnimationFrame(() => {
+        locateFrame = undefined
+        locate()
+      })
+    }
+
     locate()
     for (const delay of [80, 220, 520, 900]) timers.push(window.setTimeout(locate, delay))
+
+    // 同一个教程步骤里也可能打开/关闭真实业务弹窗。目标节点因此会在不切换 step 的情况下
+    // 从页面按钮变成弹窗字段。持续观察 DOM，让高亮和提示自动跟随当前实际可操作控件。
+    if (typeof MutationObserver !== 'undefined') {
+      mutationObserver = new MutationObserver(scheduleLocate)
+      mutationObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['data-tutorial-target', 'hidden', 'aria-hidden', 'open'],
+      })
+    }
+    window.addEventListener('resize', scheduleLocate)
+    window.visualViewport?.addEventListener('resize', scheduleLocate)
+
     return () => {
       cancelled = true
       timers.forEach(window.clearTimeout)
+      if (locateFrame !== undefined) window.cancelAnimationFrame(locateFrame)
+      mutationObserver?.disconnect()
+      window.removeEventListener('resize', scheduleLocate)
+      window.visualViewport?.removeEventListener('resize', scheduleLocate)
       removeInteractionListener?.()
       target?.classList.remove('tutorial-highlight')
     }

@@ -103,4 +103,42 @@ describe('TutorialCoachmark portal 生命周期', () => {
     await waitFor(() => expect(slot.textContent).toContain('应用预览中的改动'))
     expect(primary.classList.contains('tutorial-highlight')).toBe(true)
   })
+
+  it('同一步骤打开真实编辑弹窗后，高亮会自动从铅笔按钮切到弹窗里的加入目标字段', async () => {
+    const editButton = document.createElement('button')
+    editButton.dataset.tutorialTarget = 'tutorial-goal-link-edit'
+    editButton.textContent = '编辑任务'
+    editButton.getBoundingClientRect = () => visibleRect()
+    document.body.appendChild(editButton)
+
+    render(
+      <TutorialCoachmark
+        step="goal-link"
+        config={{ target: 'tutorial-goal-link-field|tutorial-goal-link-edit', text: '把任务关联到目标' }}
+        onRestart={() => undefined}
+        onExit={() => undefined}
+      />,
+    )
+
+    await waitFor(() => expect(editButton.classList.contains('tutorial-highlight')).toBe(true))
+
+    const modal = document.createElement('section')
+    modal.className = 'modal-card'
+    const slot = document.createElement('div')
+    slot.className = 'tutorial-modal-coachmark-slot'
+    const goalField = document.createElement('fieldset')
+    goalField.dataset.tutorialTarget = 'tutorial-goal-link-field'
+    goalField.getBoundingClientRect = () => visibleRect(280, 96)
+    modal.append(slot, goalField)
+    document.body.appendChild(modal)
+
+    await waitFor(() => {
+      expect(goalField.classList.contains('tutorial-highlight')).toBe(true)
+      expect(editButton.classList.contains('tutorial-highlight')).toBe(false)
+      expect(slot.textContent).toContain('把任务关联到目标')
+    })
+
+    modal.remove()
+    editButton.remove()
+  })
 })
