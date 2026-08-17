@@ -1,0 +1,61 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { TutorialCoachmark } from '../src/components/TutorialCoachmark'
+import type { TutorialStep } from '../src/lib/tutorial'
+
+Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+  configurable: true,
+  value: vi.fn(),
+})
+
+afterEach(() => cleanup())
+
+const calendarTransitions: Array<[TutorialStep, TutorialStep]> = [
+  ['repair-preview', 'repair-calendar'],
+  ['intake-preview', 'intake-calendar'],
+  ['review-preview', 'review-calendar'],
+  ['future-preview', 'future-calendar'],
+]
+
+describe('TutorialCoachmark portal 生命周期', () => {
+  it.each(calendarTransitions)('%s → %s 后立即回到页面文档流', async (previewStep, calendarStep) => {
+    const modal = document.createElement('section')
+    modal.className = 'modal-card'
+    const slot = document.createElement('div')
+    slot.className = 'tutorial-modal-coachmark-slot'
+    const target = document.createElement('button')
+    target.dataset.tutorialTarget = 'proposal-primary'
+    target.getBoundingClientRect = () => ({
+      width: 120, height: 40, top: 120, right: 240, bottom: 160, left: 120, x: 120, y: 120, toJSON: () => ({}),
+    }) as DOMRect
+    modal.append(slot, target)
+    document.body.appendChild(modal)
+
+    const { rerender } = render(
+      <TutorialCoachmark
+        step={previewStep}
+        config={{ target: 'proposal-primary', text: '先确认方案' }}
+        onRestart={() => undefined}
+        onExit={() => undefined}
+      />,
+    )
+
+    await waitFor(() => expect(slot.textContent).toContain('先确认方案'))
+
+    // 模拟用户应用方案：Proposal 弹窗被卸载，同时教程步骤切到月历。
+    modal.remove()
+    rerender(
+      <TutorialCoachmark
+        step={calendarStep}
+        config={{ text: '月历结果已经显示', actionLabel: '下一步' }}
+        onRestart={() => undefined}
+        onExit={() => undefined}
+      />,
+    )
+
+    // 不刷新页面也必须立即在当前 document 中找到新提示，不能继续 portal 到已卸载节点。
+    expect(screen.getByText('月历结果已经显示')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '下一步' })).toBeTruthy()
+  })
+})

@@ -42,6 +42,11 @@ function visibleViewport() {
   }
 }
 
+type PortalPlacement = {
+  targetKey: string
+  host: HTMLElement
+}
+
 export function TutorialCoachmark({ step, config, onRestart, onExit }: {
   step: TutorialStep
   config?: TutorialCoachmarkConfig
@@ -49,7 +54,7 @@ export function TutorialCoachmark({ step, config, onRestart, onExit }: {
   onExit: () => void
 }) {
   const [collapsed, setCollapsed] = useState(false)
-  const [portalHost, setPortalHost] = useState<HTMLElement | null>(null)
+  const [portalPlacement, setPortalPlacement] = useState<PortalPlacement | null>(null)
 
   useEffect(() => { setCollapsed(false) }, [step])
 
@@ -57,17 +62,28 @@ export function TutorialCoachmark({ step, config, onRestart, onExit }: {
     let target: HTMLElement | undefined
     let cancelled = false
     const timers: number[] = []
+    const targetKey = config?.target ?? ''
+
+    if (!targetKey) setPortalPlacement(null)
+
     const locate = () => {
       if (cancelled) return
       const found = findTarget(config?.target)
-      if (!found) return
+      if (!found) {
+        setPortalPlacement(current => current?.targetKey === targetKey ? null : current)
+        return
+      }
       if (target && target !== found) target.classList.remove('tutorial-highlight')
       target = found
       if (!collapsed) found.classList.add('tutorial-highlight')
 
       const modalCard = found.closest<HTMLElement>('.modal-card')
       const modalSlot = modalCard?.querySelector<HTMLElement>('.tutorial-modal-coachmark-slot') ?? null
-      setPortalHost(current => current === modalSlot ? current : modalSlot)
+      setPortalPlacement(current => {
+        if (!modalSlot || !modalSlot.isConnected) return current?.targetKey === targetKey ? null : current
+        if (current?.targetKey === targetKey && current.host === modalSlot) return current
+        return { targetKey, host: modalSlot }
+      })
 
       if (collapsed) return
       const rect = found.getBoundingClientRect()
@@ -117,5 +133,11 @@ export function TutorialCoachmark({ step, config, onRestart, onExit }: {
     </div>
   )
 
-  return portalHost ? createPortal(content, portalHost) : content
+  const activePortalHost = portalPlacement
+    && portalPlacement.targetKey === (config.target ?? '')
+    && portalPlacement.host.isConnected
+      ? portalPlacement.host
+      : null
+
+  return activePortalHost ? createPortal(content, activePortalHost) : content
 }
