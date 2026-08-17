@@ -204,14 +204,13 @@ export default function App() {
   const enterTutorialIntake = async () => {
     const current = tutorialSessionRef.current
     if (!current || current.step !== 'goal-existing' || tutorialTransitionRunning.current) return
-    const updated = advanceTutorialOnly('goal-existing', 'intake-source')
+    const updated = advanceTutorialOnly('goal-existing', 'intake-entry')
     if (!updated) return
     tutorialTransitionRunning.current = true
     closeTutorialTransients()
     try {
       const next = ensureTutorialIntakeBatch(stateRef.current, updated.anchorDate)
       await persistTutorialState(next)
-      tutorialNotice('接下来：体验自然语言录入')
       setPage('intake')
     } finally {
       tutorialTransitionRunning.current = false
@@ -1038,7 +1037,8 @@ export default function App() {
       'repair-preview': { target: 'proposal-primary', text: '先看完整变更：已完成任务保持不变、锁定任务保持不变，同时缓解目标风险。确认后才会改计划。' },
       'repair-calendar': { text: '刚才的调整已经落到计划里了。高亮日期就是发生变化的位置。', actionLabel: '继续：看看目标', onAction: () => advanceTutorialStable('repair-calendar', 'goal-existing') },
       'goal-existing': { target: 'tutorial-goal-view', text: '先看看刚才受影响的目标。排期会考虑目标和截止时间，不只是把任务放进日历。' },
-      'intake-source': { target: 'tutorial-parse|tutorial-natural-text', eyebrow: '下一步 · 自然语言录入', text: '又收到了一批新作业。这里模拟自然语言录入，示例文字已经固定好，亲手点“解析并预览”。' },
+      'intake-entry': { target: 'tutorial-natural-input', text: '这里是录入工作区。先点“自然语言 / 粘贴清单”，体验最快的批量录入方式。' },
+      'intake-source': { target: 'tutorial-parse|tutorial-natural-text', text: '示例作业已经放进输入框。先看一眼原文，再点“解析并预览”。' },
       'intake-parse': { target: 'tutorial-import-confirm', text: '现在看到的是结构化识别结果。确认后，它们只会进入待排期区，还不会进日历。' },
       'tasks-intake': { target: 'tutorial-task-intake-list', text: '任务已经记下来了，但还没有正式日期：录入不等于排期。', actionLabel: '继续：新建目标', onAction: openTutorialGoalCreate },
       'goal-create': { target: 'tutorial-goal-create|tutorial-goal-create-confirm', text: '现在给刚才那批任务建立一个共同目标。字段已预填，亲手确认创建。' },
@@ -1060,7 +1060,45 @@ export default function App() {
       'future-calendar': { text: '这次不是修复故障，而是主动重新规划后面的节奏。', actionLabel: '完成体验', onAction: () => advanceTutorialStable('future-calendar', 'complete') },
       complete: { text: '你已经走完一次真实的计划循环：目标 → 录入 → 排期 → 执行 → 复盘 → 调整。', actionLabel: '开始我的计划', onAction: () => { void exitTutorial(true) }, secondaryLabel: '继续看看', onSecondary: () => { const updated = advanceTutorialOnly('complete', 'free'); if (updated) setPage('today') } },
     }
-    tutorialCoachConfig = base[tutorialStepValue]
+    const headlines: Partial<Record<TutorialStep, string>> = {
+      'repair-entry': '先定位计划出了什么问题',
+      'repair-action': '让系统先找修复方案',
+      'repair-preview': '确认前先看哪些内容会变',
+      'repair-calendar': '变化已经落到月历',
+      'goal-existing': '先理解目标怎样影响排期',
+      'intake-entry': '在录入页选择自然语言录入',
+      'intake-source': '看原文，再让系统解析',
+      'intake-parse': '识别结果暂时还没进入日历',
+      'tasks-intake': '记住：录入不等于排期',
+      'goal-create': '为这批任务建立共同目标',
+      'goal-link': '让任务真正受目标期限约束',
+      'intake-schedule': '现在才生成正式排期',
+      'intake-preview': '确认新任务会被放到哪里',
+      'intake-calendar': '新任务已经正式进入计划',
+      'execute-complete': '先完整完成一项任务',
+      'execute-partial': '再记录一次部分完成',
+      'review-entry': '按真实执行结果结束今天',
+      'review-carry': '把未完成内容接到后面',
+      'review-preview': '先看顺延会改什么',
+      'review-calendar': '未完成内容已经接回计划',
+      stats: '看看计划与实际的差异',
+      'stats-detail': '统计是执行之后的沉淀',
+      'future-entry': '没出问题也可以主动重排',
+      'future-action': '选择你想要的未来节奏',
+      'future-preview': '确认未来几天会怎样变化',
+      'future-calendar': '主动规划已经生效',
+      complete: '完整的计划循环已经走完',
+    }
+    const phase = tutorialStepValue.startsWith('repair') ? '01 · 修复计划'
+      : ['goal-existing', 'goal-create', 'goal-link'].includes(tutorialStepValue) ? '02 · 目标'
+        : tutorialStepValue === 'tasks-intake' || tutorialStepValue.startsWith('intake') ? '03 · 录入与排期'
+          : tutorialStepValue.startsWith('execute') ? '04 · 执行'
+            : tutorialStepValue.startsWith('review') ? '05 · 复盘'
+              : tutorialStepValue.startsWith('stats') ? '06 · 统计'
+                : tutorialStepValue.startsWith('future') ? '07 · 调整未来'
+                  : '完成体验'
+    const coach = base[tutorialStepValue]
+    tutorialCoachConfig = coach ? { ...coach, eyebrow: coach.eyebrow ?? phase, headline: headlines[tutorialStepValue] } : undefined
   }
 
 
@@ -1100,7 +1138,7 @@ export default function App() {
           {page === 'calendar' && <CalendarPage onPrepared={openPrepared} onOpenAdjustment={date => openAdjustment(date, 'current-conflicts')} onAddTask={date => openAddTask(date, 'prefer-date')} tutorialMode={tutorialRestricted} tutorialHighlightDates={tutorialSession?.highlightDates} onTutorialBlocked={tutorialNotice}/>}
           {page === 'tasks' && <TasksPage onOpenIntake={() => navigate('intake')} onPrepared={openPrepared} tutorialMode={tutorialRestricted} tutorialStep={tutorialStepValue} onTutorialBlocked={tutorialNotice}/>}
           <Suspense fallback={<div className="page-loading"><div className="spinner"/><p>正在载入页面……</p></div>}>
-            {page === 'intake' && <IntakePage onPrepared={openPrepared} onNavigate={target => navigate(target)} onAddTask={batchId => openAddTask(undefined, 'system', batchId)} addRequest={intakeAddRequest} onAddRequestHandled={() => setIntakeAddRequest(undefined)} tutorialMode={tutorialRestricted && tutorialPageForStep(tutorialStepValue!) === 'intake'} tutorialStep={tutorialStepValue} tutorialText={tutorialSession ? tutorialNaturalLanguageText(tutorialSession.anchorDate) : undefined} onTutorialParsed={() => advanceTutorialStable('intake-source', 'intake-parse')} onTutorialImported={advanceTutorialAfterImport} onStartTutorial={() => setTutorialOfferOpen(true)} onTutorialBlocked={tutorialNotice}/>}
+            {page === 'intake' && <IntakePage onPrepared={openPrepared} onNavigate={target => navigate(target)} onAddTask={batchId => openAddTask(undefined, 'system', batchId)} addRequest={intakeAddRequest} onAddRequestHandled={() => setIntakeAddRequest(undefined)} tutorialMode={tutorialRestricted && tutorialPageForStep(tutorialStepValue!) === 'intake'} tutorialStep={tutorialStepValue} tutorialText={tutorialSession ? tutorialNaturalLanguageText(tutorialSession.anchorDate) : undefined} onTutorialNaturalOpen={() => advanceTutorialStable('intake-entry', 'intake-source')} onTutorialParsed={() => advanceTutorialStable('intake-source', 'intake-parse')} onTutorialImported={advanceTutorialAfterImport} onStartTutorial={() => setTutorialOfferOpen(true)} onTutorialBlocked={tutorialNotice}/>}
             {page === 'goals' && <GoalsPage onPrepared={openPrepared} tutorialMode={tutorialRestricted && tutorialPageForStep(tutorialStepValue!) === 'goals'} tutorialStep={tutorialStepValue} tutorialAnchorDate={tutorialSession?.anchorDate} onTutorialExistingViewed={() => { void enterTutorialIntake() }} onTutorialGoalCreated={tutorialGoalCreated} onTutorialGoalLinked={tutorialGoalLinked} onTutorialBlocked={tutorialNotice}/>}
             {page === 'stats' && <StatsPage onOpenReplan={date => openAdjustment(date, 'current-conflicts')} tutorialMode={tutorialRestricted && (tutorialStepValue === 'stats' || tutorialStepValue === 'stats-detail')} onTutorialExpanded={tutorialStatsExpanded}/>}
             {page === 'export' && <ExportPage onNavigate={target => navigate(target)}/>}

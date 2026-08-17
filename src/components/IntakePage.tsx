@@ -37,7 +37,7 @@ function emptyDraft(state: AppState): TaskGroupDraft {
   }
 }
 
-export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAddRequestHandled, tutorialMode = false, tutorialStep, tutorialText, onTutorialParsed, onTutorialImported, onStartTutorial, onTutorialBlocked }: {
+export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAddRequestHandled, tutorialMode = false, tutorialStep, tutorialText, onTutorialNaturalOpen, onTutorialParsed, onTutorialImported, onStartTutorial, onTutorialBlocked }: {
   onPrepared: (state: AppState, event: PlanChangeEvent) => void
   onNavigate: (page: 'today' | 'tasks' | 'intake' | 'goals' | 'settings') => void
   onAddTask: (batchId?: string) => void
@@ -46,6 +46,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
   tutorialMode?: boolean
   tutorialStep?: TutorialStep
   tutorialText?: string
+  onTutorialNaturalOpen?: () => void
   onTutorialParsed?: () => void
   onTutorialImported?: () => void
   onStartTutorial?: () => void
@@ -75,7 +76,9 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
   const fileRef = useRef<HTMLInputElement>(null)
   const handledAddRequestId = useRef<string>()
   const [showFirstScheduleCue, setShowFirstScheduleCue] = useState(false)
+  const tutorialNaturalChoice = tutorialMode && tutorialStep === 'intake-entry'
   const tutorialNaturalEntry = tutorialMode && (tutorialStep === 'intake-source' || tutorialStep === 'intake-parse')
+  const tutorialNaturalAllowed = tutorialNaturalChoice || tutorialNaturalEntry
   const tutorialCanSchedule = tutorialMode && tutorialStep === 'intake-schedule'
 
   useEffect(() => {
@@ -292,7 +295,7 @@ export function IntakePage({ onPrepared, onNavigate, onAddTask, addRequest, onAd
           <div className="intake-toolbar">
             <div>
               <button className={`primary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中先使用预置的新任务') : onAddTask(active.id)}><Plus size={16}/>添加任务</button>
-              <button data-tutorial-target={tutorialNaturalEntry ? 'tutorial-natural-input' : undefined} className={`secondary-button ${tutorialMode && !tutorialNaturalEntry ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode && !tutorialNaturalEntry || undefined} onClick={() => { if (tutorialMode && !tutorialNaturalEntry) { onTutorialBlocked?.(); return }; setImportSource('paste'); setImportResult(undefined); if (tutorialText) setPasteText(tutorialText); setPasteOpen(true) }}><ClipboardPaste size={16}/>自然语言 / 粘贴清单</button>
+              <button data-tutorial-target={tutorialNaturalChoice ? 'tutorial-natural-input' : undefined} className={`secondary-button ${tutorialMode && !tutorialNaturalAllowed ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode && !tutorialNaturalAllowed || undefined} onClick={() => { if (tutorialNaturalChoice) { onTutorialNaturalOpen?.(); return }; if (tutorialMode && !tutorialNaturalEntry) { onTutorialBlocked?.(); return }; setImportSource('paste'); setImportResult(undefined); if (tutorialText) setPasteText(tutorialText); setPasteOpen(true) }}><ClipboardPaste size={16}/>自然语言 / 粘贴清单</button>
               <button className={`secondary-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} disabled={!tutorialMode && importBusy} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中暂不导入其他文件') : fileRef.current?.click()}><Upload size={16}/>{importBusy ? '读取中' : '导入文件'}</button>
               <button className={`text-button ${tutorialMode ? 'tutorial-disabled-control' : ''}`} aria-disabled={tutorialMode || undefined} onClick={() => tutorialMode ? onTutorialBlocked?.('教程中暂不下载模板') : downloadTextFile('study-planner-import-template.csv', buildIntakeCsvTemplate(), 'text/csv')}><Download size={15}/>下载完整模板</button>
               <input ref={fileRef} hidden type="file" accept=".txt,.csv,.tsv,.xlsx,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => event.target.files?.[0] && void handleFile(event.target.files[0])}/>

@@ -78,7 +78,7 @@ function futureEvent(state: ReturnType<typeof buildTutorialCheckpoint>, preferen
 }
 
 const stableSteps: TutorialStep[] = [
-  'repair-entry', 'repair-calendar', 'goal-existing', 'intake-source', 'tasks-intake', 'goal-create', 'goal-link',
+  'repair-entry', 'repair-calendar', 'goal-existing', 'intake-entry', 'tasks-intake', 'goal-create', 'goal-link',
   'intake-schedule', 'intake-calendar', 'execute-complete', 'execute-partial', 'review-entry', 'review-calendar',
   'stats', 'stats-detail', 'future-entry', 'future-calendar', 'complete', 'free',
 ]
@@ -87,12 +87,13 @@ describe('tutorial v2 flow and checkpoints', () => {
   it('keeps the exact guided route in the required order', () => {
     expect(TUTORIAL_STEPS).toEqual([
       'repair-entry','repair-action','repair-preview','repair-calendar','goal-existing',
-      'intake-source','intake-parse','tasks-intake','goal-create','goal-link','intake-schedule','intake-preview','intake-calendar',
+      'intake-entry','intake-source','intake-parse','tasks-intake','goal-create','goal-link','intake-schedule','intake-preview','intake-calendar',
       'execute-complete','execute-partial','review-entry','review-carry','review-preview','review-calendar',
       'stats','stats-detail','future-entry','future-action','future-preview','future-calendar','complete','free',
     ])
     expect(tutorialPageForStep('repair-calendar')).toBe('calendar')
     expect(tutorialPageForStep('goal-create')).toBe('goals')
+    expect(tutorialPageForStep('intake-entry')).toBe('intake')
     expect(tutorialPageForStep('tasks-intake')).toBe('tasks')
     expect(tutorialPageForStep('stats')).toBe('stats')
   })
@@ -222,7 +223,7 @@ describe('tutorial v2 recovery and action gates', () => {
     const created = createTutorialSession('guest', false, anchor, 'today')
     expect(todayISO()).toBe(anchor)
     const recoveries: Array<[TutorialStep, TutorialStep]> = [
-      ['repair-action', 'repair-entry'], ['repair-preview', 'repair-entry'], ['intake-parse', 'intake-source'], ['intake-preview', 'intake-schedule'],
+      ['repair-action', 'repair-entry'], ['repair-preview', 'repair-entry'], ['intake-source', 'intake-entry'], ['intake-parse', 'intake-entry'], ['intake-preview', 'intake-schedule'],
       ['review-carry', 'review-entry'], ['review-preview', 'review-entry'], ['future-action', 'future-entry'], ['future-preview', 'future-entry'],
     ]
     for (const [from, to] of recoveries) expect(recoverTutorialSession({ ...created, step: from }).step).toBe(to)

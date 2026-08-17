@@ -17,7 +17,10 @@
 .tutorial-icon-button:hover { background: var(--surface-2, rgba(127,127,127,.08)); }
 .tutorial-position-button { border: 0; background: transparent; color: var(--muted, #667085); min-height: 27px; padding: 0 7px; border-radius: 8px; font-size: 11px; font-weight: 700; cursor: pointer; }
 .tutorial-position-button:hover { background: var(--surface-2, rgba(127,127,127,.08)); color: var(--text, inherit); }
-.tutorial-coachmark p { margin: 4px 0 0; font-size: 14px; line-height: 1.45; font-weight: 650; color: var(--text, inherit); }
+.tutorial-coachmark-copy { margin-top: 5px; display: grid; gap: 4px; }
+.tutorial-coachmark-title { display: block; font-size: 15px; line-height: 1.3; font-weight: 780; letter-spacing: -.012em; color: var(--text, inherit); }
+.tutorial-coachmark-copy p { margin: 0; font-size: 13px; line-height: 1.52; font-weight: 480; color: var(--muted, #667085); }
+.tutorial-inline-emphasis { display: inline; padding: 1px 4px; border-radius: 5px; background: color-mix(in srgb, var(--primary, #4f6ef7) 10%, transparent); color: var(--primary, #4f6ef7); font-weight: 760; }
 .tutorial-coachmark-actions { margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .tutorial-coachmark-actions .primary-button { min-height: 34px; padding: 7px 12px; }
 .tutorial-highlight { outline: 3px solid color-mix(in srgb, var(--primary, #4f6ef7) 34%, transparent) !important; outline-offset: 3px; border-radius: 10px; animation: tutorial-pulse 1.8s ease-in-out infinite; }
@@ -94,20 +97,27 @@
   margin: 0;
   box-shadow: 0 12px 34px rgba(20, 28, 45, .18);
 }
-.tutorial-coachmark-floating p { font-size: 13px; line-height: 1.4; }
+.tutorial-coachmark-floating .tutorial-coachmark-copy p { font-size: 12.5px; line-height: 1.48; }
 .tutorial-position-top-right { top: calc(72px + env(safe-area-inset-top)); right: 18px; bottom: auto; left: auto; }
 .tutorial-position-bottom-right { top: auto; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom)); left: auto; }
 .tutorial-position-bottom-left { top: auto; right: auto; bottom: calc(18px + env(safe-area-inset-bottom)); left: 18px; }
+.tutorial-position-top-left { top: calc(72px + env(safe-area-inset-top)); right: auto; bottom: auto; left: 18px; }
+.tutorial-position-middle-right { top: 50%; right: 18px; bottom: auto; left: auto; transform: translateY(-50%); }
+.tutorial-position-middle-left { top: 50%; right: auto; bottom: auto; left: 18px; transform: translateY(-50%); }
 
 @media (max-width: 640px) {
   .tutorial-coachmark { margin: 8px 12px 0; padding: 9px 10px; }
-  .tutorial-coachmark p { font-size: 13px; }
+  .tutorial-coachmark-title { font-size: 14px; }
+  .tutorial-coachmark-copy p { font-size: 12.5px; }
   .tutorial-coachmark-collapsed { margin: 6px 12px 0; }
   .tutorial-coachmark-reopen { margin: 0; right: 10px; bottom: calc(12px + env(safe-area-inset-bottom)); max-width: calc(100vw - 20px); }
   .tutorial-coachmark-floating { width: min(282px, calc(100vw - 20px)); max-height: 174px; overflow: auto; }
   .tutorial-position-top-right { top: calc(74px + env(safe-area-inset-top)); right: 10px; }
   .tutorial-position-bottom-right { right: 10px; bottom: calc(12px + env(safe-area-inset-bottom)); }
   .tutorial-position-bottom-left { left: 10px; bottom: calc(12px + env(safe-area-inset-bottom)); }
+  .tutorial-position-top-left { top: calc(74px + env(safe-area-inset-top)); left: 10px; }
+  .tutorial-position-middle-right { right: 10px; }
+  .tutorial-position-middle-left { left: 10px; }
   .tutorial-pending-item { align-items: flex-start; }
 }
 

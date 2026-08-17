@@ -24,6 +24,7 @@ export type TutorialStep =
   | 'repair-preview'
   | 'repair-calendar'
   | 'goal-existing'
+  | 'intake-entry'
   | 'intake-source'
   | 'intake-parse'
   | 'tasks-intake'
@@ -49,7 +50,7 @@ export type TutorialStep =
 
 export const TUTORIAL_STEPS: TutorialStep[] = [
   'repair-entry', 'repair-action', 'repair-preview', 'repair-calendar', 'goal-existing',
-  'intake-source', 'intake-parse', 'tasks-intake', 'goal-create', 'goal-link', 'intake-schedule', 'intake-preview', 'intake-calendar',
+  'intake-entry', 'intake-source', 'intake-parse', 'tasks-intake', 'goal-create', 'goal-link', 'intake-schedule', 'intake-preview', 'intake-calendar',
   'execute-complete', 'execute-partial', 'review-entry', 'review-carry', 'review-preview', 'review-calendar',
   'stats', 'stats-detail', 'future-entry', 'future-action', 'future-preview', 'future-calendar', 'complete', 'free',
 ]
@@ -79,7 +80,8 @@ let volatileSession: TutorialSession | undefined
 const transientRecovery: Partial<Record<TutorialStep, TutorialStep>> = {
   'repair-action': 'repair-entry',
   'repair-preview': 'repair-entry',
-  'intake-parse': 'intake-source',
+  'intake-source': 'intake-entry',
+  'intake-parse': 'intake-entry',
   'intake-preview': 'intake-schedule',
   'review-carry': 'review-entry',
   'review-preview': 'review-entry',
@@ -199,7 +201,7 @@ export type TutorialPage = 'today' | 'calendar' | 'tasks' | 'intake' | 'goals' |
 export function tutorialPageForStep(step: TutorialStep): TutorialPage {
   if (['repair-calendar', 'intake-calendar', 'review-calendar', 'future-calendar'].includes(step)) return 'calendar'
   if (['goal-existing', 'goal-create', 'goal-link'].includes(step)) return 'goals'
-  if (['intake-source', 'intake-parse', 'intake-schedule', 'intake-preview'].includes(step)) return 'intake'
+  if (['intake-entry', 'intake-source', 'intake-parse', 'intake-schedule', 'intake-preview'].includes(step)) return 'intake'
   if (step === 'tasks-intake') return 'tasks'
   if (['stats', 'stats-detail'].includes(step)) return 'stats'
   return 'today'
@@ -563,7 +565,7 @@ export function buildTutorialState(anchorDate = todayISO()): AppState {
 export function buildTutorialCheckpoint(step: TutorialStep, anchorDate: string): AppState {
   if (['repair-entry', 'repair-action', 'repair-preview'].includes(step)) return baseTutorialState(anchorDate)
   if (['repair-calendar', 'goal-existing'].includes(step)) return buildRepairedCheckpoint(anchorDate)
-  if (['intake-source', 'intake-parse'].includes(step)) return ensureTutorialIntakeBatch(buildRepairedCheckpoint(anchorDate), anchorDate)
+  if (['intake-entry', 'intake-source', 'intake-parse'].includes(step)) return ensureTutorialIntakeBatch(buildRepairedCheckpoint(anchorDate), anchorDate)
   if (['tasks-intake', 'goal-create'].includes(step)) {
     const state = buildRepairedCheckpoint(anchorDate)
     ensureParsedTutorialBatch(state, anchorDate)
@@ -680,7 +682,7 @@ export function tutorialStateHealth(state: AppState, session: TutorialSession) {
     if (!overdue?.scheduledDate || overdue.scheduledDate < anchor) return { ok: false as const, reason: '教程修复后的逾期任务仍在过去' }
   }
 
-  if (['intake-source', 'intake-parse'].includes(session.step) && !tutorialBatch(state)) return { ok: false as const, reason: '教程录入批次缺失' }
+  if (['intake-entry', 'intake-source', 'intake-parse'].includes(session.step) && !tutorialBatch(state)) return { ok: false as const, reason: '教程录入批次缺失' }
   if (['tasks-intake', 'goal-create', 'goal-link', 'intake-schedule', 'intake-preview'].includes(session.step) && !hasParsedTutorialIntake(state)) return { ok: false as const, reason: '教程自然语言录入结果缺失' }
   if (['goal-link', 'intake-schedule', 'intake-preview'].includes(session.step) && !state.goals.some(goal => goal.title === TUTORIAL_NEW_GOAL_TITLE)) return { ok: false as const, reason: '教程新目标缺失' }
   if (['intake-schedule', 'intake-preview'].includes(session.step) && !hasLinkedTutorialIntake(state)) return { ok: false as const, reason: '教程新任务尚未关联新目标' }

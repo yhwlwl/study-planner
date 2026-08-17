@@ -27,7 +27,7 @@ const check = (group, name, ok, detail = '') => results.push({ group, name, ok: 
 
 const expectedSteps = [
   'repair-entry','repair-action','repair-preview','repair-calendar','goal-existing',
-  'intake-source','intake-parse','tasks-intake','goal-create','goal-link','intake-schedule','intake-preview','intake-calendar',
+  'intake-entry','intake-source','intake-parse','tasks-intake','goal-create','goal-link','intake-schedule','intake-preview','intake-calendar',
   'execute-complete','execute-partial','review-entry','review-carry','review-preview','review-calendar',
   'stats','stats-detail','future-entry','future-action','future-preview','future-calendar','complete','free',
 ]
@@ -41,7 +41,7 @@ check('00 入口', '互动教程入口归到使用教程页，设置页不再重
 
 for (const step of expectedSteps) check('01 状态机', `存在步骤 ${step}`, source.tutorial.includes(`'${step}'`))
 check('01 状态机', '页面映射覆盖月历/目标/录入/任务/统计', has(source.tutorial, "'repair-calendar', 'intake-calendar', 'review-calendar', 'future-calendar'", "'goal-existing', 'goal-create', 'goal-link'", "step === 'tasks-intake'", "'stats', 'stats-detail'"))
-check('01 状态机', '瞬态刷新回安全 checkpoint', has(source.tutorial, "'repair-preview': 'repair-entry'", "'intake-parse': 'intake-source'", "'intake-preview': 'intake-schedule'", "'review-preview': 'review-entry'", "'future-preview': 'future-entry'"))
+check('01 状态机', '瞬态刷新回安全 checkpoint', has(source.tutorial, "'repair-preview': 'repair-entry'", "'intake-source': 'intake-entry'", "'intake-parse': 'intake-entry'", "'intake-preview': 'intake-schedule'", "'review-preview': 'review-entry'", "'future-preview': 'future-entry'"))
 check('01 状态机', '运行时不因普通状态偏差自动跳回', lacks(source.app, '教程状态已自动恢复到当前步骤'))
 check('01 状态机', '重复推进要求 expected step 匹配', has(source.tutorial, 'if (!allowed.includes(session.step)) return session'))
 check('01 状态机', '跨午夜锁定 anchor 时钟', has(source.tutorial, 'setNowProvider(() => new Date(`${anchorDate}T12:00:00`))'))
@@ -66,10 +66,11 @@ check('05 修复后月历', '月历记录并高亮变化日期', has(source.app,
 check('05 修复后月历', '月历有结果说明和继续动作', has(source.app, "'repair-calendar':", '高亮日期就是发生变化的位置', '继续：看看目标'))
 
 check('06 已有目标', '已有目标可点详情并展示期限/进度/预计完成/关联任务', has(source.goals, 'tutorial-goal-view', '期望完成', '最晚完成', '当前进度', '预计完成', '关联任务'))
-check('06 已有目标', '查看后进入自然语言录入', has(source.app, "advanceTutorialOnly('goal-existing', 'intake-source')"))
+check('06 已有目标', '查看后先进入录入页而不是直接弹自然语言框', has(source.app, "advanceTutorialOnly('goal-existing', 'intake-entry')", "setPage('intake')"))
 
 check('07 自然语言录入', '固定示例文本包含四类任务', has(source.tutorial, '数学卷子 2 张，每张 60 分钟', '英语阅读 3 篇，每篇 30 分钟', '读书报告 1 份，每份 90 分钟', '整理物理错题 1 次，每次 45 分钟'))
-check('07 自然语言录入', '进入步骤自动打开现有自然语言框并只读', has(source.intake, 'setPasteText(tutorialText)', 'setPasteOpen(true)', 'readOnly={tutorialNaturalEntry}'))
+check('07 自然语言录入', '先高亮录入页的自然语言入口并由用户亲手打开', has(source.app, "'intake-entry': { target: 'tutorial-natural-input'", "advanceTutorialStable('intake-entry', 'intake-source')") && has(source.intake, "tutorialStep === 'intake-entry'", 'onTutorialNaturalOpen?.()'))
+check('07 自然语言录入', '点击入口后才打开现有自然语言框并只读', has(source.intake, 'tutorialNaturalChoice', 'tutorialNaturalEntry', 'setPasteText(tutorialText)', 'setPasteOpen(true)', 'readOnly={tutorialNaturalEntry}'))
 check('07 自然语言录入', '用户亲手点击解析', has(source.intake, "'tutorial-parse'", 'onTutorialParsed?.()'))
 check('07 自然语言录入', '解析结果完整显示但教程不可编辑', has(source.intake, 'tutorial-import-preview-fieldset', 'disabled={tutorialNaturalEntry}', '加入当前批次'))
 check('07 自然语言录入', '自然语言解析支持张/篇/份等每项时长单位', has(source.intakeLib, '张|篇|份|个|章|节|组'))
@@ -125,7 +126,8 @@ check('21 引导体验', '每一个教程步骤都有 coach config', expectedSte
 check('21 引导体验', '引导关闭只收起当前提示，且有明确重新打开入口', has(source.coach, 'setCollapsed(true)', '重新打开提示') && lacks(source.coach, 'aria-label="关闭当前提示" onClick={onExit}'))
 check('21 引导体验', '引导为普通文档流而非覆盖悬浮', has(source.css, '.tutorial-coachmark {\n  position: relative;'))
 check('21 引导体验', '弹窗步骤自动切为小型可关闭浮层并高于 Modal', has(source.coach, "target.closest('.modal-card')", 'tutorial-coachmark-floating') && has(source.css, '.tutorial-coachmark-floating {', 'z-index: 180'))
-check('21 引导体验', '弹窗浮层可在三个位置间切换', has(source.coach, "['top-right', 'bottom-right', 'bottom-left']", '移动提示位置') && has(source.css, '.tutorial-position-top-right', '.tutorial-position-bottom-right', '.tutorial-position-bottom-left'))
+check('21 引导体验', '弹窗浮层只在不遮挡当前目标或可操作控件的安全位置间切换', has(source.coach, 'safeFloatingPositions', 'targetOverlap === 0 && item.controlOverlap === 0', '移动到其他安全位置', '换空位') && has(source.css, '.tutorial-position-top-left', '.tutorial-position-middle-right', '.tutorial-position-middle-left'))
+check('21 引导体验', '提示文案有阶段、标题、正文和动作词强调层级', has(source.coach, 'headline?: string', 'tutorial-coachmark-title', 'tutorial-inline-emphasis') && has(source.app, 'const headlines:', "'intake-entry': '在录入页选择自然语言录入'") && has(source.css, '.tutorial-coachmark-title', '.tutorial-inline-emphasis'))
 check('21 引导体验', '移动端教程介绍弹窗保留顶部安全间距', has(source.css, '.modal-backdrop:has(.tutorial-offer-copy)', 'env(safe-area-inset-top)'))
 check('21 引导体验', '任务与目标教学文字在窄屏保持自然排版', has(source.css, '.tutorial-pending-item > span', '[data-tutorial-target="tutorial-goal-link"]', 'white-space: nowrap'))
 check('21 引导体验', '教程页面切换使用轻量进入动画且尊重减少动画偏好', has(source.css, '@keyframes tutorial-page-enter', '@media (prefers-reduced-motion: reduce)'))
