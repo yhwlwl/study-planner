@@ -45,6 +45,9 @@ alter table public.feedback_submissions
   add column if not exists depth_calculated_at timestamptz;
 
 alter table public.feedback_submissions
+  drop constraint if exists feedback_submissions_feedback_type_check,
+  add constraint feedback_submissions_feedback_type_check
+    check (feedback_type in ('bug', 'suggestion', 'other')),
   drop constraint if exists feedback_submissions_status_check,
   add constraint feedback_submissions_status_check
     check (status in ('new', 'reviewing', 'planned', 'resolved', 'closed')),
