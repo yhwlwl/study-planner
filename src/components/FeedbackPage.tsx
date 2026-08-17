@@ -56,7 +56,6 @@ function AdminDetails({ record }: { record: FeedbackRecord }) {
       title: '身份与反馈',
       items: [
         ['反馈 ID', detailValue(record.id)],
-        ['账号邮箱', detailValue(record.account_email)],
         ['用户 ID', detailValue(record.user_id)],
         ['游客 ID', detailValue(record.visitor_id)],
         ['账号模式', record.account_mode === 'account' ? '登录账号' : record.account_mode === 'guest' ? '游客' : '—'],
@@ -179,7 +178,7 @@ function FeedbackList({ scope, refreshKey }: { scope: 'mine' | 'admin'; refreshK
         <div className="feedback-history-meta">
           <span className="feedback-type-badge">{typeLabels[record.feedback_type]}</span>
           <span className={`feedback-state-badge state-${record.status}`}>{statusLabels[record.status]}</span>
-          {scope === 'admin' && <span className="feedback-admin-identity">{record.account_email || (record.user_id ? '登录用户' : '游客')}</span>}
+          {scope === 'admin' && <span className="feedback-admin-identity">{record.user_id ? '登录用户' : '游客'}</span>}
           {scope === 'admin' && record.depth_level && <span className="feedback-admin-depth">{depthLabels[record.depth_level] ?? record.depth_level} · {record.depth_score ?? 0}分</span>}
         </div>
         <time>{displayTime(record.created_at)}</time>
