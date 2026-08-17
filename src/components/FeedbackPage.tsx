@@ -35,8 +35,98 @@ const statusLabels: Record<FeedbackStatus, string> = {
   new: '已收到', reviewing: '处理中', planned: '已计划', resolved: '已解决', closed: '已关闭',
 }
 
+const depthLabels: Record<string, string> = {
+  new: '新用户', casual: '轻度用户', returning: '回访用户', engaged: '活跃用户', power: '深度用户',
+}
+
 function displayTime(value: string) {
   try { return new Date(value).toLocaleString('zh-CN', { hour12: false }) } catch { return value }
+}
+
+function detailValue(value: string | number | boolean | null | undefined, options?: { time?: boolean; suffix?: string }) {
+  if (value === null || value === undefined || value === '') return '—'
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (options?.time && typeof value === 'string') return displayTime(value)
+  return `${value}${options?.suffix ?? ''}`
+}
+
+function AdminDetails({ record }: { record: FeedbackRecord }) {
+  const groups: Array<{ title: string; items: Array<[string, string]> }> = [
+    {
+      title: '身份与反馈',
+      items: [
+        ['反馈 ID', detailValue(record.id)],
+        ['账号邮箱', detailValue(record.account_email)],
+        ['用户 ID', detailValue(record.user_id)],
+        ['游客 ID', detailValue(record.visitor_id)],
+        ['账号模式', record.account_mode === 'account' ? '登录账号' : record.account_mode === 'guest' ? '游客' : '—'],
+        ['反馈类型', typeLabels[record.feedback_type]],
+        ['处理状态', statusLabels[record.status]],
+        ['提交时间', detailValue(record.created_at, { time: true })],
+      ],
+    },
+    {
+      title: '来源与设备环境',
+      items: [
+        ['应用版本', detailValue(record.app_version)],
+        ['所在页面', detailValue(record.page_path)],
+        ['User Agent', detailValue(record.user_agent)],
+        ['UTM 来源', detailValue(record.utm_source)],
+        ['UTM 活动', detailValue(record.utm_campaign)],
+        ['首次来源页', detailValue(record.first_referrer)],
+        ['浏览器语言', detailValue(record.browser_language)],
+        ['客户端时区', detailValue(record.client_timezone)],
+        ['PWA 模式', detailValue(record.is_pwa)],
+      ],
+    },
+    {
+      title: '使用时长与活跃度',
+      items: [
+        ['首次访问', detailValue(record.first_seen_at, { time: true })],
+        ['最近访问', detailValue(record.last_seen_at, { time: true })],
+        ['使用跨度', detailValue(record.tenure_days, { suffix: ' 天' })],
+        ['累计 Session', detailValue(record.total_sessions)],
+        ['累计事件', detailValue(record.total_events)],
+        ['累计活跃天数', detailValue(record.total_active_days, { suffix: ' 天' })],
+        ['近 30 天 Session', detailValue(record.sessions_30d)],
+        ['近 30 天事件', detailValue(record.events_30d)],
+        ['近 30 天活跃天数', detailValue(record.active_days_30d, { suffix: ' 天' })],
+        ['近 30 天访问页面数', detailValue(record.unique_pages_30d)],
+      ],
+    },
+    {
+      title: '学习规划器使用情况',
+      items: [
+        ['任务数', detailValue(record.assignment_count)],
+        ['已完成任务数', detailValue(record.completed_assignment_count)],
+        ['任务组数', detailValue(record.task_group_count)],
+        ['目标数', detailValue(record.goal_count)],
+        ['录入批次数', detailValue(record.intake_batch_count)],
+        ['重排次数', detailValue(record.replan_count)],
+      ],
+    },
+    {
+      title: '用户深度快照',
+      items: [
+        ['深度分数', record.depth_score === null || record.depth_score === undefined ? '—' : `${record.depth_score} / 100`],
+        ['深度等级', record.depth_level ? `${depthLabels[record.depth_level] ?? record.depth_level}（${record.depth_level}）` : '—'],
+        ['计算时间', detailValue(record.depth_calculated_at, { time: true })],
+      ],
+    },
+  ]
+
+  return <details className="feedback-admin-details">
+    <summary>查看详细信息</summary>
+    <div className="feedback-detail-groups">
+      {groups.map(group => <section className="feedback-detail-group" key={group.title}>
+        <h4>{group.title}</h4>
+        <dl className="feedback-detail-grid">
+          {group.items.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+        </dl>
+      </section>)}
+      <p className="feedback-detail-security">安全字段 guest_access_hash 不下发到管理端页面。</p>
+    </div>
+  </details>
 }
 
 function FeedbackList({ scope, refreshKey }: { scope: 'mine' | 'admin'; refreshKey: number }) {
@@ -89,6 +179,8 @@ function FeedbackList({ scope, refreshKey }: { scope: 'mine' | 'admin'; refreshK
         <div className="feedback-history-meta">
           <span className="feedback-type-badge">{typeLabels[record.feedback_type]}</span>
           <span className={`feedback-state-badge state-${record.status}`}>{statusLabels[record.status]}</span>
+          {scope === 'admin' && <span className="feedback-admin-identity">{record.account_email || (record.user_id ? '登录用户' : '游客')}</span>}
+          {scope === 'admin' && record.depth_level && <span className="feedback-admin-depth">{depthLabels[record.depth_level] ?? record.depth_level} · {record.depth_score ?? 0}分</span>}
         </div>
         <time>{displayTime(record.created_at)}</time>
       </div>
@@ -102,6 +194,8 @@ function FeedbackList({ scope, refreshKey }: { scope: 'mine' | 'admin'; refreshK
             </a>
           : <div className="feedback-attachment unavailable" key={attachment.id}><span>{attachment.file_name}</span></div>)}
       </div>}
+
+      {scope === 'admin' && <AdminDetails record={record}/>} 
 
       {record.replies.length > 0 && <div className="feedback-replies">
         <strong>开发者回复</strong>
@@ -235,8 +329,8 @@ export function FeedbackPage() {
       {!sessionReady ? <div className="feedback-empty"><RefreshCw size={18}/><span>正在准备反馈记录…</span></div> : <FeedbackList scope="mine" refreshKey={refreshKey}/>}
     </section>}
 
-    {view === 'admin' && isAdmin && <section className="feedback-panel">
-      <div className="feedback-panel-head"><div><h3>反馈管理</h3><p>查看全部反馈、调整状态并回复用户。</p></div><button className="ghost-button" type="button" onClick={() => setRefreshKey(value => value + 1)}><RefreshCw size={15}/>刷新</button></div>
+    {view === 'admin' && isAdmin && <section className="feedback-panel feedback-admin-panel">
+      <div className="feedback-panel-head"><div><h3>反馈管理</h3><p>查看全部反馈、完整用户快照、来源环境和使用深度，并调整状态或回复用户。</p></div><button className="ghost-button" type="button" onClick={() => setRefreshKey(value => value + 1)}><RefreshCw size={15}/>刷新</button></div>
       <FeedbackList scope="admin" refreshKey={refreshKey}/>
     </section>}
   </div>
