@@ -34,12 +34,13 @@ export function EmailVerificationBanner() {
   }, [])
 
   useEffect(() => {
-    if (!pending?.email || !supabase) return
+    const client = supabase
+    if (!pending?.email || !client) return
     let disposed = false
 
     const reconcileSession = async () => {
       try {
-        const { data } = await supabase.auth.getSession()
+        const { data } = await client.auth.getSession()
         const user = data.session?.user
         if (!user) return
         await recordSignupConfirmedIfPending(user.id, user.email)
