@@ -4,8 +4,24 @@ import { repairTutorialGoalLinkRace } from '../src/components/TutorialRuntimeGua
 import {
   TUTORIAL_INTAKE_BATCH_ID,
   TUTORIAL_NEW_GOAL_ID,
+  TUTORIAL_VERSION,
   buildTutorialCheckpoint,
+  tutorialAllowsCommit,
+  type TutorialSession,
 } from '../src/lib/tutorial'
+
+function sessionAt(step: TutorialSession['step']): TutorialSession {
+  return {
+    version: TUTORIAL_VERSION,
+    anchorDate: '2026-08-18',
+    step,
+    returnNamespace: 'guest',
+    returnHadData: false,
+    returnPage: 'intake',
+    startedAt: '2026-08-18T00:00:00.000Z',
+    updatedAt: '2026-08-18T00:00:00.000Z',
+  }
+}
 
 describe('教程目标关联竞态保护', () => {
   it('教程已经进入排期阶段时会补齐被 React 写保护竞态丢掉的最后一次目标关联', () => {
@@ -26,6 +42,12 @@ describe('教程目标关联竞态保护', () => {
   it('还在加入目标步骤时不代替用户完成操作', () => {
     const state = buildTutorialCheckpoint('goal-link', '2026-08-18')
     expect(repairTutorialGoalLinkRace(state, 'goal-link')).toBeUndefined()
+  })
+
+  it('最后一次合法的目标保存即使 updater 在 intake-schedule 才执行也不会被写保护拒绝', () => {
+    expect(tutorialAllowsCommit(sessionAt('goal-link'), 'tutorial-goal-link', TUTORIAL_INTAKE_BATCH_ID)).toBe(true)
+    expect(tutorialAllowsCommit(sessionAt('intake-schedule'), 'tutorial-goal-link', TUTORIAL_INTAKE_BATCH_ID)).toBe(true)
+    expect(tutorialAllowsCommit(sessionAt('intake-preview'), 'tutorial-goal-link', TUTORIAL_INTAKE_BATCH_ID)).toBe(false)
   })
 
   it('目标关联未进入 React state 前必须拦截生成排期，修复后才重放点击', () => {
