@@ -39,10 +39,10 @@ afterEach(() => {
 })
 
 describe('PWA 安装引导', () => {
-  it('同一浏览器会话只累计一次访问，第二次会话后才允许自动提示', () => {
+  it('同一浏览器会话只累计一次访问，并允许新用户首个会话收到提示', () => {
     expect(recordBrowserVisit()).toBe(1)
     expect(recordBrowserVisit()).toBe(1)
-    expect(shouldAutoOfferInstall(1)).toBe(false)
+    expect(shouldAutoOfferInstall(1)).toBe(true)
 
     window.sessionStorage.clear()
     expect(recordBrowserVisit()).toBe(2)
