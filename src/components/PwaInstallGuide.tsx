@@ -14,9 +14,11 @@ import {
 } from '../pwa-install'
 import '../pwa-install.css'
 
-const IOS_GUIDE_IMAGE = 'https://images.tenorshare.cn/topics/iphone-tips/llqsctj2.png'
+// 优先选择能把关键菜单项完整展示出来的中文截图；若第三方图片失效，下面还有
+// 内置中文示意图兜底，避免用户只看到“图片加载失败”。
+const IOS_GUIDE_IMAGE = 'https://d1.faiusr.com/4/AAEIABAEGAAgs_3c-gUo1Z7IpQcwrgU4pwU.png'
 const ANDROID_GUIDE_IMAGE = 'https://meta.appinn.net/uploads/default/original/2X/6/601259bd6228c0b470ad5c29f3084f8e6ae216ea.jpeg'
-const DESKTOP_GUIDE_IMAGE = 'https://cdn3.linux.do/original/4X/3/d/4/3d4a0358fecd6549e02a883b2f145b612d88275e.jpeg'
+const DESKTOP_GUIDE_IMAGE = 'https://i-blog.csdnimg.cn/direct/c84b48283e5a477fb3545d2201ee50d0.png'
 
 const APPLE_SUPPORT_URL = 'https://support.apple.com/zh-cn/guide/iphone/iph42ab2f3a7/ios'
 const CHROME_SUPPORT_URL = 'https://support.google.com/chrome/answer/9658361?hl=zh-Hans'
@@ -37,10 +39,32 @@ function platformSummary(platform: InstallPlatform) {
   return '支持安装的浏览器通常会在地址栏或浏览器菜单提供“安装应用 / 添加到主屏幕”。'
 }
 
-function GuideVisual({ src, alt }: { src: string; alt: string }) {
+function GuideDiagramFallback({ platform, alt }: { platform: InstallPlatform; alt: string }) {
+  if (platform === 'ios') {
+    return <div className="pwa-guide-visual-fallback pwa-guide-diagram" role="img" aria-label={alt}>
+      <div className="pwa-diagram-browser-bar"><span>Safari</span><b>分享 ↑</b></div>
+      <div className="pwa-diagram-menu"><span>加入阅读列表</span><span>添加书签</span><strong>添加到主屏幕 ＋</strong><span>在页面上查找</span></div>
+      <small>关键位置：共享 → 添加到主屏幕</small>
+    </div>
+  }
+  if (platform === 'android') {
+    return <div className="pwa-guide-visual-fallback pwa-guide-diagram" role="img" aria-label={alt}>
+      <div className="pwa-diagram-browser-bar"><span>Chrome</span><b>⋮</b></div>
+      <div className="pwa-diagram-menu"><span>新建标签页</span><span>分享…</span><strong>安装应用 / 添加到主屏幕</strong><span>设置</span></div>
+      <small>关键位置：右上角 ⋮ → 安装应用</small>
+    </div>
+  }
+  return <div className="pwa-guide-visual-fallback pwa-guide-diagram" role="img" aria-label={alt}>
+    <div className="pwa-diagram-browser-bar"><span>Chrome / Edge</span><b>⋮</b></div>
+    <div className="pwa-diagram-menu"><span>打印…</span><span>投放、保存和分享</span><strong>将网页作为应用安装…</strong><span>更多工具</span></div>
+    <small>关键位置：浏览器菜单 → 将网页作为应用安装</small>
+  </div>
+}
+
+function GuideVisual({ src, alt, platform }: { src: string; alt: string; platform: InstallPlatform }) {
   const [failed, setFailed] = useState(false)
-  if (failed) return <div className="pwa-guide-visual-fallback" role="img" aria-label={alt}><Download size={32}/><span>图片暂时加载失败，请按文字步骤操作。</span></div>
-  return <img className="pwa-guide-visual" src={src} alt={alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)}/>
+  if (failed) return <GuideDiagramFallback platform={platform} alt={alt}/>
+  return <img className={`pwa-guide-visual pwa-guide-visual-${platform}`} src={src} alt={alt} loading="lazy" onError={() => setFailed(true)}/>
 }
 
 function PlatformIcon() {
@@ -70,8 +94,8 @@ export function PwaInstallGuideContent({ platform = installPlatform(), compact =
           <li><b>2</b><span>点浏览器的“共享”按钮，再向下找到“添加到主屏幕”。</span></li>
           <li><b>3</b><span>如有“作为网页 App 打开”，保持开启，然后点“添加”。</span></li>
         </ol>
-        {!compact && <GuideVisual src={IOS_GUIDE_IMAGE} alt="iPhone Safari 简体中文界面的添加到主屏幕操作示意图"/>}
-        <small className="pwa-guide-image-note">不同 iOS 版本的按钮位置可能略有差异，以“共享 → 添加到主屏幕”为准。</small>
+        {!compact && <GuideVisual platform="ios" src={IOS_GUIDE_IMAGE} alt="iPhone Safari 简体中文界面的添加到主屏幕操作示意图"/>}
+        <small className="pwa-guide-image-note">图片会完整显示，不再裁掉“添加到主屏幕”；不同 iOS 版本按钮位置可能略有差异。</small>
         <a href={APPLE_SUPPORT_URL} target="_blank" rel="noreferrer">Apple 官方说明<ArrowUpRight size={13}/></a>
       </article>
 
@@ -82,7 +106,7 @@ export function PwaInstallGuideContent({ platform = installPlatform(), compact =
           <li><b>2</b><span>点右上角“⋮”菜单，选择“安装应用”或“添加到主屏幕”。</span></li>
           <li><b>3</b><span>在系统安装框中确认“安装”。</span></li>
         </ol>
-        {!compact && <GuideVisual src={ANDROID_GUIDE_IMAGE} alt="Android Chrome 简体中文界面的添加到主屏幕操作示意图"/>}
+        {!compact && <GuideVisual platform="android" src={ANDROID_GUIDE_IMAGE} alt="Android Chrome 中文界面的添加到主屏幕操作示意图"/>}
         <a href={CHROME_SUPPORT_URL} target="_blank" rel="noreferrer">Chrome 官方说明<ArrowUpRight size={13}/></a>
       </article>
 
@@ -93,7 +117,8 @@ export function PwaInstallGuideContent({ platform = installPlatform(), compact =
           <li><b>2</b><span>没有图标时，打开浏览器菜单，选择“将网页安装为应用 / 安装应用”。</span></li>
           <li><b>3</b><span>确认安装后，可以从桌面、Dock 或开始菜单直接打开。</span></li>
         </ol>
-        {!compact && <GuideVisual src={DESKTOP_GUIDE_IMAGE} alt="Chrome 桌面端简体中文界面的将网页作为应用安装操作示意图"/>}
+        {!compact && <GuideVisual platform="desktop" src={DESKTOP_GUIDE_IMAGE} alt="Chrome 桌面端中文界面的将网页作为应用安装操作示意图"/>}
+        <small className="pwa-guide-image-note">即使在线截图无法加载，也会显示内置中文菜单示意图，不会再出现空白。</small>
         <a href={CHROME_SUPPORT_URL} target="_blank" rel="noreferrer">Chrome 官方说明<ArrowUpRight size={13}/></a>
       </article>
     </div>
