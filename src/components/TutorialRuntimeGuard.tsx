@@ -80,24 +80,54 @@ function enforceOnlyTutorialGoal() {
   })
 }
 
+function guardScheduleButton(waitingForRepair: boolean) {
+  const button = document.querySelector<HTMLButtonElement>('button[data-tutorial-target="schedule-intake"]')
+  if (!button) return
+  if (waitingForRepair) {
+    button.disabled = true
+    button.dataset.tutorialGoalRepairGuard = '1'
+    button.title = '正在同步刚才的目标关联…'
+    return
+  }
+  if (button.dataset.tutorialGoalRepairGuard === '1') {
+    button.disabled = false
+    button.removeAttribute('data-tutorial-goal-repair-guard')
+    button.removeAttribute('title')
+  }
+}
+
 export function TutorialRuntimeGuard() {
   const { state, namespace, setDataSpace } = useApp()
+  const stateRef = useRef(state)
   const repairInFlight = useRef(false)
+  stateRef.current = state
 
-  useEffect(() => {
-    if (namespace !== TUTORIAL_NAMESPACE || repairInFlight.current) return
+  const attemptRepair = () => {
+    if (namespace !== TUTORIAL_NAMESPACE) {
+      guardScheduleButton(false)
+      return
+    }
     const session = readTutorialSession()
-    const repaired = repairTutorialGoalLinkRace(state, session?.step)
-    if (!repaired) return
+    const repaired = repairTutorialGoalLinkRace(stateRef.current, session?.step)
+    guardScheduleButton(Boolean(repaired) || repairInFlight.current)
+    if (!repaired || repairInFlight.current) return
 
     repairInFlight.current = true
     void setDataSpace(TUTORIAL_NAMESPACE, repaired, false)
-      .finally(() => { repairInFlight.current = false })
+      .finally(() => {
+        repairInFlight.current = false
+        window.requestAnimationFrame(attemptRepair)
+      })
+  }
+
+  useEffect(() => {
+    attemptRepair()
   }, [namespace, setDataSpace, state])
 
   useEffect(() => {
     if (namespace !== TUTORIAL_NAMESPACE) {
       restoreGoalOptions()
+      guardScheduleButton(false)
       return
     }
 
@@ -107,10 +137,14 @@ export function TutorialRuntimeGuard() {
       frame = window.requestAnimationFrame(() => {
         frame = undefined
         enforceOnlyTutorialGoal()
+        attemptRepair()
       })
     }
 
     schedule()
+    // 不使用 DOM MutationObserver / 轮询；只在真实用户交互后检查一次。
+    // “保存修改”的同一次点击会推进 tutorial step，因此这里能在下一帧看到最新 step，
+    // 并在用户有机会点“生成排期预览”之前完成竞态修复。
     document.addEventListener('click', schedule, true)
     document.addEventListener('focusin', schedule, true)
     return () => {
@@ -118,6 +152,7 @@ export function TutorialRuntimeGuard() {
       document.removeEventListener('click', schedule, true)
       document.removeEventListener('focusin', schedule, true)
       restoreGoalOptions()
+      guardScheduleButton(false)
     }
   }, [namespace, state.updatedAt])
 
