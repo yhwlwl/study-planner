@@ -158,6 +158,7 @@
 }
 .pwa-guide-platform li span svg { vertical-align: -2px; }
 .pwa-guide-platform > a { margin-top: auto; display: inline-flex; align-items: center; gap: 4px; color: var(--primary, #2563eb); text-decoration: none; font-size: 12px; font-weight: 650; }
+.pwa-guide-image-note { color: var(--muted, #748094); font-size: 10.5px; line-height: 1.45; }
 .pwa-guide-visual {
   width: 100%;
   aspect-ratio: 1 / 1;
@@ -200,9 +201,10 @@
   .pwa-guide-platform { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 260px); align-items: start; }
   .pwa-guide-platform-title,
   .pwa-guide-platform ol,
-  .pwa-guide-platform > a { grid-column: 1; }
+  .pwa-guide-platform > a,
+  .pwa-guide-image-note { grid-column: 1; }
   .pwa-guide-platform .pwa-guide-visual,
-  .pwa-guide-platform .pwa-guide-visual-fallback { grid-column: 2; grid-row: 1 / span 3; }
+  .pwa-guide-platform .pwa-guide-visual-fallback { grid-column: 2; grid-row: 1 / span 4; }
 }
 
 @media (max-width: 640px) {
