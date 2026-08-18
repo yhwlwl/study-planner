@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, Download, ExternalLink, Laptop, MoreHorizontal, Share2, Smartphone, X } from 'lucide-react'
+import { ArrowUpRight, CheckCircle2, Download, X } from 'lucide-react'
 import {
   PWA_INSTALL_EVENT,
   installPlatform,
@@ -39,8 +39,12 @@ function platformSummary(platform: InstallPlatform) {
 
 function GuideVisual({ src, alt }: { src: string; alt: string }) {
   const [failed, setFailed] = useState(false)
-  if (failed) return <div className="pwa-guide-visual-fallback" role="img" aria-label={alt}><Smartphone size={32}/><span>图片暂时加载失败，请按文字步骤操作。</span></div>
+  if (failed) return <div className="pwa-guide-visual-fallback" role="img" aria-label={alt}><Download size={32}/><span>图片暂时加载失败，请按文字步骤操作。</span></div>
   return <img className="pwa-guide-visual" src={src} alt={alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)}/>
+}
+
+function PlatformIcon() {
+  return <span className="pwa-guide-platform-icon" aria-hidden="true"><Download size={17}/></span>
 }
 
 export function PwaInstallGuideContent({ platform = installPlatform(), compact = false }: { platform?: InstallPlatform; compact?: boolean }) {
@@ -60,37 +64,37 @@ export function PwaInstallGuideContent({ platform = installPlatform(), compact =
 
     <div className="pwa-guide-platforms">
       <article className={`pwa-guide-platform ${platform === 'ios' ? 'is-current' : ''}`}>
-        <div className="pwa-guide-platform-title"><Smartphone size={18}/><div><strong>iPhone / iPad</strong><span>Safari</span></div></div>
+        <div className="pwa-guide-platform-title"><PlatformIcon/><div><strong>iPhone / iPad</strong><span>Safari</span></div></div>
         <ol>
           <li><b>1</b><span>用 Safari 打开学习计划网站。</span></li>
-          <li><b>2</b><span>点浏览器的 <Share2 size={14}/>“共享”，向下找到“添加到主屏幕”。</span></li>
+          <li><b>2</b><span>点浏览器的“共享”按钮，再向下找到“添加到主屏幕”。</span></li>
           <li><b>3</b><span>如有“作为网页 App 打开”，保持开启，然后点“添加”。</span></li>
         </ol>
         {!compact && <GuideVisual src={IOS_GUIDE_IMAGE} alt="iPhone Safari 添加到主屏幕的操作示意图"/>}
         <small className="pwa-guide-image-note">不同 iOS 版本的按钮位置可能略有差异，以“共享 → 添加到主屏幕”为准。</small>
-        <a href={APPLE_SUPPORT_URL} target="_blank" rel="noreferrer">Apple 官方说明<ExternalLink size={13}/></a>
+        <a href={APPLE_SUPPORT_URL} target="_blank" rel="noreferrer">Apple 官方说明<ArrowUpRight size={13}/></a>
       </article>
 
       <article className={`pwa-guide-platform ${platform === 'android' ? 'is-current' : ''}`}>
-        <div className="pwa-guide-platform-title"><Smartphone size={18}/><div><strong>Android</strong><span>Chrome</span></div></div>
+        <div className="pwa-guide-platform-title"><PlatformIcon/><div><strong>Android</strong><span>Chrome</span></div></div>
         <ol>
           <li><b>1</b><span>用 Chrome 打开学习计划网站。</span></li>
-          <li><b>2</b><span>点右上角 <MoreHorizontal size={14}/> 菜单，选择“安装应用”或“添加到主屏幕”。</span></li>
+          <li><b>2</b><span>点右上角“⋮”菜单，选择“安装应用”或“添加到主屏幕”。</span></li>
           <li><b>3</b><span>在系统安装框中确认“安装”。</span></li>
         </ol>
         {!compact && <GuideVisual src={ANDROID_GUIDE_IMAGE} alt="Android Chrome 安装网页应用的操作示意图"/>}
-        <a href={CHROME_SUPPORT_URL} target="_blank" rel="noreferrer">Chrome 官方说明<ExternalLink size={13}/></a>
+        <a href={CHROME_SUPPORT_URL} target="_blank" rel="noreferrer">Chrome 官方说明<ArrowUpRight size={13}/></a>
       </article>
 
       <article className={`pwa-guide-platform ${platform === 'desktop' ? 'is-current' : ''}`}>
-        <div className="pwa-guide-platform-title"><Laptop size={18}/><div><strong>Windows / Mac</strong><span>Chrome / Edge</span></div></div>
+        <div className="pwa-guide-platform-title"><PlatformIcon/><div><strong>Windows / Mac</strong><span>Chrome / Edge</span></div></div>
         <ol>
           <li><b>1</b><span>打开学习计划网站，查看地址栏右侧是否出现安装图标。</span></li>
           <li><b>2</b><span>没有图标时，打开浏览器菜单，选择“将网页安装为应用 / 安装应用”。</span></li>
           <li><b>3</b><span>确认安装后，可以从桌面、Dock 或开始菜单直接打开。</span></li>
         </ol>
         {!compact && <GuideVisual src={DESKTOP_GUIDE_IMAGE} alt="Chrome 桌面端安装网页应用的操作示意图"/>}
-        <a href={CHROME_SUPPORT_URL} target="_blank" rel="noreferrer">Chrome 官方说明<ExternalLink size={13}/></a>
+        <a href={CHROME_SUPPORT_URL} target="_blank" rel="noreferrer">Chrome 官方说明<ArrowUpRight size={13}/></a>
       </article>
     </div>
   </div>
