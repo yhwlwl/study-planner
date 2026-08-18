@@ -86,6 +86,27 @@ describe('反馈回复通知与双向会话', () => {
     expect(screen.getByRole('button', { name: '意见反馈' })).toBeTruthy()
   })
 
+  it('侧边栏发生 DOM 更新时不会因反馈徽标 MutationObserver 自触发而卡死', async () => {
+    feedbackMocks.getUnreadFeedbackReplyCount.mockResolvedValue(3)
+    render(<>
+      <aside className="sidebar"><nav><button type="button"><span>意见反馈</span></button></nav></aside>
+      <FeedbackNotificationObserver />
+    </>)
+
+    await waitFor(() => expect(document.querySelector('.feedback-nav-badge')?.textContent).toBe('3'))
+    const nav = document.querySelector('.sidebar nav')!
+    const unrelated = document.createElement('i')
+    unrelated.textContent = '导航更新'
+    nav.appendChild(unrelated)
+
+    // 旧实现会在 MutationObserver 回调里无条件重写 badge.textContent，产生新的
+    // childList mutation，随后再次触发自身，导致浏览器主线程持续占满。
+    await new Promise(resolve => window.setTimeout(resolve, 40))
+    expect(document.querySelectorAll('.feedback-nav-badge')).toHaveLength(1)
+    expect(document.querySelector('.feedback-nav-badge')?.textContent).toBe('3')
+    expect(screen.getByRole('button', { name: '意见反馈，3 条新回复' })).toBeTruthy()
+  })
+
   it('用户在页面内看到新回复提醒，并可继续追加回复；已解决反馈会提示自动重新打开', async () => {
     render(<FeedbackPage />)
 
