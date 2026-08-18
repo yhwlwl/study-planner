@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { repairTutorialGoalLinkRace } from '../src/components/TutorialRuntimeGuard'
 import {
@@ -25,5 +26,14 @@ describe('教程目标关联竞态保护', () => {
   it('还在加入目标步骤时不代替用户完成操作', () => {
     const state = buildTutorialCheckpoint('goal-link', '2026-08-18')
     expect(repairTutorialGoalLinkRace(state, 'goal-link')).toBeUndefined()
+  })
+
+  it('目标关联未进入 React state 前必须拦截生成排期，修复后才重放点击', () => {
+    const source = readFileSync(new URL('../src/components/TutorialRuntimeGuard.tsx', import.meta.url), 'utf8')
+    expect(source).toContain('[data-tutorial-action="schedule-intake"]')
+    expect(source).toContain('event.preventDefault()')
+    expect(source).toContain('event.stopPropagation()')
+    expect(source).toContain('pending.button.click()')
+    expect(source).toContain('if (repairTutorialGoalLinkRace(state, session.step)) return')
   })
 })
