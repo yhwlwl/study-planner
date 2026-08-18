@@ -7,10 +7,12 @@ import calendarImage from '../../docs/images/03-calendar-month-view.png'
 import loadImage from '../../docs/images/06-daily-workload-before-after.png'
 import reviewImage from '../../docs/images/16-review-summary-and-unfinished-tasks.png'
 import { GITHUB_REPO_URL } from '../lib/constants'
+import { PwaInstallGuideSection } from './PwaInstallGuide'
 
 type GuidePageId = 'today' | 'calendar' | 'tasks' | 'intake' | 'goals' | 'stats' | 'export' | 'settings'
 
 const chapters = [
+  { id: 'install-app', label: '添加到主屏幕' },
   { id: 'first-plan', label: '第一次建计划' },
   { id: 'daily-use', label: '每天怎么用' },
   { id: 'changes', label: '计划变化时' },
@@ -40,6 +42,8 @@ export function GuidePage({ onNavigate, onStartTutorial }: { onNavigate: (page: 
     <nav className="guide-chapters" aria-label="教程章节">
       {chapters.map(chapter => <a key={chapter.id} href={`#${chapter.id}`}>{chapter.label}</a>)}
     </nav>
+
+    <PwaInstallGuideSection />
 
     <section className="guide-section" id="first-plan">
       <GuideHeading eyebrow="从空白开始" title="建立第一份计划" text="收集阶段只保存和校验，不会因为每新增一项就重算整份计划。任务收齐后，再统一预览排期结果。" />

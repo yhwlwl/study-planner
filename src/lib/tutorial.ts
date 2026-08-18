@@ -228,7 +228,9 @@ export function tutorialAllowsCommit(session: TutorialSession | undefined, actio
   if (session.step === 'free') return true
   if (session.step === 'intake-parse' && action === 'intake-import') return true
   if (session.step === 'goal-create' && action === 'tutorial-goal-create' && targetId === TUTORIAL_NEW_GOAL_ID) return true
-  if (session.step === 'goal-link' && action === 'tutorial-goal-link' && targetId === TUTORIAL_INTAKE_BATCH_ID) return true
+  // 最后一个“加入目标”保存和 goal-link -> intake-schedule 会在同一 React 事件中批处理。
+  // 允许这一个已经发起的合法 mutation 在下一步落地，避免 updater 执行时因 step 已前进而被静默拒绝。
+  if ((session.step === 'goal-link' || session.step === 'intake-schedule') && action === 'tutorial-goal-link' && targetId === TUTORIAL_INTAKE_BATCH_ID) return true
   if (session.step === 'execute-complete' && action === 'execute-task' && targetId === TUTORIAL_EXECUTE_ASSIGNMENT_ID) return true
   if (session.step === 'execute-partial' && action === 'execute-task' && targetId === TUTORIAL_PARTIAL_ASSIGNMENT_ID) return true
   return false
