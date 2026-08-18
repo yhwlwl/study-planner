@@ -247,16 +247,49 @@ function normalizeGuestReply(row: any): FeedbackReply {
   }
 }
 
+async function listGuestReplyAttachments(stableVisitorId: string, guestSecret: string): Promise<FeedbackAttachment[]> {
+  try {
+    const response = await fetch('/api/feedback-guest-attachments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitorId: stableVisitorId, guestSecret }),
+    })
+    if (!response.ok) return []
+    const payload = await response.json() as { attachments?: any[] }
+    if (!Array.isArray(payload.attachments)) return []
+    return payload.attachments.flatMap((row: any): FeedbackAttachment[] => {
+      if (!row?.id || !row?.feedback_id || !row?.reply_id || typeof row?.signed_url !== 'string') return []
+      return [{
+        id: String(row.id),
+        feedback_id: String(row.feedback_id),
+        reply_id: String(row.reply_id),
+        // 服务端刻意不返回 Storage 路径；游客只拿到 30 分钟签名地址。
+        storage_path: '',
+        file_name: String(row.file_name ?? '回复图片'),
+        mime_type: String(row.mime_type ?? 'image/jpeg'),
+        size_bytes: Number(row.size_bytes ?? 0),
+        created_at: String(row.created_at ?? ''),
+        signed_url: row.signed_url,
+      }]
+    })
+  } catch {
+    // 图片签名失败不应阻断游客查看文字会话。
+    return []
+  }
+}
+
 async function listGuestFeedbackForBrowser(): Promise<FeedbackRecord[]> {
   if (!supabase || typeof window === 'undefined') return []
   const stableVisitorId = visitorId()
+  const secret = guestFeedbackSecret()
   const result = await supabase.rpc('list_guest_feedback', {
     p_visitor_id: stableVisitorId,
-    p_guest_secret: guestFeedbackSecret(),
+    p_guest_secret: secret,
   })
   if (result.error) throw new Error('本机游客反馈加载失败，请稍后重试。')
   if (!Array.isArray(result.data)) return []
-  return result.data.map((row: any) => ({
+
+  const records = result.data.map((row: any): FeedbackRecord => ({
     id: String(row.id),
     user_id: row.user_id ? String(row.user_id) : null,
     feedback_type: row.feedback_type as FeedbackType,
@@ -265,6 +298,16 @@ async function listGuestFeedbackForBrowser(): Promise<FeedbackRecord[]> {
     created_at: String(row.created_at),
     replies: Array.isArray(row.replies) ? row.replies.map(normalizeGuestReply) : [],
     attachments: [],
+  }))
+  if (!records.length) return []
+
+  const attachments = await listGuestReplyAttachments(stableVisitorId, secret)
+  return records.map(record => ({
+    ...record,
+    replies: record.replies.map(reply => ({
+      ...reply,
+      attachments: attachments.filter(attachment => attachment.reply_id === reply.id),
+    })),
   }))
 }
 
@@ -346,12 +389,6 @@ export async function replyToFeedback(feedbackId: string, content: string, scree
   const { session, isAdmin } = await getFeedbackSessionContext({ refresh: true })
   if (!session || !isAdmin) throw new Error('当前账号没有反馈管理权限。')
 
-  if (screenshots.length > 0) {
-    const target = await supabase.from('feedback_submissions').select('user_id').eq('id', feedbackId).single()
-    if (target.error) throw new Error('无法确认反馈接收者，请稍后重试。')
-    if (!target.data?.user_id) throw new Error('游客反馈暂不支持图片回复，请改为发送文字；登录账号反馈可以接收图片。')
-  }
-
   const inserted = await supabase
     .from('feedback_replies')
     .insert({ feedback_id: feedbackId, content: trimmed, author_type: 'admin' })
@@ -375,7 +412,7 @@ export async function appendFeedbackReply(record: FeedbackRecord, content: strin
 
   const session = await getSession()
   if (!record.user_id) {
-    if (screenshots.length > 0) throw new Error('游客反馈的追加回复暂不支持图片；你可以继续发送文字，登录后提交的新反馈可附图。')
+    if (screenshots.length > 0) throw new Error('游客追加回复暂不支持图片；你可以继续发送文字。开发者回复中的图片仍可安全查看。')
     if (typeof window === 'undefined') throw new Error('当前环境无法验证游客反馈身份。')
     const result = await supabase.rpc('reply_to_guest_feedback', {
       p_feedback_id: record.id,
