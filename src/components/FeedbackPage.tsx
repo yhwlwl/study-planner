@@ -1,13 +1,20 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, CheckCircle2, Inbox, RefreshCw, Sparkles, Upload, X } from 'lucide-react'
+import { AlertTriangle, Bell, CheckCircle2, ImagePlus, Inbox, MessageCircle, RefreshCw, Sparkles, Upload, X } from 'lucide-react'
 import {
+  appendFeedbackReply,
+  FEEDBACK_UNREAD_EVENT,
   getFeedbackSessionContext,
+  getUnreadFeedbackReplyCount,
   listFeedback,
+  markAdminFollowupsRead,
+  markFeedbackRepliesRead,
   replyToFeedback,
   submitFeedback,
   updateFeedbackStatus,
   validateFeedbackScreenshots,
+  type FeedbackAttachment,
   type FeedbackRecord,
+  type FeedbackReply,
   type FeedbackStatus,
   type FeedbackType,
 } from '../lib/feedback'
@@ -48,6 +55,28 @@ function detailValue(value: string | number | boolean | null | undefined, option
   if (typeof value === 'boolean') return value ? '是' : '否'
   if (options?.time && typeof value === 'string') return displayTime(value)
   return `${value}${options?.suffix ?? ''}`
+}
+
+function AttachmentGrid({ attachments }: { attachments: FeedbackAttachment[] }) {
+  if (!attachments.length) return null
+  return <div className="feedback-attachment-grid">
+    {attachments.map(attachment => attachment.signed_url
+      ? <a href={attachment.signed_url} target="_blank" rel="noreferrer" key={attachment.id} className="feedback-attachment">
+          <img src={attachment.signed_url} alt={attachment.file_name}/>
+          <span>{attachment.file_name}</span>
+        </a>
+      : <div className="feedback-attachment unavailable" key={attachment.id}><span>{attachment.file_name}</span></div>)}
+  </div>
+}
+
+function SelectedReplyFiles({ files, onRemove }: { files: File[]; onRemove: (index: number) => void }) {
+  if (!files.length) return null
+  return <div className="feedback-selected-files feedback-reply-files">
+    {files.map((file, index) => <div key={`${file.name}-${file.size}-${index}`}>
+      <span>{file.name}</span>
+      <button type="button" aria-label={`移除 ${file.name}`} onClick={() => onRemove(index)}><X size={15}/></button>
+    </div>)}
+  </div>
 }
 
 function AdminDetails({ record }: { record: FeedbackRecord }) {
@@ -128,32 +157,84 @@ function AdminDetails({ record }: { record: FeedbackRecord }) {
   </details>
 }
 
-function FeedbackList({ scope, refreshKey }: { scope: 'mine' | 'admin'; refreshKey: number }) {
+function replyLabel(reply: FeedbackReply, scope: 'mine' | 'admin') {
+  if (reply.author_type === 'admin') return '开发者'
+  if (scope === 'mine') return '你'
+  return reply.author_type === 'guest' ? '游客' : '用户'
+}
+
+function replyIsNew(reply: FeedbackReply, scope: 'mine' | 'admin') {
+  if (reply.read_at) return false
+  return scope === 'mine' ? reply.author_type === 'admin' : reply.author_type !== 'admin'
+}
+
+function FeedbackList({ scope, refreshKey, onUnreadCountChange }: { scope: 'mine' | 'admin'; refreshKey: number; onUnreadCountChange?: (count: number) => void }) {
   const [records, setRecords] = useState<FeedbackRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [replyingId, setReplyingId] = useState<string>()
   const [replyText, setReplyText] = useState('')
+  const [replyFiles, setReplyFiles] = useState<File[]>([])
   const [saving, setSaving] = useState(false)
 
   const load = async () => {
     setLoading(true)
     setError('')
-    try { setRecords(await listFeedback(scope)) }
-    catch (reason) { setError(reason instanceof Error ? reason.message : '反馈记录加载失败。') }
-    finally { setLoading(false) }
+    try {
+      const next = await listFeedback(scope)
+      setRecords(next)
+      if (scope === 'mine') {
+        const remaining = await markFeedbackRepliesRead(next)
+        onUnreadCountChange?.(remaining)
+      } else {
+        await markAdminFollowupsRead(next)
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '反馈记录加载失败。')
+    } finally { setLoading(false) }
   }
 
   useEffect(() => { void load() }, [scope, refreshKey])
 
-  const sendReply = async (feedbackId: string) => {
+  const beginReply = (feedbackId: string) => {
+    setReplyingId(feedbackId)
+    setReplyText('')
+    setReplyFiles([])
+    setError('')
+    setNotice('')
+  }
+
+  const cancelReply = () => {
+    setReplyingId(undefined)
+    setReplyText('')
+    setReplyFiles([])
+  }
+
+  const chooseReplyFiles = (record: FeedbackRecord, files: FileList | null) => {
+    const next = Array.from(files ?? [])
+    const validation = validateFeedbackScreenshots(next)
+    if (validation) { setError(validation); return }
+    if (!record.user_id && next.length) {
+      setError('游客反馈暂不支持在会话中传图片；可以继续发送文字。')
+      return
+    }
+    setReplyFiles(next)
+    setError('')
+  }
+
+  const sendReply = async (record: FeedbackRecord) => {
     if (!replyText.trim() || saving) return
     setSaving(true)
     setError('')
+    setNotice('')
     try {
-      await replyToFeedback(feedbackId, replyText)
-      setReplyText('')
-      setReplyingId(undefined)
+      const result = scope === 'admin'
+        ? await replyToFeedback(record.id, replyText, replyFiles)
+        : await appendFeedbackReply(record, replyText, replyFiles)
+      const failed = result.failedCount > 0 ? `；${result.failedCount} 张图片上传失败` : ''
+      setNotice(`${scope === 'admin' ? '回复已发送' : '追加回复已发送'}${failed}。`)
+      cancelReply()
       await load()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '回复发送失败。')
@@ -169,55 +250,76 @@ function FeedbackList({ scope, refreshKey }: { scope: 'mine' | 'admin'; refreshK
   }
 
   if (loading) return <div className="feedback-empty"><RefreshCw size={18}/><span>正在加载反馈…</span></div>
-  if (error) return <div className="feedback-status error" role="alert">{error}</div>
-  if (records.length === 0) return <div className="feedback-empty"><Inbox size={20}/><span>{scope === 'admin' ? '暂时还没有反馈。' : '当前还没有你提交过的反馈。'}</span></div>
+  if (records.length === 0) return <>{error && <div className="feedback-status error" role="alert">{error}</div>}<div className="feedback-empty"><Inbox size={20}/><span>{scope === 'admin' ? '暂时还没有反馈。' : '当前还没有你提交过的反馈。'}</span></div></>
 
-  return <div className="feedback-history-list">
-    {records.map(record => <article className="feedback-history-card" key={record.id}>
-      <div className="feedback-history-head">
-        <div className="feedback-history-meta">
-          <span className="feedback-type-badge">{typeLabels[record.feedback_type]}</span>
-          <span className={`feedback-state-badge state-${record.status}`}>{statusLabels[record.status]}</span>
-          {scope === 'admin' && <span className="feedback-admin-identity">{record.user_id ? '登录用户' : '游客'}</span>}
-          {scope === 'admin' && record.depth_level && <span className="feedback-admin-depth">{depthLabels[record.depth_level] ?? record.depth_level} · {record.depth_score ?? 0}分</span>}
-        </div>
-        <time>{displayTime(record.created_at)}</time>
-      </div>
-      <p className="feedback-history-content">{record.content}</p>
-
-      {record.attachments.length > 0 && <div className="feedback-attachment-grid">
-        {record.attachments.map(attachment => attachment.signed_url
-          ? <a href={attachment.signed_url} target="_blank" rel="noreferrer" key={attachment.id} className="feedback-attachment">
-              <img src={attachment.signed_url} alt={attachment.file_name}/>
-              <span>{attachment.file_name}</span>
-            </a>
-          : <div className="feedback-attachment unavailable" key={attachment.id}><span>{attachment.file_name}</span></div>)}
-      </div>}
-
-      {scope === 'admin' && <AdminDetails record={record}/>} 
-
-      {record.replies.length > 0 && <div className="feedback-replies">
-        <strong>开发者回复</strong>
-        {record.replies.map(reply => <div className="feedback-reply" key={reply.id}>
-          <p>{reply.content}</p><time>{displayTime(reply.created_at)}</time>
-        </div>)}
-      </div>}
-
-      {scope === 'admin' && <div className="feedback-admin-actions">
-        <label>处理状态
-          <select value={record.status} disabled={saving} onChange={event => void changeStatus(record.id, event.target.value as FeedbackStatus)}>
-            {Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
-          </select>
-        </label>
-        {replyingId === record.id
-          ? <div className="feedback-reply-editor">
-              <textarea value={replyText} maxLength={4000} rows={4} placeholder="写给用户的回复…" onChange={event => setReplyText(event.target.value)}/>
-              <div><button className="ghost-button" type="button" onClick={() => { setReplyingId(undefined); setReplyText('') }}>取消</button><button className="primary-button" type="button" disabled={saving || !replyText.trim()} onClick={() => void sendReply(record.id)}>{saving ? '发送中…' : '发送回复'}</button></div>
+  return <>
+    {error && <div className="feedback-status error" role="alert">{error}</div>}
+    {notice && <div className="feedback-status success" role="status"><CheckCircle2 size={18}/><span>{notice}</span></div>}
+    <div className="feedback-history-list">
+      {records.map(record => {
+        const unreadReplies = record.replies.filter(reply => replyIsNew(reply, scope)).length
+        const canAttachToReply = Boolean(record.user_id)
+        return <article className={`feedback-history-card ${unreadReplies ? 'has-new-reply' : ''}`} key={record.id}>
+          <div className="feedback-history-head">
+            <div className="feedback-history-meta">
+              <span className="feedback-type-badge">{typeLabels[record.feedback_type]}</span>
+              <span className={`feedback-state-badge state-${record.status}`}>{statusLabels[record.status]}</span>
+              {unreadReplies > 0 && <span className="feedback-new-reply-badge">{scope === 'mine' ? '新回复' : '新追问'} · {unreadReplies}</span>}
+              {scope === 'admin' && <span className="feedback-admin-identity">{record.user_id ? '登录用户' : '游客'}</span>}
+              {scope === 'admin' && record.depth_level && <span className="feedback-admin-depth">{depthLabels[record.depth_level] ?? record.depth_level} · {record.depth_score ?? 0}分</span>}
             </div>
-          : <button className="ghost-button" type="button" onClick={() => { setReplyingId(record.id); setReplyText('') }}>回复用户</button>}
-      </div>}
-    </article>)}
-  </div>
+            <time>{displayTime(record.created_at)}</time>
+          </div>
+          <p className="feedback-history-content">{record.content}</p>
+          <AttachmentGrid attachments={record.attachments}/>
+
+          {scope === 'admin' && <AdminDetails record={record}/>} 
+
+          {record.replies.length > 0 && <div className="feedback-replies feedback-conversation">
+            <div className="feedback-conversation-title"><strong><MessageCircle size={15}/>沟通记录</strong><span>{record.replies.length} 条</span></div>
+            {record.replies.map(reply => {
+              const developer = reply.author_type === 'admin'
+              return <div className={`feedback-reply ${developer ? 'feedback-reply-developer' : 'feedback-reply-participant'}`} key={reply.id}>
+                <div className="feedback-reply-head">
+                  <strong>{replyLabel(reply, scope)}</strong>
+                  <div>{replyIsNew(reply, scope) && <em>{scope === 'mine' ? '新回复' : '新追问'}</em>}<time>{displayTime(reply.created_at)}</time></div>
+                </div>
+                <p>{reply.content}</p>
+                <AttachmentGrid attachments={reply.attachments}/>
+              </div>
+            })}
+          </div>}
+
+          <div className={scope === 'admin' ? 'feedback-admin-actions' : 'feedback-user-actions'}>
+            {scope === 'admin' && <label>处理状态
+              <select value={record.status} disabled={saving} onChange={event => void changeStatus(record.id, event.target.value as FeedbackStatus)}>
+                {Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+              </select>
+            </label>}
+
+            {replyingId === record.id
+              ? <div className="feedback-reply-editor">
+                  <div className="feedback-reply-editor-heading">
+                    <strong>{scope === 'admin' ? '回复用户' : '追加说明'}</strong>
+                    <small>{replyText.length} / 4000</small>
+                  </div>
+                  <textarea value={replyText} maxLength={4000} rows={4} placeholder={scope === 'admin' ? '写给用户的回复…' : '继续补充情况、回答开发者问题，或说明问题是否仍然存在…'} onChange={event => setReplyText(event.target.value)}/>
+                  {canAttachToReply
+                    ? <label className="feedback-reply-upload">
+                        <input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={event => chooseReplyFiles(record, event.target.files)}/>
+                        <ImagePlus size={16}/><span>添加图片</span><small>最多 3 张，每张 5MB</small>
+                      </label>
+                    : <p className="feedback-reply-guest-note">游客会话继续采用本机安全密钥识别，目前只支持文字追加；登录账号反馈可在回复中传图。</p>}
+                  <SelectedReplyFiles files={replyFiles} onRemove={index => setReplyFiles(current => current.filter((_, currentIndex) => currentIndex !== index))}/>
+                  {(scope === 'mine' && (record.status === 'resolved' || record.status === 'closed')) && <p className="feedback-reopen-note">发送后这条反馈会自动重新打开为“处理中”，方便开发者继续跟进。</p>}
+                  <div><button className="ghost-button" type="button" disabled={saving} onClick={cancelReply}>取消</button><button className="primary-button" type="button" disabled={saving || !replyText.trim()} onClick={() => void sendReply(record)}>{saving ? '发送中…' : scope === 'admin' ? '发送回复' : '发送追加回复'}</button></div>
+                </div>
+              : <button className="ghost-button feedback-open-reply" type="button" onClick={() => beginReply(record.id)}><MessageCircle size={15}/>{scope === 'admin' ? '回复用户' : record.replies.length ? '继续回复' : '追加说明'}</button>}
+          </div>
+        </article>
+      })}
+    </div>
+  </>
 }
 
 export function FeedbackPage() {
@@ -231,6 +333,7 @@ export function FeedbackPage() {
   const [signedIn, setSignedIn] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [unreadCount, setUnreadCount] = useState(0)
 
   useEffect(() => {
     void getFeedbackSessionContext({ refresh: true }).then(context => {
@@ -238,6 +341,21 @@ export function FeedbackPage() {
       setIsAdmin(context.isAdmin)
       setSessionReady(true)
     }).catch(() => setSessionReady(true))
+  }, [])
+
+  useEffect(() => {
+    let disposed = false
+    const refreshUnread = () => {
+      void getUnreadFeedbackReplyCount().then(count => { if (!disposed) setUnreadCount(count) }).catch(() => undefined)
+    }
+    const onUnreadChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ count?: number }>).detail
+      if (typeof detail?.count === 'number') setUnreadCount(detail.count)
+      else refreshUnread()
+    }
+    refreshUnread()
+    window.addEventListener(FEEDBACK_UNREAD_EVENT, onUnreadChanged)
+    return () => { disposed = true; window.removeEventListener(FEEDBACK_UNREAD_EVENT, onUnreadChanged) }
   }, [])
 
   const chooseScreenshots = (files: FileList | null) => {
@@ -260,7 +378,7 @@ export function FeedbackPage() {
       setContent('')
       setScreenshots([])
       setRefreshKey(value => value + 1)
-      const extra = result.failedCount > 0 ? `反馈已提交；${result.failedCount} 张截图上传失败，可在“我的反馈”中确认。` : '已收到，感谢你的反馈。可在“我的反馈”中查看处理状态和回复。'
+      const extra = result.failedCount > 0 ? `反馈已提交；${result.failedCount} 张截图上传失败，可在“我的反馈”中确认。` : '已收到，感谢你的反馈。之后可以在“我的反馈”里查看回复，并继续和开发者沟通。'
       setStatus({ kind: 'success', message: extra })
     } catch (error) {
       setStatus({ kind: 'error', message: error instanceof Error ? error.message : '提交失败，请稍后重试。' })
@@ -272,13 +390,19 @@ export function FeedbackPage() {
       <div>
         <span className="feedback-eyebrow">帮助我们改进</span>
         <h2>意见反馈</h2>
-        <p>提交反馈、附上问题截图，并在“我的反馈”里查看处理状态和开发者回复。</p>
+        <p>提交反馈和问题截图，在“我的反馈”中查看处理状态、接收开发者回复，并继续追加说明。</p>
       </div>
     </section>
 
+    {unreadCount > 0 && <div className="feedback-unread-banner" role="status">
+      <Bell size={19}/>
+      <div><strong>你的反馈有新回复</strong><span>有 {unreadCount} 条开发者回复还没查看，进入“我的反馈”即可看到完整沟通记录。</span></div>
+      <button className="primary-button" type="button" onClick={() => setView('mine')}>查看回复</button>
+    </div>}
+
     <div className="feedback-tabs" role="tablist" aria-label="意见反馈">
       <button type="button" className={view === 'submit' ? 'active' : ''} onClick={() => setView('submit')}>提交反馈</button>
-      <button type="button" className={view === 'mine' ? 'active' : ''} onClick={() => setView('mine')}>我的反馈</button>
+      <button type="button" className={view === 'mine' ? 'active' : ''} onClick={() => setView('mine')}>我的反馈{unreadCount > 0 && <em>{unreadCount > 99 ? '99+' : unreadCount}</em>}</button>
       {isAdmin && <button type="button" className={view === 'admin' ? 'active' : ''} onClick={() => setView('admin')}>反馈管理</button>}
     </div>
 
@@ -324,12 +448,12 @@ export function FeedbackPage() {
     </form>}
 
     {view === 'mine' && <section className="feedback-panel">
-      <div className="feedback-panel-head"><div><h3>我的反馈</h3><p>{signedIn ? '显示你的账号反馈，以及这台浏览器在登录前提交的游客反馈。' : '未登录也可以查看这台浏览器提交过的反馈和开发者回复；清除浏览器数据或换设备后无法恢复本机游客记录。'}</p></div>{sessionReady && <button className="ghost-button" type="button" onClick={() => setRefreshKey(value => value + 1)}><RefreshCw size={15}/>刷新</button>}</div>
-      {!sessionReady ? <div className="feedback-empty"><RefreshCw size={18}/><span>正在准备反馈记录…</span></div> : <FeedbackList scope="mine" refreshKey={refreshKey}/>}
+      <div className="feedback-panel-head"><div><h3>我的反馈</h3><p>{signedIn ? '显示你的账号反馈，以及这台浏览器在登录前提交的游客反馈；每条反馈都可以继续追加说明。' : '未登录也可以查看这台浏览器提交过的反馈、开发者回复并继续追加文字；清除浏览器数据或换设备后无法恢复本机游客记录。'}</p></div>{sessionReady && <button className="ghost-button" type="button" onClick={() => setRefreshKey(value => value + 1)}><RefreshCw size={15}/>刷新</button>}</div>
+      {!sessionReady ? <div className="feedback-empty"><RefreshCw size={18}/><span>正在准备反馈记录…</span></div> : <FeedbackList scope="mine" refreshKey={refreshKey} onUnreadCountChange={setUnreadCount}/>} 
     </section>}
 
     {view === 'admin' && isAdmin && <section className="feedback-panel feedback-admin-panel">
-      <div className="feedback-panel-head"><div><h3>反馈管理</h3><p>查看全部反馈、完整用户快照、来源环境和使用深度，并调整状态或回复用户。</p></div><button className="ghost-button" type="button" onClick={() => setRefreshKey(value => value + 1)}><RefreshCw size={15}/>刷新</button></div>
+      <div className="feedback-panel-head"><div><h3>反馈管理</h3><p>查看全部反馈、完整用户快照和沟通记录；开发者回复可附图片，用户追加追问后也会保留在同一会话里。</p></div><button className="ghost-button" type="button" onClick={() => setRefreshKey(value => value + 1)}><RefreshCw size={15}/>刷新</button></div>
       <FeedbackList scope="admin" refreshKey={refreshKey}/>
     </section>}
   </div>
