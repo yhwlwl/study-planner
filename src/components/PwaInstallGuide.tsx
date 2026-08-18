@@ -14,9 +14,9 @@ import {
 } from '../pwa-install'
 import '../pwa-install.css'
 
-const IOS_GUIDE_IMAGE = 'https://images.macrumors.com/article-new/2025/08/ios-add-to-home-screen2.jpg'
-const ANDROID_GUIDE_IMAGE = 'https://media.datacamp.com/cms/ad_4nxe49nq6tr5_ztlcs1479onosgbrp7gefrnim_l68opzhvpkrkaqzc_zhvx7gbbdpqjjzpcskoqxntiv27-qpoqdwvnyanssvlgnij1nwohes2ondrc4x36gekqvz9cww_c_my6h2g.png'
-const DESKTOP_GUIDE_IMAGE = 'https://nimboard.com/images/pwa-chrome.png'
+const IOS_GUIDE_IMAGE = 'https://images.tenorshare.cn/topics/iphone-tips/llqsctj2.png'
+const ANDROID_GUIDE_IMAGE = 'https://meta.appinn.net/uploads/default/original/2X/6/601259bd6228c0b470ad5c29f3084f8e6ae216ea.jpeg'
+const DESKTOP_GUIDE_IMAGE = 'https://cdn3.linux.do/original/4X/3/d/4/3d4a0358fecd6549e02a883b2f145b612d88275e.jpeg'
 
 const APPLE_SUPPORT_URL = 'https://support.apple.com/zh-cn/guide/iphone/iph42ab2f3a7/ios'
 const CHROME_SUPPORT_URL = 'https://support.google.com/chrome/answer/9658361?hl=zh-Hans'
@@ -70,7 +70,7 @@ export function PwaInstallGuideContent({ platform = installPlatform(), compact =
           <li><b>2</b><span>点浏览器的“共享”按钮，再向下找到“添加到主屏幕”。</span></li>
           <li><b>3</b><span>如有“作为网页 App 打开”，保持开启，然后点“添加”。</span></li>
         </ol>
-        {!compact && <GuideVisual src={IOS_GUIDE_IMAGE} alt="iPhone Safari 添加到主屏幕的操作示意图"/>}
+        {!compact && <GuideVisual src={IOS_GUIDE_IMAGE} alt="iPhone Safari 简体中文界面的添加到主屏幕操作示意图"/>}
         <small className="pwa-guide-image-note">不同 iOS 版本的按钮位置可能略有差异，以“共享 → 添加到主屏幕”为准。</small>
         <a href={APPLE_SUPPORT_URL} target="_blank" rel="noreferrer">Apple 官方说明<ArrowUpRight size={13}/></a>
       </article>
@@ -82,7 +82,7 @@ export function PwaInstallGuideContent({ platform = installPlatform(), compact =
           <li><b>2</b><span>点右上角“⋮”菜单，选择“安装应用”或“添加到主屏幕”。</span></li>
           <li><b>3</b><span>在系统安装框中确认“安装”。</span></li>
         </ol>
-        {!compact && <GuideVisual src={ANDROID_GUIDE_IMAGE} alt="Android Chrome 安装网页应用的操作示意图"/>}
+        {!compact && <GuideVisual src={ANDROID_GUIDE_IMAGE} alt="Android Chrome 简体中文界面的添加到主屏幕操作示意图"/>}
         <a href={CHROME_SUPPORT_URL} target="_blank" rel="noreferrer">Chrome 官方说明<ArrowUpRight size={13}/></a>
       </article>
 
@@ -93,7 +93,7 @@ export function PwaInstallGuideContent({ platform = installPlatform(), compact =
           <li><b>2</b><span>没有图标时，打开浏览器菜单，选择“将网页安装为应用 / 安装应用”。</span></li>
           <li><b>3</b><span>确认安装后，可以从桌面、Dock 或开始菜单直接打开。</span></li>
         </ol>
-        {!compact && <GuideVisual src={DESKTOP_GUIDE_IMAGE} alt="Chrome 桌面端安装网页应用的操作示意图"/>}
+        {!compact && <GuideVisual src={DESKTOP_GUIDE_IMAGE} alt="Chrome 桌面端简体中文界面的将网页作为应用安装操作示意图"/>}
         <a href={CHROME_SUPPORT_URL} target="_blank" rel="noreferrer">Chrome 官方说明<ArrowUpRight size={13}/></a>
       </article>
     </div>
