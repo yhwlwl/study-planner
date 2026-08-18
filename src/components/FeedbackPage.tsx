@@ -215,8 +215,8 @@ function FeedbackList({ scope, refreshKey, onUnreadCountChange }: { scope: 'mine
     const next = Array.from(files ?? [])
     const validation = validateFeedbackScreenshots(next)
     if (validation) { setError(validation); return }
-    if (!record.user_id && next.length) {
-      setError('游客反馈暂不支持在会话中传图片；可以继续发送文字。')
+    if (scope === 'mine' && !record.user_id && next.length) {
+      setError('游客追加回复目前只支持文字；开发者回复中的图片仍可安全查看。')
       return
     }
     setReplyFiles(next)
@@ -258,7 +258,7 @@ function FeedbackList({ scope, refreshKey, onUnreadCountChange }: { scope: 'mine
     <div className="feedback-history-list">
       {records.map(record => {
         const unreadReplies = record.replies.filter(reply => replyIsNew(reply, scope)).length
-        const canAttachToReply = Boolean(record.user_id)
+        const canAttachToReply = scope === 'admin' || Boolean(record.user_id)
         return <article className={`feedback-history-card ${unreadReplies ? 'has-new-reply' : ''}`} key={record.id}>
           <div className="feedback-history-head">
             <div className="feedback-history-meta">
@@ -309,7 +309,7 @@ function FeedbackList({ scope, refreshKey, onUnreadCountChange }: { scope: 'mine
                         <input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={event => chooseReplyFiles(record, event.target.files)}/>
                         <ImagePlus size={16}/><span>添加图片</span><small>最多 3 张，每张 5MB</small>
                       </label>
-                    : <p className="feedback-reply-guest-note">游客会话继续采用本机安全密钥识别，目前只支持文字追加；登录账号反馈可在回复中传图。</p>}
+                    : <p className="feedback-reply-guest-note">游客追加回复目前只支持文字；开发者仍可在回复中附图，图片会在校验本机反馈身份后通过临时签名地址显示。</p>}
                   <SelectedReplyFiles files={replyFiles} onRemove={index => setReplyFiles(current => current.filter((_, currentIndex) => currentIndex !== index))}/>
                   {(scope === 'mine' && (record.status === 'resolved' || record.status === 'closed')) && <p className="feedback-reopen-note">发送后这条反馈会自动重新打开为“处理中”，方便开发者继续跟进。</p>}
                   <div><button className="ghost-button" type="button" disabled={saving} onClick={cancelReply}>取消</button><button className="primary-button" type="button" disabled={saving || !replyText.trim()} onClick={() => void sendReply(record)}>{saving ? '发送中…' : scope === 'admin' ? '发送回复' : '发送追加回复'}</button></div>
@@ -453,7 +453,7 @@ export function FeedbackPage() {
     </section>}
 
     {view === 'admin' && isAdmin && <section className="feedback-panel feedback-admin-panel">
-      <div className="feedback-panel-head"><div><h3>反馈管理</h3><p>查看全部反馈、完整用户快照和沟通记录；开发者回复可附图片，用户追加追问后也会保留在同一会话里。</p></div><button className="ghost-button" type="button" onClick={() => setRefreshKey(value => value + 1)}><RefreshCw size={15}/>刷新</button></div>
+      <div className="feedback-panel-head"><div><h3>反馈管理</h3><p>查看全部反馈、完整用户快照和沟通记录；开发者可向登录用户或游客发送图片回复，用户追加追问后也会保留在同一会话里。</p></div><button className="ghost-button" type="button" onClick={() => setRefreshKey(value => value + 1)}><RefreshCw size={15}/>刷新</button></div>
       <FeedbackList scope="admin" refreshKey={refreshKey}/>
     </section>}
   </div>
