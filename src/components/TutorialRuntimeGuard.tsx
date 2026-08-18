@@ -80,54 +80,89 @@ function enforceOnlyTutorialGoal() {
   })
 }
 
-function guardScheduleButton(waitingForRepair: boolean) {
-  const button = document.querySelector<HTMLButtonElement>('button[data-tutorial-target="schedule-intake"]')
-  if (!button) return
-  if (waitingForRepair) {
-    button.disabled = true
-    button.dataset.tutorialGoalRepairGuard = '1'
-    button.title = '正在同步刚才的目标关联…'
-    return
-  }
-  if (button.dataset.tutorialGoalRepairGuard === '1') {
-    button.disabled = false
-    button.removeAttribute('data-tutorial-goal-repair-guard')
-    button.removeAttribute('title')
-  }
+type PendingScheduleRetry = {
+  button: HTMLButtonElement
+  wasDisabled: boolean
 }
 
 export function TutorialRuntimeGuard() {
   const { state, namespace, setDataSpace } = useApp()
   const stateRef = useRef(state)
   const repairInFlight = useRef(false)
+  const pendingScheduleRetry = useRef<PendingScheduleRetry>()
   stateRef.current = state
 
-  const attemptRepair = () => {
-    if (namespace !== TUTORIAL_NAMESPACE) {
-      guardScheduleButton(false)
-      return
-    }
+  const ensureGoalLinkReady = () => {
+    if (namespace !== TUTORIAL_NAMESPACE || repairInFlight.current) return
     const session = readTutorialSession()
     const repaired = repairTutorialGoalLinkRace(stateRef.current, session?.step)
-    guardScheduleButton(Boolean(repaired) || repairInFlight.current)
-    if (!repaired || repairInFlight.current) return
+    if (!repaired) return
 
     repairInFlight.current = true
     void setDataSpace(TUTORIAL_NAMESPACE, repaired, false)
-      .finally(() => {
-        repairInFlight.current = false
-        window.requestAnimationFrame(attemptRepair)
-      })
+      .finally(() => { repairInFlight.current = false })
   }
 
   useEffect(() => {
-    attemptRepair()
+    ensureGoalLinkReady()
   }, [namespace, setDataSpace, state])
+
+  useEffect(() => {
+    if (namespace !== TUTORIAL_NAMESPACE) return
+
+    // 不能只在 step 变化后“尽快修复”：用户仍可能在修复写入 React state 前点到
+    // “生成排期预览”，从旧 state 生成一个永久缺少正式目标关联的 proposal。
+    // 因此在 capture 阶段拦截这一次点击；修复真正进入 React state 后再自动重放。
+    const guardScheduleClick = (event: MouseEvent) => {
+      const source = event.target
+      if (!(source instanceof Element)) return
+      const button = source.closest<HTMLButtonElement>('[data-tutorial-action="schedule-intake"]')
+      if (!button) return
+      const session = readTutorialSession()
+      if (session?.step !== 'intake-schedule') return
+      const repaired = repairTutorialGoalLinkRace(stateRef.current, session.step)
+      if (!repaired) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      if (!pendingScheduleRetry.current) {
+        pendingScheduleRetry.current = { button, wasDisabled: button.disabled }
+        button.disabled = true
+        button.setAttribute('aria-busy', 'true')
+        button.title = '正在同步刚才的目标关联…'
+      }
+      if (repairInFlight.current) return
+      repairInFlight.current = true
+      void setDataSpace(TUTORIAL_NAMESPACE, repaired, false)
+        .finally(() => { repairInFlight.current = false })
+    }
+
+    document.addEventListener('click', guardScheduleClick, true)
+    return () => document.removeEventListener('click', guardScheduleClick, true)
+  }, [namespace, setDataSpace])
+
+  useEffect(() => {
+    const pending = pendingScheduleRetry.current
+    if (!pending || namespace !== TUTORIAL_NAMESPACE) return
+    const session = readTutorialSession()
+    if (session?.step !== 'intake-schedule') return
+    // 只有当 Context 已经重新渲染出 canonical state，才允许重放用户刚才的点击。
+    // 这样 prepareIntakeBatch 读取到的一定是已经带目标关联的新 state。
+    if (repairTutorialGoalLinkRace(state, session.step)) return
+
+    pendingScheduleRetry.current = undefined
+    pending.button.disabled = pending.wasDisabled
+    pending.button.removeAttribute('aria-busy')
+    pending.button.removeAttribute('title')
+    const frame = window.requestAnimationFrame(() => {
+      if (pending.button.isConnected) pending.button.click()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [namespace, state])
 
   useEffect(() => {
     if (namespace !== TUTORIAL_NAMESPACE) {
       restoreGoalOptions()
-      guardScheduleButton(false)
       return
     }
 
@@ -137,14 +172,12 @@ export function TutorialRuntimeGuard() {
       frame = window.requestAnimationFrame(() => {
         frame = undefined
         enforceOnlyTutorialGoal()
-        attemptRepair()
+        ensureGoalLinkReady()
       })
     }
 
     schedule()
-    // 不使用 DOM MutationObserver / 轮询；只在真实用户交互后检查一次。
-    // “保存修改”的同一次点击会推进 tutorial step，因此这里能在下一帧看到最新 step，
-    // 并在用户有机会点“生成排期预览”之前完成竞态修复。
+    // 不使用 MutationObserver / 轮询，只在真实交互和 React 状态变化后检查。
     document.addEventListener('click', schedule, true)
     document.addEventListener('focusin', schedule, true)
     return () => {
@@ -152,7 +185,6 @@ export function TutorialRuntimeGuard() {
       document.removeEventListener('click', schedule, true)
       document.removeEventListener('focusin', schedule, true)
       restoreGoalOptions()
-      guardScheduleButton(false)
     }
   }, [namespace, state.updatedAt])
 
