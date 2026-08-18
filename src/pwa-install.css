@@ -162,10 +162,11 @@
 .pwa-guide-visual {
   width: 100%;
   aspect-ratio: 1 / 1;
-  object-fit: cover;
+  object-fit: contain;
+  object-position: center;
   border-radius: 12px;
   border: 1px solid var(--line, #e7ebf1);
-  background: var(--surface-2, #f6f8fb);
+  background: #fff;
 }
 .pwa-guide-visual-fallback {
   aspect-ratio: 1 / 1;
@@ -180,6 +181,58 @@
   color: var(--muted, #748094);
   text-align: center;
   font-size: 12px;
+}
+.pwa-guide-diagram {
+  place-items: stretch;
+  align-content: center;
+  gap: 10px;
+  text-align: left;
+  background: #fff;
+  border-style: solid;
+}
+.pwa-diagram-browser-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f5f7fb;
+  color: #58677b;
+  font-size: 11px;
+}
+.pwa-diagram-browser-bar b {
+  color: var(--primary, #2563eb);
+  font-size: 12px;
+}
+.pwa-diagram-menu {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid #dfe4ec;
+  border-radius: 11px;
+  background: #fff;
+}
+.pwa-diagram-menu span,
+.pwa-diagram-menu strong {
+  padding: 9px 11px;
+  border-bottom: 1px solid #edf0f5;
+  color: #4c596b;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.pwa-diagram-menu > :last-child { border-bottom: 0; }
+.pwa-diagram-menu strong {
+  color: #125ee5;
+  background: #eef4ff;
+  font-weight: 800;
+  box-shadow: inset 3px 0 0 #2b6df3;
+}
+.pwa-guide-diagram small {
+  color: #64748b;
+  font-size: 10.5px;
+  line-height: 1.45;
+  text-align: center;
 }
 .pwa-installed-state {
   display: flex;
@@ -231,7 +284,10 @@
   .pwa-guide-modal-actions { padding: 12px 14px calc(12px + env(safe-area-inset-bottom)); }
   .pwa-guide-platform { display: flex; }
   .pwa-guide-platform .pwa-guide-visual,
-  .pwa-guide-platform .pwa-guide-visual-fallback { aspect-ratio: 4 / 3; }
+  .pwa-guide-platform .pwa-guide-visual-fallback {
+    aspect-ratio: 1 / 1;
+    object-fit: contain;
+  }
   .pwa-guide-current { align-items: flex-start; }
 }
 
