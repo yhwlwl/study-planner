@@ -119,14 +119,57 @@ export function PwaInstallPrompt() {
   useEffect(() => {
     if (isStandaloneMode()) return
     const visitCount = recordBrowserVisit()
+    const timers = new Set<number>()
+    let interactionTimer: number | undefined
+
+    const schedule = (callback: () => void, delay: number) => {
+      const id = window.setTimeout(() => {
+        timers.delete(id)
+        callback()
+      }, delay)
+      timers.add(id)
+      return id
+    }
+
+    const busyWithAnotherFlow = () => Boolean(document.querySelector(
+      '.guide-page, .tutorial-coachmark, .tutorial-offer-copy, .modal-backdrop, .drawer-backdrop, .pwa-guide-modal-backdrop'
+    ))
 
     const showIfUseful = () => {
-      if (!shouldAutoOfferInstall(visitCount)) return
-      if (document.querySelector('.guide-page, .tutorial-coachmark, .tutorial-offer-copy, .modal-backdrop, .drawer-backdrop, .pwa-guide-modal-backdrop')) return
+      if (!shouldAutoOfferInstall(visitCount) || busyWithAnotherFlow()) return
       setVisible(true)
     }
 
-    const timer = window.setTimeout(showIfUseful, 2200)
+    const showGuideAfterTutorial = (attempt = 0) => {
+      if (!shouldAutoOfferInstall(visitCount)) return
+      if (busyWithAnotherFlow()) {
+        if (attempt < 8) schedule(() => showGuideAfterTutorial(attempt + 1), 350)
+        return
+      }
+      setVisible(false)
+      setGuideOpen(true)
+    }
+
+    // 首次访问也应有机会看到安装提示，但先留足时间给注册、首次建档或教程选择。
+    schedule(showIfUseful, 6500)
+
+    const onDocumentClick = (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target : undefined
+      const button = target?.closest('button')
+      const finishingTutorial = Boolean(button?.closest('.tutorial-coachmark') && button.textContent?.trim() === '开始我的计划')
+      if (finishingTutorial) {
+        // 完整互动教程结束后直接接图文 PWA 教程，而不是再等下一次访问。
+        schedule(() => showGuideAfterTutorial(), 700)
+        return
+      }
+      if (interactionTimer !== undefined) {
+        window.clearTimeout(interactionTimer)
+        timers.delete(interactionTimer)
+      }
+      // 新用户关闭首次引导、直接开始空白计划等场景，在原弹窗真正消失后再轻提示。
+      interactionTimer = schedule(showIfUseful, 1000)
+    }
+
     const onBeforeInstall = (event: Event) => {
       event.preventDefault()
       const prompt = event as BeforeInstallPromptEvent
@@ -153,11 +196,13 @@ export function PwaInstallPrompt() {
       }
     }
 
+    document.addEventListener('click', onDocumentClick, true)
     window.addEventListener('beforeinstallprompt', onBeforeInstall)
     window.addEventListener('appinstalled', onInstalled)
     window.addEventListener(PWA_INSTALL_EVENT, onRequest)
     return () => {
-      window.clearTimeout(timer)
+      timers.forEach(id => window.clearTimeout(id))
+      document.removeEventListener('click', onDocumentClick, true)
       window.removeEventListener('beforeinstallprompt', onBeforeInstall)
       window.removeEventListener('appinstalled', onInstalled)
       window.removeEventListener(PWA_INSTALL_EVENT, onRequest)
