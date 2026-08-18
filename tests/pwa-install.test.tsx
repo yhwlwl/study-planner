@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { PwaInstallGuideContent, PwaInstallPrompt } from '../src/components/PwaInstallGuide'
@@ -77,7 +78,7 @@ describe('PWA 安装引导', () => {
   })
 
   it('iPhone 截图必须完整显示，不能再用 cover 裁掉“添加到主屏幕”', () => {
-    const css = readFileSync(new URL('../src/pwa-install.css', import.meta.url), 'utf8')
+    const css = readFileSync(join(process.cwd(), 'src/pwa-install.css'), 'utf8')
     const visualRule = css.match(/\.pwa-guide-visual\s*\{[\s\S]*?\}/)?.[0] ?? ''
     expect(visualRule).toContain('object-fit: contain')
     expect(visualRule).not.toContain('object-fit: cover')
