@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { PwaInstallGuideContent, PwaInstallPrompt } from '../src/components/PwaInstallGuide'
 import {
   isStandaloneMode,
@@ -73,5 +74,28 @@ describe('PWA 安装引导', () => {
     expect(screen.getAllByText(/共享/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/添加到主屏幕/).length).toBeGreaterThan(0)
     expect(screen.getByText('Apple 官方说明')).toBeTruthy()
+  })
+
+  it('iPhone 截图必须完整显示，不能再用 cover 裁掉“添加到主屏幕”', () => {
+    const css = readFileSync(new URL('../src/pwa-install.css', import.meta.url), 'utf8')
+    const visualRule = css.match(/\.pwa-guide-visual\s*\{[\s\S]*?\}/)?.[0] ?? ''
+    expect(visualRule).toContain('object-fit: contain')
+    expect(visualRule).not.toContain('object-fit: cover')
+  })
+
+  it('桌面截图即使第三方图片失效，也显示内置中文安装菜单示意图', () => {
+    render(<PwaInstallGuideContent platform="desktop" />)
+    const image = screen.getByAltText('Chrome 桌面端中文界面的将网页作为应用安装操作示意图')
+    fireEvent.error(image)
+    expect(screen.getByText('将网页作为应用安装…')).toBeTruthy()
+    expect(screen.getByText(/关键位置：浏览器菜单/)).toBeTruthy()
+  })
+
+  it('iPhone 截图失效时的兜底图仍直接标出添加到主屏幕', () => {
+    render(<PwaInstallGuideContent platform="ios" />)
+    const image = screen.getByAltText('iPhone Safari 简体中文界面的添加到主屏幕操作示意图')
+    fireEvent.error(image)
+    expect(screen.getByText('添加到主屏幕 ＋')).toBeTruthy()
+    expect(screen.getByText(/关键位置：共享/)).toBeTruthy()
   })
 })
