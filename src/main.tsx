@@ -5,6 +5,7 @@ import App from './App'
 import { AppProvider } from './AppContext'
 import { AnalyticsObserver } from './components/AnalyticsObserver'
 import { EmailVerificationBanner } from './components/EmailVerificationBanner'
+import { FeedbackNotificationObserver } from './components/FeedbackNotificationObserver'
 import { initializeAnalytics, installVisitLogRetry, recordPageVisit } from './lib/analytics'
 import { announcePwaUpdate, configurePwaUpdater } from './lib/pwa-update'
 import { AppErrorBoundary } from './components/AppErrorBoundary'
@@ -22,6 +23,7 @@ createRoot(document.getElementById('root')!).render(
       <AppProvider>
         <AnalyticsObserver />
         <EmailVerificationBanner />
+        <FeedbackNotificationObserver />
         <App />
       </AppProvider>
     </AppErrorBoundary>
