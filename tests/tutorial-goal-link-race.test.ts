@@ -10,8 +10,8 @@ import {
   type TutorialSession,
 } from '../src/lib/tutorial'
 
-function sessionAt(step: TutorialSession['step']): TutorialSession {
-  return {
+describe('教程目标关联竞态保护', () => {
+  const sessionAt = (step: TutorialSession['step']): TutorialSession => ({
     version: TUTORIAL_VERSION,
     anchorDate: '2026-08-18',
     step,
@@ -20,10 +20,8 @@ function sessionAt(step: TutorialSession['step']): TutorialSession {
     returnPage: 'intake',
     startedAt: '2026-08-18T00:00:00.000Z',
     updatedAt: '2026-08-18T00:00:00.000Z',
-  }
-}
+  })
 
-describe('教程目标关联竞态保护', () => {
   it('教程已经进入排期阶段时会补齐被 React 写保护竞态丢掉的最后一次目标关联', () => {
     const state = buildTutorialCheckpoint('intake-schedule', '2026-08-18')
     const batch = state.intakeBatches.find(item => item.id === TUTORIAL_INTAKE_BATCH_ID)
