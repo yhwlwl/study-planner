@@ -46,6 +46,15 @@ const accountRecord = {
   ],
 }
 
+const guestRecord = {
+  ...accountRecord,
+  id: 'feedback-guest-1',
+  user_id: null,
+  content: '游客原始问题',
+  status: 'new',
+  replies: [],
+}
+
 beforeEach(() => {
   feedbackMocks.getFeedbackSessionContext.mockReset().mockResolvedValue({ session: { user: { id: 'user-1' } }, isAdmin: false })
   feedbackMocks.getUnreadFeedbackReplyCount.mockReset().mockResolvedValue(1)
@@ -114,5 +123,20 @@ describe('反馈回复通知与双向会话', () => {
     const input = document.querySelector<HTMLInputElement>('.feedback-reply-upload input[type="file"]')
     expect(input?.accept).toContain('image/png')
     expect(input?.multiple).toBe(true)
+  })
+
+  it('开发者给游客反馈回复时同样可以选择图片附件', async () => {
+    feedbackMocks.getFeedbackSessionContext.mockResolvedValue({ session: { user: { id: 'admin-1' } }, isAdmin: true })
+    feedbackMocks.getUnreadFeedbackReplyCount.mockResolvedValue(0)
+    feedbackMocks.listFeedback.mockResolvedValue([guestRecord])
+
+    render(<FeedbackPage />)
+    fireEvent.click(await screen.findByRole('button', { name: '反馈管理' }))
+    expect(await screen.findByText('游客原始问题')).toBeTruthy()
+    expect(screen.getByText('游客')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '回复用户' }))
+    expect(screen.getByText('添加图片')).toBeTruthy()
+    expect(screen.queryByText(/游客会话.*只支持文字/)).toBeNull()
   })
 })
