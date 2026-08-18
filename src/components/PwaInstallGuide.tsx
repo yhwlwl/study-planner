@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, Download, ExternalLink, Laptop, MoreHorizontal, Share2, Smartphone, X } from 'lucide-react'
 import {
   PWA_INSTALL_EVENT,
@@ -14,7 +14,7 @@ import {
 } from '../pwa-install'
 import '../pwa-install.css'
 
-const IOS_GUIDE_IMAGE = 'https://content.antistatique.net/app/uploads/2023/07/IOSPWAINSTALL-1.jpg'
+const IOS_GUIDE_IMAGE = 'https://images.macrumors.com/article-new/2025/08/ios-add-to-home-screen2.jpg'
 const ANDROID_GUIDE_IMAGE = 'https://media.datacamp.com/cms/ad_4nxe49nq6tr5_ztlcs1479onosgbrp7gefrnim_l68opzhvpkrkaqzc_zhvx7gbbdpqjjzpcskoqxntiv27-qpoqdwvnyanssvlgnij1nwohes2ondrc4x36gekqvz9cww_c_my6h2g.png'
 const DESKTOP_GUIDE_IMAGE = 'https://nimboard.com/images/pwa-chrome.png'
 
@@ -67,6 +67,7 @@ export function PwaInstallGuideContent({ platform = installPlatform(), compact =
           <li><b>3</b><span>如有“作为网页 App 打开”，保持开启，然后点“添加”。</span></li>
         </ol>
         {!compact && <GuideVisual src={IOS_GUIDE_IMAGE} alt="iPhone Safari 添加到主屏幕的操作示意图"/>}
+        <small className="pwa-guide-image-note">不同 iOS 版本的按钮位置可能略有差异，以“共享 → 添加到主屏幕”为准。</small>
         <a href={APPLE_SUPPORT_URL} target="_blank" rel="noreferrer">Apple 官方说明<ExternalLink size={13}/></a>
       </article>
 
@@ -107,27 +108,29 @@ export function PwaInstallPrompt() {
   const [visible, setVisible] = useState(false)
   const [guideOpen, setGuideOpen] = useState(false)
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent>()
+  const deferredPromptRef = useRef<BeforeInstallPromptEvent>()
   const [installing, setInstalling] = useState(false)
   const [platform] = useState<InstallPlatform>(() => installPlatform())
 
   useEffect(() => {
     if (isStandaloneMode()) return
     const visitCount = recordBrowserVisit()
-    let timer = 0
 
     const showIfUseful = () => {
       if (!shouldAutoOfferInstall(visitCount)) return
-      if (document.querySelector('.guide-page, .tutorial-coachmark, .tutorial-offer-copy')) return
+      if (document.querySelector('.guide-page, .tutorial-coachmark, .tutorial-offer-copy, .modal-backdrop, .drawer-backdrop, .pwa-guide-modal-backdrop')) return
       setVisible(true)
     }
 
-    timer = window.setTimeout(showIfUseful, 2200)
-
+    const timer = window.setTimeout(showIfUseful, 2200)
     const onBeforeInstall = (event: Event) => {
       event.preventDefault()
-      setDeferredPrompt(event as BeforeInstallPromptEvent)
+      const prompt = event as BeforeInstallPromptEvent
+      deferredPromptRef.current = prompt
+      setDeferredPrompt(prompt)
     }
     const onInstalled = () => {
+      deferredPromptRef.current = undefined
       setVisible(false)
       setGuideOpen(false)
       setDeferredPrompt(undefined)
@@ -135,8 +138,12 @@ export function PwaInstallPrompt() {
     const onRequest = (event: Event) => {
       const detail = (event as CustomEvent<InstallRequestDetail>).detail
       setVisible(false)
-      if (detail?.install && deferredPrompt) {
-        void runNativeInstall(deferredPrompt, setInstalling, setDeferredPrompt, setGuideOpen)
+      const prompt = deferredPromptRef.current
+      if (detail?.install && prompt) {
+        void runNativeInstall(prompt, setInstalling, next => {
+          deferredPromptRef.current = next
+          setDeferredPrompt(next)
+        }, setGuideOpen)
       } else {
         setGuideOpen(true)
       }
@@ -151,13 +158,19 @@ export function PwaInstallPrompt() {
       window.removeEventListener('appinstalled', onInstalled)
       window.removeEventListener(PWA_INSTALL_EVENT, onRequest)
     }
-  }, [deferredPrompt])
+  }, [])
 
   if (isStandaloneMode()) return null
 
+  const updateDeferredPrompt = (next: BeforeInstallPromptEvent | undefined) => {
+    deferredPromptRef.current = next
+    setDeferredPrompt(next)
+  }
+
   const install = async () => {
-    if (!deferredPrompt) { setVisible(false); setGuideOpen(true); return }
-    await runNativeInstall(deferredPrompt, setInstalling, setDeferredPrompt, setGuideOpen)
+    const prompt = deferredPromptRef.current ?? deferredPrompt
+    if (!prompt) { setVisible(false); setGuideOpen(true); return }
+    await runNativeInstall(prompt, setInstalling, updateDeferredPrompt, setGuideOpen)
     setVisible(false)
   }
 
@@ -209,6 +222,7 @@ async function runNativeInstall(
     const choice = await prompt.userChoice
     setDeferredPrompt(undefined)
     if (choice.outcome === 'accepted') setGuideOpen(false)
+    else snoozeInstallPrompt()
   } catch {
     setGuideOpen(true)
   } finally {
