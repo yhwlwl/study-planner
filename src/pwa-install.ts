@@ -63,7 +63,7 @@ export function recordBrowserVisit() {
 }
 
 export function shouldAutoOfferInstall(visitCount: number) {
-  if (typeof window === 'undefined' || isStandaloneMode() || visitCount < 2) return false
+  if (typeof window === 'undefined' || isStandaloneMode() || visitCount < 1) return false
   const state = readState()
   if (state.never) return false
   if (state.snoozedUntil && state.snoozedUntil > Date.now()) return false
