@@ -70,8 +70,8 @@ describe('PWA 安装引导', () => {
 
   it('iPhone 教程包含共享与添加到主屏幕步骤', () => {
     render(<PwaInstallGuideContent platform="ios" compact />)
-    expect(screen.getByText(/共享/)).toBeTruthy()
-    expect(screen.getByText(/添加到主屏幕/)).toBeTruthy()
+    expect(screen.getAllByText(/共享/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/添加到主屏幕/).length).toBeGreaterThan(0)
     expect(screen.getByText('Apple 官方说明')).toBeTruthy()
   })
 })
