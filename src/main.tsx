@@ -7,12 +7,12 @@ import { AnalyticsObserver } from './components/AnalyticsObserver'
 import { EmailVerificationBanner } from './components/EmailVerificationBanner'
 import { FeedbackNotificationObserver } from './components/FeedbackNotificationObserver'
 import { PwaInstallPrompt } from './components/PwaInstallGuide'
+import { TutorialRuntimeGuard } from './components/TutorialRuntimeGuard'
 import { initializeAnalytics, installVisitLogRetry, recordPageVisit } from './lib/analytics'
 import { announcePwaUpdate, configurePwaUpdater } from './lib/pwa-update'
 import { AppErrorBoundary } from './components/AppErrorBoundary'
 import './analytics.css'
 import './feedback-admin.css'
-import './desktop-sidebar.css'
 
 const updateServiceWorker = registerSW({ immediate: true, onNeedRefresh: announcePwaUpdate })
 configurePwaUpdater(updateServiceWorker)
@@ -24,6 +24,7 @@ createRoot(document.getElementById('root')!).render(
     <AppErrorBoundary>
       <PwaInstallPrompt />
       <AppProvider>
+        <TutorialRuntimeGuard />
         <AnalyticsObserver />
         <EmailVerificationBanner />
         <FeedbackNotificationObserver />
