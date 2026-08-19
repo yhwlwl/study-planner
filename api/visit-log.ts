@@ -1,3 +1,5 @@
+import { resolveGeo } from './geo-enrichment'
+
 declare const process: { env: Record<string, string | undefined> }
 
 type VisitPayload = {
@@ -66,15 +68,6 @@ function safeMetadata(value: unknown): Record<string, string | number | boolean 
     else if (typeof rawValue === 'boolean' || rawValue === null) output[key] = rawValue
   }
   return output
-}
-
-function decodeHeader(value: string | null): string | null {
-  if (!value) return null
-  try {
-    return decodeURIComponent(value).slice(0, 160)
-  } catch {
-    return value.slice(0, 160)
-  }
 }
 
 function requestIp(headers: Headers): string | null {
@@ -161,8 +154,6 @@ function serviceHeaders(serviceKey: string): Record<string, string> {
     apikey: serviceKey,
     'Content-Type': 'application/json'
   }
-  // Legacy service_role keys are JWTs and should also be sent as a bearer token.
-  // New sb_secret_ keys are opaque and belong only in the apikey header.
   if (LEGACY_JWT_RE.test(serviceKey)) headers.Authorization = `Bearer ${serviceKey}`
   return headers
 }
@@ -322,13 +313,20 @@ async function insertVisit(request: Request, config: ServerConfig): Promise<Resp
   if (!eventId || !sessionId || !UUID_RE.test(eventId) || !UUID_RE.test(sessionId)) {
     return json(request, { ok: false, code: 'invalid_event_or_session_id' }, 400)
   }
-  // visitor_id is optional only for cached clients deployed before this analytics upgrade.
   if (visitorId && !UUID_RE.test(visitorId)) return json(request, { ok: false, code: 'invalid_visitor_id' }, 400)
 
   const eventType = text(payload.eventType, 32) ?? 'page_view'
   if (!ALLOWED_EVENT_TYPES.has(eventType)) return json(request, { ok: false, code: 'unsupported_event_type' }, 400)
   const userId = await verifiedUserId(request, config)
   const headers = request.headers
+  const ipAddress = requestIp(headers)
+  const geo = await resolveGeo({
+    headers,
+    ip: ipAddress,
+    supabaseUrl: config.supabaseUrl,
+    serviceKey: config.serviceKey,
+    serviceHeaders,
+  })
 
   const record = {
     event_id: eventId,
@@ -336,11 +334,13 @@ async function insertVisit(request: Request, config: ServerConfig): Promise<Resp
     visitor_id: visitorId,
     event_type: eventType,
     user_id: userId,
-    ip_address: requestIp(headers),
-    country_code: text(headers.get('x-vercel-ip-country'), 2),
-    region_code: text(headers.get('x-vercel-ip-country-region'), 8),
-    city: decodeHeader(headers.get('x-vercel-ip-city')),
-    ip_timezone: text(headers.get('x-vercel-ip-timezone'), 80),
+    ip_address: ipAddress,
+    country_code: geo.countryCode,
+    region_code: geo.regionCode,
+    city: geo.city,
+    ip_timezone: geo.timezone,
+    geo_source: geo.source,
+    geo_resolved_at: geo.resolvedAt,
     edge_region: text(process.env.VERCEL_REGION, 20),
     pathname: text(payload.pathname, 300),
     app_page: text(payload.appPage, 80),
