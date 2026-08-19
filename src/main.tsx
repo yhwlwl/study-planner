@@ -4,6 +4,7 @@ import { registerSW } from 'virtual:pwa-register'
 import App from './App'
 import { AppProvider } from './AppContext'
 import { AnalyticsObserver } from './components/AnalyticsObserver'
+import { AnalyticsExtensions } from './components/AnalyticsExtensions'
 import { EmailVerificationBanner } from './components/EmailVerificationBanner'
 import { FeedbackNotificationObserver } from './components/FeedbackNotificationObserver'
 import { PwaInstallPrompt } from './components/PwaInstallGuide'
@@ -26,6 +27,7 @@ createRoot(document.getElementById('root')!).render(
       <AppProvider>
         <TutorialRuntimeGuard />
         <AnalyticsObserver />
+        <AnalyticsExtensions />
         <EmailVerificationBanner />
         <FeedbackNotificationObserver />
         <App />
