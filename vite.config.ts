@@ -22,6 +22,9 @@ export default defineConfig({
         ]
       },
       workbox: {
+        // 管理后台由独立私有服务响应，不能被 SPA 的 navigation fallback
+        // 接管，否则已安装的 Service Worker 会把 /mg 错误返回为主站 index.html。
+        navigateFallbackDenylist: [/^\/mg(?:\/|$)/],
         // Guide screenshots are loaded on demand; keeping them out of the
         // first offline cache prevents a tutorial image from dominating PWA startup.
         globPatterns: ['**/*.{js,css,html,svg,ico}']
