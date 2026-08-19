@@ -1,5 +1,7 @@
 {
   "rewrites": [
+    { "source": "/mg", "destination": "https://kdwpmcdxapwecbfrvqtm.supabase.co/functions/v1/mg-admin" },
+    { "source": "/mg/:path*", "destination": "https://kdwpmcdxapwecbfrvqtm.supabase.co/functions/v1/mg-admin/:path*" },
     { "source": "/r1", "destination": "/index.html" },
     { "source": "/r2", "destination": "/index.html" },
     { "source": "/r3", "destination": "/index.html" }
