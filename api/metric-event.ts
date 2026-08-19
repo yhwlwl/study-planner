@@ -1,3 +1,5 @@
+import { resolveGeo } from './geo-enrichment'
+
 declare const process: { env: Record<string, string | undefined> }
 
 type MetricPayload = {
@@ -87,11 +89,6 @@ function requestIp(headers: Headers): string | null {
   return /^[0-9a-f:.]+$/i.test(value) ? value : null
 }
 
-function decodeHeader(value: string | null) {
-  if (!value) return null
-  try { return decodeURIComponent(value).slice(0, 160) } catch { return value.slice(0, 160) }
-}
-
 function serviceHeaders(serviceKey: string) {
   const result: Record<string, string> = { apikey: serviceKey, 'Content-Type': 'application/json' }
   if (LEGACY_JWT_RE.test(serviceKey)) result.Authorization = `Bearer ${serviceKey}`
@@ -150,6 +147,8 @@ export default {
 
     const userId = await verifiedUserId(request, supabaseUrl, serviceKey)
     const headers = request.headers
+    const ipAddress = requestIp(headers)
+    const geo = await resolveGeo({ headers, ip: ipAddress, supabaseUrl, serviceKey, serviceHeaders })
     const record = {
       event_id: eventId,
       session_id: sessionId,
@@ -158,11 +157,13 @@ export default {
       user_id: userId,
       occurred_at: new Date().toISOString(),
       client_time: text(payload.clientTime, 64),
-      ip_address: requestIp(headers),
-      country_code: text(headers.get('x-vercel-ip-country'), 2),
-      region_code: text(headers.get('x-vercel-ip-country-region'), 8),
-      city: decodeHeader(headers.get('x-vercel-ip-city')),
-      ip_timezone: text(headers.get('x-vercel-ip-timezone'), 80),
+      ip_address: ipAddress,
+      country_code: geo.countryCode,
+      region_code: geo.regionCode,
+      city: geo.city,
+      ip_timezone: geo.timezone,
+      geo_source: geo.source,
+      geo_resolved_at: geo.resolvedAt,
       edge_region: text(headers.get('x-vercel-id')?.split('::')[0], 40),
       pathname: text(payload.pathname, 300),
       referrer_origin: null,
