@@ -109,7 +109,7 @@ export function TaskGroupDialog({ open, onClose, state, initial, defaultDate, on
 
       {!initial && <fieldset className="field span-2 intake-rule-choice"><legend>执行节奏</legend>
         <label><input type="radio" name="task-group-frequency" checked={!weeklyFrequency} onChange={() => setWeeklyFrequency(false)}/><span><strong>普通任务组</strong><small>生成指定数量，由排期器结合容量和目标安排。</small></span></label>
-        <label><input type="radio" name="task-group-frequency" checked={weeklyFrequency} onChange={() => setWeeklyFrequency(true)}/><span><strong>有限次数 · 每周 1 项</strong><small>例如 4 套数学卷，每周固定一天完成 1 套，共生成 4 次。</small></span></label>
+        <label><input type="radio" name="task-group-frequency" checked={weeklyFrequency} onChange={() => setWeeklyFrequency(true)}/><span><strong>有限次数 · 每周固定 1 项</strong><small>例如 4 套数学卷，每周固定一天完成 1 套，共生成 4 次。</small></span></label>
       </fieldset>}
 
       {!initial && weeklyFrequency && <div className="form-grid span-2">
@@ -137,7 +137,7 @@ export function TaskGroupDialog({ open, onClose, state, initial, defaultDate, on
       {!initial && state.goals.length > 0 && <fieldset className="field span-2 goal-link-field"><legend>同时加入目标（可选）</legend><small>勾选后，会把“完成这个任务组的全部任务”作为该目标的一项完成条件。需要只完成一半或指定数量时，请创建后到“目标”页面修改条件。</small>{state.goals.filter(goal => goal.status !== 'archived').map(goal => <label key={goal.id}><input type="checkbox" checked={goalIds.includes(goal.id)} onChange={event => setGoalIds(current => event.target.checked ? [...new Set([...current, goal.id])] : current.filter(id => id !== goal.id))}/><span>{goal.title} · 最晚 {goal.latestDate}</span></label>)}</fieldset>}
       <label className="field span-2"><span>备注</span><textarea rows={3} value={notes} onChange={event => setNotes(event.target.value)}/></label>
       {!initial && !weeklyFrequency && <div className="form-note span-2">{defaultDate ? `系统会优先把任务安排到 ${defaultDate}，` : ''}提交后先生成安排预览；确认前不会改变正式计划。任务组会按数量生成具体任务。</div>}
-      {!initial && weeklyFrequency && <div className="form-note span-2">有限每周任务复用现有重复任务机制；确认方案前不会改变正式计划。若你想“每周任意一天完成”而不是固定星期，目前仍应使用普通任务组让排期器自动安排。</div>}
+      {!initial && weeklyFrequency && <div className="form-note span-2">当前“每周频率”严格表示“每周固定星期完成 1 项”，复用现有重复任务机制，所以能保证次数和周频率。如果需求是“每周任意一天完成 1 项，由系统在这一周内自动找最佳日期”，现有数据模型还不能严格保证这种周窗口约束，需要单独扩展排期规则，不能用普通任务组冒充。</div>}
     </div>
     <div className="modal-actions">
       <button className="secondary-button" onClick={onClose}>取消</button>
