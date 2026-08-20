@@ -4,6 +4,11 @@ import type { Assignment, TaskGroup } from '../types'
 import { minutesText } from '../lib/date'
 import { useApp } from '../AppContext'
 
+export function nativeTaskDragAvailable(matchMedia: ((query: string) => MediaQueryList) | undefined = typeof window === 'undefined' ? undefined : window.matchMedia?.bind(window)) {
+  if (!matchMedia) return false
+  return matchMedia('(hover: hover) and (pointer: fine)').matches
+}
+
 export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact = false, tutorialTarget = false, tutorialLocked = false, tutorialDisabled = false, onTutorialBlocked }: { assignment: Assignment; group: TaskGroup; onComplete: (assignment: Assignment) => void; onOpenTimer: (assignment: Assignment) => void; compact?: boolean; tutorialTarget?: boolean; tutorialLocked?: boolean; tutorialDisabled?: boolean; onTutorialBlocked?: (message?: string) => void }) {
   const { state, updateAssignment, startTimer } = useApp()
   const [tick, setTick] = useState(0)
@@ -12,6 +17,9 @@ export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact =
   const timer = state.timer
   const active = timer.assignmentId === assignment.id
   const anotherTimerActive = Boolean(timer.assignmentId && !active)
+  // HTML5 draggable 会在部分 Android Chromium / Edge（尤其桌面图标/PWA 模式）里抢占手指纵向滑动。
+  // 只有明确支持鼠标悬停且主指针为 fine 的桌面环境才启用原生拖拽；触屏仍保留点击/计时等全部操作。
+  const nativeDragEnabled = nativeTaskDragAvailable()
 
   useEffect(() => {
     if (!active || !timer.running) return
@@ -46,9 +54,16 @@ export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact =
     updateAssignment(assignment.id, { status: 'todo', progress: 0, completedAt: undefined, remainingMinutes: undefined })
   }
 
-
   return (
-    <article data-assignment-id={assignment.id} className={`task-card ${assignment.status === 'done' ? 'task-done' : ''} ${compact ? 'task-compact' : ''}`} draggable={!tutorialLocked && !assignment.locked && assignment.status !== 'done'} onDragStart={event => event.dataTransfer.setData('text/assignment-id', assignment.id)}>
+    <article
+      data-assignment-id={assignment.id}
+      className={`task-card ${assignment.status === 'done' ? 'task-done' : ''} ${compact ? 'task-compact' : ''}`}
+      draggable={nativeDragEnabled && !tutorialLocked && !assignment.locked && assignment.status !== 'done'}
+      onDragStart={event => {
+        if (!nativeDragEnabled) { event.preventDefault(); return }
+        event.dataTransfer.setData('text/assignment-id', assignment.id)
+      }}
+    >
       <button className={`check-button ${tutorialDisabled ? 'tutorial-disabled-control' : ''}`} data-tutorial-target={tutorialTarget ? 'tutorial-execute' : undefined} data-tutorial-action={tutorialTarget ? 'complete-tutorial-task' : undefined} onClick={complete} disabled={assignment.status === 'done'} aria-disabled={tutorialDisabled || undefined} aria-label={assignment.status === 'done' ? '任务已完成' : '完成任务'} title={assignment.status === 'done' ? '任务已完成；重新打开请使用更多菜单' : tutorialDisabled ? '教程中先完成高亮任务' : '完成任务'}>
         {assignment.status === 'done' ? <Check size={18} /> : null}
       </button>
