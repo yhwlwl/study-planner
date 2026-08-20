@@ -77,8 +77,8 @@ export function TaskGroupDialog({ open, onClose, state, initial, defaultDate, on
     || weeklyRange.lastDate > state.settings.endDate
   )
   const weeklyPreview = weeklyRange.dates.length <= 5
-    ? weeklyRange.dates.map(fmtDate).join('、')
-    : `${weeklyRange.dates.slice(0, 3).map(fmtDate).join('、')} … ${fmtDate(weeklyRange.dates.at(-1)!)}`
+    ? weeklyRange.dates.map(date => fmtDate(date)).join('、')
+    : `${weeklyRange.dates.slice(0, 3).map(date => fmtDate(date)).join('、')} … ${fmtDate(weeklyRange.dates.at(-1)!)}`
 
   const draft = (): TaskGroupDraft => weeklyFrequency ? {
     title: title.trim(), subject: chosenSubject, priority, unitMinutes: minutes,
