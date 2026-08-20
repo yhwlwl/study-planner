@@ -4,12 +4,12 @@ import { nativeTaskDragAvailable } from '../src/components/TaskCard'
 
 describe('Android Edge / PWA 移动端交互回归', () => {
   it('触屏/粗指针环境不启用 HTML5 原生任务拖拽，避免抢占纵向滚动', () => {
-    const touchMatchMedia = ((query: string) => ({ matches: false, media: query })) as typeof window.matchMedia
+    const touchMatchMedia = ((query: string) => ({ matches: false, media: query })) as unknown as typeof window.matchMedia
     expect(nativeTaskDragAvailable(touchMatchMedia)).toBe(false)
   })
 
   it('鼠标 fine pointer 桌面环境仍保留任务拖拽', () => {
-    const desktopMatchMedia = ((query: string) => ({ matches: query === '(hover: hover) and (pointer: fine)', media: query })) as typeof window.matchMedia
+    const desktopMatchMedia = ((query: string) => ({ matches: query === '(hover: hover) and (pointer: fine)', media: query })) as unknown as typeof window.matchMedia
     expect(nativeTaskDragAvailable(desktopMatchMedia)).toBe(true)
   })
 
