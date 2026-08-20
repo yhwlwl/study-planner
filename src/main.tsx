@@ -5,6 +5,7 @@ import App from './App'
 import { AppProvider } from './AppContext'
 import { AnalyticsObserver } from './components/AnalyticsObserver'
 import { AnalyticsExtensions } from './components/AnalyticsExtensions'
+import { DataResetCompatibilityGuard } from './components/DataResetCompatibilityGuard'
 import { EmailVerificationBanner } from './components/EmailVerificationBanner'
 import { FeedbackNotificationObserver } from './components/FeedbackNotificationObserver'
 import { PwaInstallPrompt } from './components/PwaInstallGuide'
@@ -28,6 +29,7 @@ createRoot(document.getElementById('root')!).render(
         <TutorialRuntimeGuard />
         <AnalyticsObserver />
         <AnalyticsExtensions />
+        <DataResetCompatibilityGuard />
         <EmailVerificationBanner />
         <FeedbackNotificationObserver />
         <App />
