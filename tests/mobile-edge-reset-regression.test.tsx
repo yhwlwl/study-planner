@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import { isGuestResetButton } from '../src/components/DataResetCompatibilityGuard'
 import { nativeTaskDragAvailable } from '../src/components/TaskCard'
