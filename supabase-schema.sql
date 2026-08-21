@@ -304,6 +304,21 @@ for each row execute function public.enrich_feedback_submission();
 
 revoke all on table public.feedback_submissions from anon, authenticated;
 grant insert (feedback_type, content, user_id, visitor_id) on public.feedback_submissions to anon, authenticated;
+-- 与 supabase/migrations（20260817195500 / 20260817202500 / 20260818143000）保持一致：
+-- 登录用户可读自己的反馈（feedback_admin 可读全部），并可把已解决/已关闭的反馈重新打开为处理中；
+-- 管理员可更新状态。guest_access_hash 永远不授予客户端。若仅重跑本文件，这些授权必须在这里存在，
+-- 否则会把迁移已授予的列级权限 revoke 掉，导致反馈详情 403。
+grant select (
+  id, feedback_type, content, user_id, created_at,
+  app_version, page_path, user_agent, status, visitor_id, account_mode,
+  utm_source, utm_campaign, first_referrer, browser_language, client_timezone, is_pwa,
+  first_seen_at, last_seen_at, tenure_days,
+  total_sessions, total_events, total_active_days,
+  sessions_30d, events_30d, active_days_30d, unique_pages_30d,
+  assignment_count, completed_assignment_count, task_group_count, goal_count, intake_batch_count, replan_count,
+  depth_score, depth_level, depth_calculated_at
+) on table public.feedback_submissions to authenticated;
+grant update (status) on table public.feedback_submissions to authenticated;
 grant select, insert, update, delete on table public.feedback_submissions to service_role;
 
 drop policy if exists "Guests can submit feedback" on public.feedback_submissions;
@@ -316,12 +331,44 @@ create policy "Authenticated users can submit feedback"
 on public.feedback_submissions for insert to authenticated
 with check ((select auth.uid()) = user_id);
 
+drop policy if exists "Users can view own feedback" on public.feedback_submissions;
+create policy "Users can view own feedback"
+on public.feedback_submissions
+for select
+to authenticated
+using (
+  user_id = (select auth.uid())
+  or coalesce(((select auth.jwt()) -> 'app_metadata' ->> 'feedback_admin')::boolean, false)
+);
+
+drop policy if exists "Feedback admins can update status" on public.feedback_submissions;
+create policy "Feedback admins can update status"
+on public.feedback_submissions
+for update
+to authenticated
+using (coalesce(((select auth.jwt()) -> 'app_metadata' ->> 'feedback_admin')::boolean, false))
+with check (coalesce(((select auth.jwt()) -> 'app_metadata' ->> 'feedback_admin')::boolean, false));
+
+drop policy if exists "Users can reopen own feedback" on public.feedback_submissions;
+create policy "Users can reopen own feedback"
+on public.feedback_submissions
+for update
+to authenticated
+using (
+  user_id = (select auth.uid())
+  and status in ('resolved', 'closed')
+)
+with check (
+  user_id = (select auth.uid())
+  and status = 'reviewing'
+);
+
 create index if not exists feedback_submissions_created_at_idx on public.feedback_submissions (created_at desc);
 create index if not exists feedback_submissions_type_created_at_idx on public.feedback_submissions (feedback_type, created_at desc);
 create index if not exists feedback_submissions_depth_created_at_idx on public.feedback_submissions (depth_level, created_at desc);
 create index if not exists feedback_submissions_status_created_at_idx on public.feedback_submissions (status, created_at desc);
 
-comment on table public.feedback_submissions is 'User-submitted bug reports, product suggestions, and other feedback. Frontend roles may insert only; feedback is not readable from the client.';
+comment on table public.feedback_submissions is 'User-submitted bug reports, product suggestions, and other feedback. Authenticated users can read only rows allowed by RLS (own feedback or feedback_admin); guest_access_hash is never granted to clients. Conversation tables (feedback_replies / feedback_attachments) live in supabase/migrations.';
 comment on column public.feedback_submissions.visitor_id is 'Stable anonymous browser visitor identifier used to connect guest and pre-login visit history.';
 comment on column public.feedback_submissions.depth_score is 'Explainable 0-100 usage-depth score captured at feedback submission time. Derived server-side from visit history and cloud snapshot metrics.';
 comment on column public.feedback_submissions.depth_level is 'Usage-depth segment at submission time: new, casual, returning, engaged, or power. Power/engaged require multi-day usage to avoid one-session burst misclassification.';

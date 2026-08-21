@@ -64,7 +64,9 @@ http://localhost:5173/**
 
 访问日志修复后，部署完成应按顺序验证：
 
-1. 在 Supabase SQL Editor 执行根目录的 `supabase-visit-log-migration.sql`（重复执行安全）。
+1. 在 Supabase SQL Editor 按顺序执行：
+   - 根目录的 `supabase-schema.sql`（幂等，重复执行安全）；
+   - `supabase/migrations/` 目录下的全部迁移文件（按文件名时间顺序；反馈会话、游客历史、深度快照等表与 RPC 都定义在这里）。
 2. 在 Vercel Production 环境确认已配置：
 
 ```text
