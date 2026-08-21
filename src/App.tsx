@@ -1107,7 +1107,11 @@ export default function App() {
 
   if (!ready || !authResolved || !tutorialBootReady || dataSwitching) return <div className="loading-screen"><div className="spinner"/><p>{dataSwitching ? '正在安全切换数据空间……' : '正在载入学习计划……'}</p></div>
 
-  if (page === 'timer') return <FocusTimerPage onExit={() => navigate('today')}/>
+  if (page === 'timer') return (
+    <Suspense fallback={<div className="loading-screen"><div className="spinner"/><p>正在载入专注计时……</p></div>}>
+      <FocusTimerPage onExit={() => navigate('today')}/>
+    </Suspense>
+  )
 
   return (
     <div className={`app-shell ${state.settings.sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
