@@ -339,6 +339,10 @@ create table if not exists public.ip_geo_cache (
   expires_at timestamptz
 );
 
+-- 与其他服务端专表一致开启 RLS；表仅授权 service_role（service_role 绕过 RLS），
+-- anon/authenticated 无任何授权且无策略，客户端无法读写。
+alter table public.ip_geo_cache enable row level security;
+
 revoke all on table public.ip_geo_cache from anon, authenticated;
 grant select, insert, update, delete on table public.ip_geo_cache to service_role;
 
