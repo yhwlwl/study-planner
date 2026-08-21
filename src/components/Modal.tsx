@@ -1,6 +1,7 @@
 import { Children, cloneElement, isValidElement, useEffect, useRef, type ReactElement, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { createPortal } from 'react-dom'
+import { lockPageScroll } from '../lib/scroll-lock'
 
 type ChildElement = ReactElement<{ children?: ReactNode; className?: string }>
 
@@ -44,18 +45,17 @@ export function Modal({ open, title, children, footer, onClose, wide = false, mo
   useEffect(() => {
     if (!open) return
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const previousBodyOverflow = document.body.style.overflow
-    const previousDocumentOverflow = document.documentElement.style.overflow
     const previousScrollX = window.scrollX
     const previousScrollY = window.scrollY
     const anchorFullscreenToViewport = mobileFullscreen && window.innerWidth <= 760
+    // 滚动锁使用引用计数：多个弹窗/抽屉叠开、或乱序关闭时也不会把 body 锁死
+    //（iOS 不会因 body overflow 锁滚动，桌面 Chrome/Edge 会，故统一由 helper 管理）。
+    const unlockPageScroll = lockPageScroll()
 
     // iOS Safari can keep a fixed full-screen portal aligned to the document's current
     // scroll offset when it opens from deep inside Settings. Move the document viewport
     // to its origin while the modal is open, then restore the user's exact page position.
     if (anchorFullscreenToViewport) window.scrollTo(0, 0)
-    document.body.style.overflow = 'hidden'
-    if (anchorFullscreenToViewport) document.documentElement.style.overflow = 'hidden'
 
     const focusableSelector = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
     const focusFirst = window.requestAnimationFrame(() => {
@@ -91,8 +91,7 @@ export function Modal({ open, title, children, footer, onClose, wide = false, mo
     return () => {
       window.cancelAnimationFrame(focusFirst)
       document.removeEventListener('keydown', handleKeyDown)
-      document.body.style.overflow = previousBodyOverflow
-      document.documentElement.style.overflow = previousDocumentOverflow
+      unlockPageScroll()
       if (anchorFullscreenToViewport) window.scrollTo(previousScrollX, previousScrollY)
       previousFocusRef.current?.focus({ preventScroll: true })
     }

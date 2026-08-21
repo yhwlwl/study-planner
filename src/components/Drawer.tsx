@@ -1,5 +1,6 @@
 import { X } from 'lucide-react'
 import { useEffect, useRef, type ReactNode } from 'react'
+import { lockPageScroll } from '../lib/scroll-lock'
 
 export function Drawer({
   open,
@@ -26,8 +27,8 @@ export function Drawer({
   useEffect(() => {
     if (!open) return
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const previous = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    // 滚动锁使用引用计数（见 src/lib/scroll-lock.ts），避免多个抽屉/弹窗乱序关闭时把页面锁死。
+    const unlockPageScroll = lockPageScroll()
     const selector = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
     const focusFirst = window.requestAnimationFrame(() => {
       const first = drawerRef.current?.querySelector<HTMLElement>(selector)
@@ -44,7 +45,7 @@ export function Drawer({
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
     }
     document.addEventListener('keydown', handleKeyDown)
-    return () => { window.cancelAnimationFrame(focusFirst); document.removeEventListener('keydown', handleKeyDown); document.body.style.overflow = previous; previousFocusRef.current?.focus() }
+    return () => { window.cancelAnimationFrame(focusFirst); document.removeEventListener('keydown', handleKeyDown); unlockPageScroll(); previousFocusRef.current?.focus() }
   }, [open])
   if (!open) return null
   return <div className="drawer-backdrop">
