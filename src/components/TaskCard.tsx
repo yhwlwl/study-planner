@@ -6,7 +6,11 @@ import { useApp } from '../AppContext'
 
 export function nativeTaskDragAvailable(matchMedia: ((query: string) => MediaQueryList) | undefined = typeof window === 'undefined' ? undefined : window.matchMedia?.bind(window)) {
   if (!matchMedia) return false
-  return matchMedia('(hover: hover) and (pointer: fine)').matches
+  // HTML5 draggable 会在部分 Android Chromium / Edge（尤其桌面图标/PWA 模式）里抢占手指纵向滑动。
+  // 触屏笔记本（Windows/Edge 常见）主指针是 fine 且支持 hover，但同时也存在 coarse 触摸指针，
+  // 只判断 (hover:hover)+(pointer:fine) 会误放行，因此再排除 any-pointer: coarse。
+  // 只有纯鼠标桌面环境（无任何粗指针）才启用原生拖拽；触屏仍保留点击/计时等全部操作。
+  return matchMedia('(hover: hover) and (pointer: fine) and not (any-pointer: coarse)').matches
 }
 
 export function TaskCard({ assignment, group, onComplete, onOpenTimer, compact = false, tutorialTarget = false, tutorialLocked = false, tutorialDisabled = false, onTutorialBlocked }: { assignment: Assignment; group: TaskGroup; onComplete: (assignment: Assignment) => void; onOpenTimer: (assignment: Assignment) => void; compact?: boolean; tutorialTarget?: boolean; tutorialLocked?: boolean; tutorialDisabled?: boolean; onTutorialBlocked?: (message?: string) => void }) {

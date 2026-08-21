@@ -24,7 +24,7 @@ import {
 } from './lib/tutorial'
 import { Modal } from './components/Modal'
 import { Drawer } from './components/Drawer'
-import { TaskCard } from './components/TaskCard'
+import { TaskCard, nativeTaskDragAvailable } from './components/TaskCard'
 import { AdjustmentIntentDialog } from './components/AdjustmentIntentDialog'
 import { BulkMoveCenterDialog } from './components/BulkMoveCenterDialog'
 import { GoalDeadlineDialog } from './components/GoalDeadlineDialog'
@@ -1652,6 +1652,8 @@ function TodayPage({ onNavigate, onPrepared, onAddTask, onReview, todayOverride,
 
 function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask, tutorialMode = false, tutorialHighlightDates = [], onTutorialBlocked }: { onPrepared: (state: AppState, event: PlanChangeEvent) => void; onOpenAdjustment: (date: string) => void; onAddTask: (date: string) => void; tutorialMode?: boolean; tutorialHighlightDates?: string[]; onTutorialBlocked?: (message?: string) => void }) {
   const { state, commit, updateAssignment, updateDayConfig, moveAssignments, reopenAssignment, prepareAssignmentDelete, prepareDurationChange, prepareAssignmentGroupChange } = useApp()
+  // 月历任务卡的原生拖拽仅在纯鼠标桌面环境启用（触屏笔记本/Edge 会让 HTML5 拖拽抢占纵向滑动）。
+  const nativeDragEnabled = nativeTaskDragAvailable()
   const initialCalendarDate = todayISO() >= state.settings.startDate && todayISO() <= state.settings.endDate ? todayISO() : state.settings.startDate
   const [month, setMonth] = useState(startOfMonth(parseISO(initialCalendarDate)))
   const [viewMode, setViewMode] = useState<'month' | 'week'>(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches ? 'week' : 'month')
@@ -2090,7 +2092,7 @@ function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask, tutorialMode = 
               <div className="calendar-tasks">
                 {visibleTasks.map(assignment => <div
                   key={assignment.id}
-                  draggable={!assignment.locked}
+                  draggable={nativeDragEnabled && !assignment.locked}
                   onDragStart={event => beginDrag(assignment, event)}
                   onDragEnd={() => { setDragAssignmentId(undefined); setDragTargetDate(undefined) }}
                   onPointerDown={() => startLongPress(assignment.id)}
@@ -2137,7 +2139,7 @@ function CalendarPage({ onPrepared, onOpenAdjustment, onAddTask, tutorialMode = 
           {overflowTasks.map(assignment => <div
             className="overflow-task-row"
             key={assignment.id}
-            draggable={!assignment.locked}
+            draggable={nativeDragEnabled && !assignment.locked}
             onDragStart={event => beginDrag(assignment, event)}
             onDragEnd={() => { setDragAssignmentId(undefined); setDragTargetDate(undefined) }}
             onPointerDown={() => startLongPress(assignment.id)}

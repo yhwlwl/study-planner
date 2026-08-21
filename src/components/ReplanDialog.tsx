@@ -12,6 +12,7 @@ import { analyzePlan, effectiveMinutes, planningDayLoad } from '../lib/planner'
 import { Drawer } from './Drawer'
 import { Modal } from './Modal'
 import { NumericInput } from './NumericInput'
+import { nativeTaskDragAvailable } from './TaskCard'
 
 type MoveDecision = {
   mode: 'accept' | 'keep' | 'custom'
@@ -98,6 +99,7 @@ function DayDiffPanel({
 }) {
   const allRows = useMemo(() => buildDayDiff(beforeState, afterState, date), [beforeState, afterState, date])
   const rows = onlyChanges ? allRows.filter(row => row.kind !== 'same') : allRows
+  const nativeDragEnabled = nativeTaskDragAvailable()
 
   const taskView = (assignment: Assignment | undefined, side: 'before' | 'after', row: DayDiffRow) => {
     if (!assignment) return <div className="diff-empty">—</div>
@@ -105,8 +107,8 @@ function DayDiffPanel({
     const changedClass = row.kind === 'added' && side === 'after' ? 'diff-added' : row.kind === 'removed' && side === 'before' ? 'diff-removed' : row.kind === 'modified' ? 'diff-modified' : ''
     return <div
       className={`diff-task ${changedClass}`}
-      draggable={side === 'after' && !assignment.locked}
-      onDragStart={event => side === 'after' && onDragStart(assignment.id, event)}
+      draggable={nativeDragEnabled && side === 'after' && !assignment.locked}
+      onDragStart={event => nativeDragEnabled && side === 'after' && onDragStart(assignment.id, event)}
     >
       <div className="diff-task-main">
         <span className={`subject-dot subject-${subject}`}/>
