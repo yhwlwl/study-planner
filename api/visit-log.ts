@@ -1,4 +1,4 @@
-import { resolveGeo, type GeoResult } from './geo-enrichment'
+import { resolveGeo, type GeoResult } from './geo-enrichment.js'
 
 declare const process: { env: Record<string, string | undefined> }
 
