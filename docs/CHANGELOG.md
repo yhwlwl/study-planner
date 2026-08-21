@@ -2,6 +2,16 @@
 
 本文件保留各版本的迭代记录；产品介绍、架构、运行与验证见根目录 `README.md`。
 
+## v0.9.3
+
+- **修复埋点接口 FUNCTION_INVOCATION_FAILED（访问日志真正进库）**：`/api/visit-log`、`/api/metric-event` 的相对导入补 `.js` 扩展名——Vercel 以 nodenext 编译 api 时无扩展名导入触发 TS2835 且运行时 `ERR_MODULE_NOT_FOUND`，函数启动即崩；修复后生产实测 200/201，访问日志与埋点正常写入。
+- **修复登录账号反馈详情 403**：重跑 `supabase-schema.sql` 时 `revoke all` 会抹掉迁移（20260817195500/20260817202500）授予 `authenticated` 的列级 SELECT/UPDATE，导致登录账号反馈全部打不开（游客走 RPC 不受影响）。schema 现与迁移一致并幂等；游客继续只走受控 RPC（不授予 anon 表级 INSERT）。
+- **修复桌面 Chromium 窄窗口滚轮滚不动**：移除移动端 `body{overscroll-behavior-y:none}`——Chromium 根滚动链在该规则下吞掉滚轮（实测滚轮事件到达但 scrollY 不动、scrollTo 正常），iOS 触摸滚动不受影响。
+- **修复触屏笔记本/Edge 滑动被抢占**：HTML5 原生拖拽仅在纯鼠标桌面启用（`not (any-pointer: coarse)`），并统一门控月历任务卡、折叠面板与重排预览中的拖拽。
+- **修复录入排期「未安排项被硬冲突连坐阻塞」**：纯未安排/计划影响类问题不再要求逐项决定，可直接应用（应用后保持未安排）；只有真实硬约束冲突（容量、日期保护、目标、锁定、计时等）保留逐项确认。新增 7 个回归用例。
+- **其他**：`ip_geo_cache` 表启用 RLS 并保持与其他服务端专表一致；完整测试套件 17 文件 89 用例全部通过。
+- 版本号自 0.9.2 升至 0.9.3。
+
 ## v0.9.2
 
 - **修复「开始计时」崩溃（React #426）**：专注计时页为懒加载组件但缺少 Suspense 边界，点击进入时在同步事件里挂起导致整页进入安全模式；现与其它懒加载页面一致，以 Suspense fallback 包裹。
