@@ -15,7 +15,7 @@ import type {
 import { Modal } from './Modal'
 import { fmtDate, minutesText } from '../lib/date'
 import { reviseSchedulingProposal, type ProposalMovementRevision } from '../lib/planner'
-import { categoryLabel, conflictProfile, isTodayIncomingIssue, resolutionLabel } from '../lib/conflicts'
+import { categoryLabel, conflictProfile, isBlockingDecisionIssue, isTodayIncomingIssue, resolutionLabel } from '../lib/conflicts'
 
 const preferenceLabels: Record<string, string> = {
   preserve: '尽量保持当前计划', balanced: '均衡执行', goal: '优先保障目标', rest: '增加休息空间'
@@ -107,8 +107,9 @@ export function ProposalDialog({
   const goalMap = useMemo(() => new Map<string, Goal>([...baseline.goals, ...preparedState.goals].map(item => [item.id, item])), [baseline, preparedState])
   const directConflict = proposals.find(item => item.infeasible && item.title === policy.directPreviewLabel)
   const decisionIssues = selected?.infeasible ? selected.issues : []
+  const blockingDecisionIssues = decisionIssues.filter(isBlockingDecisionIssue)
   const requiredExceptionEntries = selected?.exceptions.map((item, index) => ({ id: exceptionId(item, index), item })) ?? []
-  const unresolvedIssues = decisionIssues.filter(issue => !issueDecisions[issue.id])
+  const unresolvedIssues = blockingDecisionIssues.filter(issue => !issueDecisions[issue.id])
   const unresolvedExceptions = requiredExceptionEntries.filter(entry => !exceptionDecisions[entry.id])
   const unresolvedCount = unresolvedIssues.length + unresolvedExceptions.length
   const resolvedExceptionDecisions: ConstraintExceptionResolutionDecision[] = requiredExceptionEntries.flatMap(entry => {
@@ -118,7 +119,7 @@ export function ProposalDialog({
   const rejectedExistingExceptions = resolvedExceptionDecisions.filter(entry => entry.action === 'system-find-another-date')
   const decisions = decisionIssues.flatMap(issue => issueDecisions[issue.id] ? [{ issueId: issue.id, action: issueDecisions[issue.id] }] : [])
   const externalDecision = decisions.find(item => item.action === 'change-goal' || item.action === 'change-capacity')?.action as 'change-goal' | 'change-capacity' | undefined
-  const requiresRecalculation = Boolean(selected && (selected.infeasible || rejectedExistingExceptions.length > 0))
+  const requiresRecalculation = Boolean(selected && ((selected.infeasible && blockingDecisionIssues.length > 0) || rejectedExistingExceptions.length > 0))
   const requestedActionLabel = localActionLabel(event)
 
   const resetDecisions = () => {
@@ -276,7 +277,8 @@ function ConflictDecisionPanel({ proposal, assignmentMap, issueDecisions, except
   onIssueDecision: (issueId: string, action: ConflictResolutionAction) => void
   onExceptionDecision: (id: string, action: 'accept-once' | 'system-find-another-date') => void
 }) {
-  const issues = proposal.infeasible ? proposal.issues : []
+  const issues = proposal.infeasible ? proposal.issues.filter(isBlockingDecisionIssue) : []
+  const unscheduledNotes = proposal.infeasible ? proposal.issues.filter(issue => !isBlockingDecisionIssue(issue)) : []
   const exceptionEntries = proposal.exceptions.map((item, index) => ({ id: exceptionId(item, index), item }))
   const categoryCounts = new Map<string, number>()
   for (const issue of issues) {
@@ -288,7 +290,9 @@ function ConflictDecisionPanel({ proposal, assignmentMap, issueDecisions, except
 
   return <section id="proposal-conflict-decisions" className="conflict-decision-panel">
     <div className="conflict-decision-heading">
-      <div><span>需要你决定</span><h3>{unresolved ? `还有 ${unresolved} 个问题未处理` : '所有问题均已作出选择'}</h3><p>每项选择只影响对应任务或规则。已完成的真实记录已自动排除，只列出仍可调整的任务。不同问题只显示适用方式，并按“处理任务、修改条件、撤销调整”分层；完成后会重新计算并再次预览。</p></div>
+      <div><span>需要你决定</span><h3>{unresolved ? `还有 ${unresolved} 个问题未处理` : '所有问题均已作出选择'}</h3><p>每项选择只影响对应任务或规则。已完成的真实记录已自动排除，只列出仍可调整的任务。不同问题只显示适用方式，并按“处理任务、修改条件、撤销调整”分层；完成后会重新计算并再次预览。</p>
+        {unscheduledNotes.length > 0 && <p className="conflict-unscheduled-note">另有 {unscheduledNotes.length} 项“未安排”提示不阻塞应用：没有找到合法日期的任务会在应用后自动保留为未安排，无需逐项决定；可稍后在“任务 → 待处理”中继续调整。</p>}
+      </div>
       <div className="conflict-category-chips">{[...categoryCounts].map(([label, count]) => <span key={label}>{label} {count}</span>)}</div>
     </div>
 

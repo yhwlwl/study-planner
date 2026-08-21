@@ -33,6 +33,14 @@ export function isTodayIncomingIssue(issue?: Pick<ProposalIssue, 'rawConstraintK
   return issue?.rawConstraintKey === 'today-closed' || issue?.rawConstraintKey === 'today-extra'
 }
 
+// 纯“未安排/计划影响”类问题（type: 'unscheduled' 且无 rawConstraintKey）不是需要用户逐项决策的
+// 硬冲突：应用后这些任务自然保持为未安排，与没有硬冲突时的体验一致（问题照常展示但不阻塞）。
+// 只有带 rawConstraintKey 的真实硬约束冲突（容量、日期保护、目标、锁定、计时、今天接收规则等）
+// 才要求逐项决定。
+export function isBlockingDecisionIssue(issue: ProposalIssue): boolean {
+  return issue.type !== 'unscheduled' || Boolean(issue.rawConstraintKey)
+}
+
 function normalizedTodayIncomingKey(rawKey: string) {
   return rawKey === 'today-closed' || rawKey === 'today-extra' ? 'today-extra' : rawKey
 }
