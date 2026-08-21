@@ -41,6 +41,16 @@ export function isBlockingDecisionIssue(issue: ProposalIssue): boolean {
   return issue.type !== 'unscheduled' || Boolean(issue.rawConstraintKey)
 }
 
+// 「一次豁免全部」的自动决策：优先接受一次性例外（accept-once）；没有该选项时
+// 退回「暂不安排」（leave-unscheduled）；绝对阻塞（已完成/锁定/计时等）返回
+// undefined，必须由用户手动选择 keep-original / cancel-change。
+export function preferredAutoResolution(issue: ProposalIssue): ConflictResolutionAction | undefined {
+  const actions = conflictProfile(issue).allowedResolutions
+  if (actions.includes('accept-once')) return 'accept-once'
+  if (actions.includes('leave-unscheduled')) return 'leave-unscheduled'
+  return undefined
+}
+
 function normalizedTodayIncomingKey(rawKey: string) {
   return rawKey === 'today-closed' || rawKey === 'today-extra' ? 'today-extra' : rawKey
 }

@@ -103,6 +103,12 @@ export interface AppSettings {
   localRepairRadius: number
   maxNewTasksPerDay: number
   maxLoadChangeRatio: number
+  /** 长任务判定阈值（分钟）：预计时长 ≥ 该值的任务视为长任务。 */
+  longTaskThresholdMinutes: number
+  /** 学习日每天最多长任务数。 */
+  longTaskMaxPerDay: number
+  /** 其他日期每天最多长任务数。 */
+  longTaskMaxPerDayLight: number
   customSubjects: string[]
   duration: DurationSettings
   /** 首次建档的明确确认，不把“打开过设置页”误当成用户确认。 */

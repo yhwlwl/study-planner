@@ -19,6 +19,7 @@ const settingsSchema = z.object({
   subjectShareLimit: z.number(), highLoadThreshold: z.number(), highLoadStreak: z.number(), keepOfflineOnLogout: z.boolean(),
   targetUtilization: z.number(), nearFullThreshold: z.number(), bufferUtilization: z.number(), localRepairRadius: z.number(),
   maxNewTasksPerDay: z.number(), maxLoadChangeRatio: z.number(), customSubjects: z.array(z.string()), duration: durationSettingsSchema,
+  longTaskThresholdMinutes: z.number(), longTaskMaxPerDay: z.number(), longTaskMaxPerDayLight: z.number(),
   setupProgress: z.object({ currentStep: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).optional(), availabilityConfirmed: z.boolean().optional() }).partial().strict().optional(),
 }).partial().strict()
 

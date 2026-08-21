@@ -15,7 +15,7 @@ import type {
 import { Modal } from './Modal'
 import { fmtDate, minutesText } from '../lib/date'
 import { reviseSchedulingProposal, type ProposalMovementRevision } from '../lib/planner'
-import { categoryLabel, conflictProfile, isBlockingDecisionIssue, isTodayIncomingIssue, resolutionLabel } from '../lib/conflicts'
+import { categoryLabel, conflictProfile, isBlockingDecisionIssue, isTodayIncomingIssue, preferredAutoResolution, resolutionLabel } from '../lib/conflicts'
 
 const preferenceLabels: Record<string, string> = {
   preserve: '尽量保持当前计划', balanced: '均衡执行', goal: '优先保障目标', rest: '增加休息空间'
@@ -280,6 +280,16 @@ function ConflictDecisionPanel({ proposal, assignmentMap, issueDecisions, except
   const issues = proposal.infeasible ? proposal.issues.filter(isBlockingDecisionIssue) : []
   const unscheduledNotes = proposal.infeasible ? proposal.issues.filter(issue => !isBlockingDecisionIssue(issue)) : []
   const exceptionEntries = proposal.exceptions.map((item, index) => ({ id: exceptionId(item, index), item }))
+  const autoResolvable = issues.some(issue => Boolean(preferredAutoResolution(issue)))
+  const autoResolveAll = () => {
+    for (const issue of issues) {
+      const action = preferredAutoResolution(issue)
+      if (action) onIssueDecision(issue.id, action)
+    }
+    for (const entry of exceptionEntries) {
+      if (!exceptionDecisions[entry.id]) onExceptionDecision(entry.id, 'accept-once')
+    }
+  }
   const categoryCounts = new Map<string, number>()
   for (const issue of issues) {
     const label = categoryLabel(conflictProfile(issue).category)
@@ -295,6 +305,10 @@ function ConflictDecisionPanel({ proposal, assignmentMap, issueDecisions, except
       </div>
       <div className="conflict-category-chips">{[...categoryCounts].map(([label, count]) => <span key={label}>{label} {count}</span>)}</div>
     </div>
+    {autoResolvable && <div className="conflict-auto-resolve">
+      <button type="button" className="secondary-button" onClick={autoResolveAll}>一次豁免全部可豁免项</button>
+      <span>自动接受可豁免的一次性例外（容量/长任务/数量上限等）；已在研读的绝对保护项（已完成、锁定、计时、过去冻结）仍需手动处理。</span>
+    </div>}
 
     {issues.map(issue => {
       const profile = conflictProfile(issue)

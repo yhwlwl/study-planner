@@ -84,8 +84,8 @@ function isHighIntensity(group: TaskGroup, assignment: Assignment) {
   return assignment.estimatedMinutes >= 75 && /套卷|试卷|章末|综合|模拟|专题复习|考试/.test(text)
 }
 
-function isLongTask(assignment: Assignment) {
-  return effectiveMinutes(assignment) >= 90 || assignment.estimatedMinutes >= 90
+function isLongTask(assignment: Assignment, thresholdMinutes = 90) {
+  return effectiveMinutes(assignment) >= thresholdMinutes || assignment.estimatedMinutes >= thresholdMinutes
 }
 
 interface DayStats {
@@ -122,11 +122,11 @@ function addCount(day: DayStats, key: string, amount = 1) {
   day.counts.set(key, (day.counts.get(key) ?? 0) + amount)
 }
 
-function activityKeys(group: TaskGroup, assignment: Assignment) {
+function activityKeys(group: TaskGroup, assignment: Assignment, thresholdMinutes = 90) {
   const keys = [`group:${group.id}`]
   const activity = taskActivity(group)
   if (activity !== 'normal') keys.push(`activity:${activity}`)
-  if (isLongTask(assignment)) keys.push('long')
+  if (isLongTask(assignment, thresholdMinutes)) keys.push('long')
   if (isHighIntensity(group, assignment)) keys.push('high-intensity')
   return keys
 }
@@ -138,7 +138,7 @@ function defaultLimit(state: AppState, date: string, key: string, group?: TaskGr
   if (key === 'activity:recitation') return 1
   if (key === 'activity:chem-preview') return 1
   if (key === 'activity:math-paper') return 1
-  if (key === 'long') return getDayConfig(state, date).type === 'study' ? 2 : 1
+  if (key === 'long') return getDayConfig(state, date).type === 'study' ? state.settings.longTaskMaxPerDay : state.settings.longTaskMaxPerDayLight
   if (key === 'high-intensity') return 2
   return undefined
 }
@@ -313,6 +313,7 @@ function statsMap(state: AppState, excluded = new Set<string>()) {
   const groups = groupMap(state)
   const map = new Map<string, DayStats>()
   const actual = assignmentActualBreakdown(state)
+  const longThreshold = state.settings.longTaskThresholdMinutes
 
   for (const [date, minutes] of actual.actualByDate) {
     const day = map.get(date) ?? blankStats()
@@ -335,10 +336,10 @@ function statsMap(state: AppState, excluded = new Set<string>()) {
       if (!date) continue
       const day = map.get(date) ?? blankStats()
       day.taskCount += group.recurring ? 0 : 1
-      for (const key of activityKeys(group, assignment)) addCount(day, key)
-      if (isLongTask(assignment)) day.longCount += 1
+      for (const key of activityKeys(group, assignment, longThreshold)) addCount(day, key)
+      if (isLongTask(assignment, longThreshold)) day.longCount += 1
       if (isHighIntensity(group, assignment)) day.highIntensityCount += 1
-      if (isLongTask(assignment) || isHighIntensity(group, assignment)) day.longOrHighCount += 1
+      if (isLongTask(assignment, longThreshold) || isHighIntensity(group, assignment)) day.longOrHighCount += 1
       const minutes = assignment.actualMinutes > 0 ? assignment.actualMinutes : assignment.estimatedMinutes
       day.subjectMinutes.set(group.subject, (day.subjectMinutes.get(group.subject) ?? 0) + minutes)
       map.set(date, day)
@@ -351,31 +352,31 @@ function statsMap(state: AppState, excluded = new Set<string>()) {
     day.totalMinutes += minutes
     day.taskCount += group.recurring ? 0 : 1
     day.subjectMinutes.set(group.subject, (day.subjectMinutes.get(group.subject) ?? 0) + minutes)
-    for (const key of activityKeys(group, assignment)) addCount(day, key)
-    if (isLongTask(assignment)) day.longCount += 1
+    for (const key of activityKeys(group, assignment, longThreshold)) addCount(day, key)
+    if (isLongTask(assignment, longThreshold)) day.longCount += 1
     if (isHighIntensity(group, assignment)) day.highIntensityCount += 1
-    if (isLongTask(assignment) || isHighIntensity(group, assignment)) day.longOrHighCount += 1
+    if (isLongTask(assignment, longThreshold) || isHighIntensity(group, assignment)) day.longOrHighCount += 1
     map.set(assignment.scheduledDate, day)
   }
   return map
 }
 
-function addToStats(stats: Map<string, DayStats>, date: string, assignment: Assignment, group: TaskGroup, originalDate?: string) {
+function addToStats(stats: Map<string, DayStats>, date: string, assignment: Assignment, group: TaskGroup, originalDate?: string, thresholdMinutes = 90) {
   const day = stats.get(date) ?? blankStats()
   const minutes = effectiveMinutes(assignment)
   day.plannedMinutes += minutes
   day.totalMinutes += minutes
   day.taskCount += group.recurring ? 0 : 1
   day.subjectMinutes.set(group.subject, (day.subjectMinutes.get(group.subject) ?? 0) + minutes)
-  for (const key of activityKeys(group, assignment)) addCount(day, key)
-  if (isLongTask(assignment)) day.longCount += 1
+  for (const key of activityKeys(group, assignment, thresholdMinutes)) addCount(day, key)
+  if (isLongTask(assignment, thresholdMinutes)) day.longCount += 1
   if (isHighIntensity(group, assignment)) day.highIntensityCount += 1
-  if (isLongTask(assignment) || isHighIntensity(group, assignment)) day.longOrHighCount += 1
+  if (isLongTask(assignment, thresholdMinutes) || isHighIntensity(group, assignment)) day.longOrHighCount += 1
   if (date === todayISO() && originalDate !== date) day.incomingTodayMinutes += minutes
   stats.set(date, day)
 }
 
-function removeFromStats(stats: Map<string, DayStats>, date: string, assignment: Assignment, group: TaskGroup, originalDate?: string) {
+function removeFromStats(stats: Map<string, DayStats>, date: string, assignment: Assignment, group: TaskGroup, originalDate?: string, thresholdMinutes = 90) {
   const current = stats.get(date)
   if (!current) return
   const day: DayStats = { ...current, subjectMinutes: new Map(current.subjectMinutes), counts: new Map(current.counts) }
@@ -384,17 +385,17 @@ function removeFromStats(stats: Map<string, DayStats>, date: string, assignment:
   day.totalMinutes = Math.max(0, day.totalMinutes - minutes)
   day.taskCount = Math.max(0, day.taskCount - (group.recurring ? 0 : 1))
   day.subjectMinutes.set(group.subject, Math.max(0, (day.subjectMinutes.get(group.subject) ?? 0) - minutes))
-  for (const key of activityKeys(group, assignment)) day.counts.set(key, Math.max(0, (day.counts.get(key) ?? 0) - 1))
-  if (isLongTask(assignment)) day.longCount = Math.max(0, day.longCount - 1)
+  for (const key of activityKeys(group, assignment, thresholdMinutes)) day.counts.set(key, Math.max(0, (day.counts.get(key) ?? 0) - 1))
+  if (isLongTask(assignment, thresholdMinutes)) day.longCount = Math.max(0, day.longCount - 1)
   if (isHighIntensity(group, assignment)) day.highIntensityCount = Math.max(0, day.highIntensityCount - 1)
-  if (isLongTask(assignment) || isHighIntensity(group, assignment)) day.longOrHighCount = Math.max(0, day.longOrHighCount - 1)
+  if (isLongTask(assignment, thresholdMinutes) || isHighIntensity(group, assignment)) day.longOrHighCount = Math.max(0, day.longOrHighCount - 1)
   if (date === todayISO() && originalDate !== date) day.incomingTodayMinutes = Math.max(0, day.incomingTodayMinutes - minutes)
   stats.set(date, day)
 }
 
-function statsWithoutAssignment(base: Map<string, DayStats>, assignment: Assignment, group: TaskGroup, originalDate?: string) {
+function statsWithoutAssignment(base: Map<string, DayStats>, assignment: Assignment, group: TaskGroup, originalDate?: string, thresholdMinutes = 90) {
   const result = new Map(base)
-  if (assignment.scheduledDate && assignment.status !== 'done') removeFromStats(result, assignment.scheduledDate, assignment, group, originalDate)
+  if (assignment.scheduledDate && assignment.status !== 'done') removeFromStats(result, assignment.scheduledDate, assignment, group, originalDate, thresholdMinutes)
   return result
 }
 
@@ -500,7 +501,7 @@ function validatePlacement(
   if (config.isBufferDay && isHighIntensity(group, assignment)) {
     violations.push({ key: 'buffer-high-intensity', label: '缓冲日不安排高强度任务', current: day.highIntensityCount + 1, limit: 0, hard: true })
   }
-  if (config.isBufferDay && isLongTask(assignment)) {
+  if (config.isBufferDay && isLongTask(assignment, state.settings.longTaskThresholdMinutes)) {
     violations.push({ key: 'buffer-long-task', label: '缓冲日只保留轻量任务，不安排长任务', current: day.longCount + 1, limit: 0, hard: true })
   }
 
@@ -519,7 +520,7 @@ function validatePlacement(
 
   const loadConstraint = loadConstraintForDate(request, date)
   if (loadConstraint?.maxLongHighPerDay != null) {
-    const projectedLongHigh = day.longOrHighCount + (isLongTask(assignment) || isHighIntensity(group, assignment) ? 1 : 0)
+    const projectedLongHigh = day.longOrHighCount + (isLongTask(assignment, state.settings.longTaskThresholdMinutes) || isHighIntensity(group, assignment) ? 1 : 0)
     if (projectedLongHigh > loadConstraint.maxLongHighPerDay) {
       violations.push({ key: 'load-long-high-max', label: '超过本次减负设置的长任务／高强度任务上限', current: projectedLongHigh, limit: loadConstraint.maxLongHighPerDay, hard: true })
     }
@@ -720,7 +721,7 @@ function identifyRepairCandidates(state: AppState, request: ReplanRequest) {
       for (const item of unfinished) {
         const itemGroup = groups.get(item.groupId)
         if (!itemGroup) continue
-        if (isHighIntensity(itemGroup, item) || isLongTask(item)) {
+        if (isHighIntensity(itemGroup, item) || isLongTask(item, state.settings.longTaskThresholdMinutes)) {
           mark(item, true, `${date} 是轻量缓冲日，“${item.title}”属于${isHighIntensity(itemGroup, item) ? '高强度' : '长时'}任务，需要移出或由用户明确取消缓冲保护。`)
         }
       }
@@ -730,12 +731,12 @@ function identifyRepairCandidates(state: AppState, request: ReplanRequest) {
     for (const item of unfinished) {
       const group = groups.get(item.groupId)
       if (!group) continue
-      for (const key of activityKeys(group, item)) limitKeys.add(key)
+      for (const key of activityKeys(group, item, state.settings.longTaskThresholdMinutes)) limitKeys.add(key)
     }
     for (const key of limitKeys) {
       const sample = unfinished.find(item => {
         const group = groups.get(item.groupId)
-        return Boolean(group && activityKeys(group, item).includes(key))
+        return Boolean(group && activityKeys(group, item, state.settings.longTaskThresholdMinutes).includes(key))
       })
       const group = sample ? groups.get(sample.groupId) : undefined
       const fallback = defaultLimit(state, date, key, group)
@@ -1134,7 +1135,7 @@ function buildScenario(input: AppState, request: ReplanRequest, strategy: Replan
     assignment.scheduledDate = selected
     assignment.scheduleSource = 'replan'
     if (assignment.intentStrength !== 'locked') assignment.intentStrength = assignment.intentStrength === 'manual' ? 'manual' : 'normal'
-    addToStats(stats, selected, assignment, group, originalDate)
+    addToStats(stats, selected, assignment, group, originalDate, input.settings.longTaskThresholdMinutes)
     if (originalDate && !preferredShiftByOrigin.has(originalDate) && originalDate !== selected) {
       preferredShiftByOrigin.set(originalDate, differenceInCalendarDays(parseISO(selected), parseISO(originalDate)))
     }
@@ -1157,26 +1158,26 @@ function buildScenario(input: AppState, request: ReplanRequest, strategy: Replan
         const blockerGroup = groups.get(blocker.groupId)
         if (!blockerGroup || !blocker.scheduledDate) continue
         const blockerDate = blocker.scheduledDate
-        removeFromStats(stats, blockerDate, blocker, blockerGroup, oldDates.get(blocker.id))
+        removeFromStats(stats, blockerDate, blocker, blockerGroup, oldDates.get(blocker.id), input.settings.longTaskThresholdMinutes)
         const placementIssues = validatePlacement(state, stats, assignment, group, date, request, originalDate, index)
         if (!placementIssues.some(item => item.hard)) {
           assignment.scheduledDate = date
-          addToStats(stats, date, assignment, group, originalDate)
+          addToStats(stats, date, assignment, group, originalDate, input.settings.longTaskThresholdMinutes)
           const blockerDates = possibleDateRange(state, request, blockerGroup, oldDates.get(blocker.id), blocker).filter(item => item !== date).slice(0, 20)
           const alternate = blockerDates.find(candidate => !validatePlacement(state, stats, blocker, blockerGroup, candidate, request, oldDates.get(blocker.id), index).some(item => item.hard))
           if (alternate) {
             blocker.scheduledDate = alternate
             blocker.scheduleSource = 'replan'
             assignment.scheduleSource = 'replan'
-            addToStats(stats, alternate, blocker, blockerGroup, oldDates.get(blocker.id))
+            addToStats(stats, alternate, blocker, blockerGroup, oldDates.get(blocker.id), input.settings.longTaskThresholdMinutes)
             resolved = true
             break
           }
-          removeFromStats(stats, date, assignment, group, originalDate)
+          removeFromStats(stats, date, assignment, group, originalDate, input.settings.longTaskThresholdMinutes)
           assignment.scheduledDate = undefined
         }
         blocker.scheduledDate = blockerDate
-        addToStats(stats, blockerDate, blocker, blockerGroup, oldDates.get(blocker.id))
+        addToStats(stats, blockerDate, blocker, blockerGroup, oldDates.get(blocker.id), input.settings.longTaskThresholdMinutes)
       }
     }
     if (!resolved) remainingUnresolved.push(assignment)
@@ -1204,7 +1205,7 @@ function buildScenario(input: AppState, request: ReplanRequest, strategy: Replan
       const explanation = includeFullExplanations
         ? explainMove(input, state, assignment, group, from, to, scenarioRepair.hardRequired.has(assignment.id), beforeStats, afterStats)
         : { reason: from ? '方案为解决当前冲突或改善负载而调整此任务。' : '任务原先未安排，方案为它找到一个通过硬约束检查的日期。', impact: to ? `${from ?? '未安排'} → ${to}` : '仍无合法日期，需要放宽约束或增加可用时间。' }
-      const alternativeStats = includeFullExplanations ? statsWithoutAssignment(afterStats, assignment, group, from) : undefined
+      const alternativeStats = includeFullExplanations ? statsWithoutAssignment(afterStats, assignment, group, from, input.settings.longTaskThresholdMinutes) : undefined
       const alternatives = includeFullExplanations ? dateRange(planningStart(request), relevantLatestOrPlanEnd(state, assignment))
         .filter(date => date !== to)
         .map(date => ({ date, violations: validatePlacement(state, alternativeStats!, assignment, group, date, request, from, index) }))
@@ -1496,12 +1497,12 @@ function hardConstraintFacts(state: AppState, fromDate = state.settings.startDat
     for (const key of keys) {
       const contributors = ordinaryUnfinished.filter(item => {
         const group = groups.get(item.groupId)
-        return Boolean(group && activityKeys(group, item).includes(key))
+        return Boolean(group && activityKeys(group, item, state.settings.longTaskThresholdMinutes).includes(key))
       })
       if (!contributors.length) continue
       const sample = contributors[0] ?? state.assignments.find(item => {
         const group = groups.get(item.groupId)
-        return Boolean(group && activityKeys(group, item).includes(key))
+        return Boolean(group && activityKeys(group, item, state.settings.longTaskThresholdMinutes).includes(key))
       })
       const group = sample ? groups.get(sample.groupId) : undefined
       const baseLimit = defaultLimit(state, date, key, group)
@@ -1520,7 +1521,7 @@ function hardConstraintFacts(state: AppState, fromDate = state.settings.startDat
     const config = getDayConfig(state, date)
     const isBufferDay = Boolean(config.isBufferDay || constraintsForDate(state, date).some(item => item.kind === 'protected-buffer'))
     if (isBufferDay) {
-      const longTasks = ordinaryUnfinished.filter(item => isLongTask(item))
+      const longTasks = ordinaryUnfinished.filter(item => isLongTask(item, state.settings.longTaskThresholdMinutes))
       if (longTasks.length) facts.push({
         id: `${date}:buffer-long-task`, date, key: 'buffer-long-task', current: longTasks.length, limit: 0,
         adjustableAssignmentIds: longTasks.map(item => item.id),
