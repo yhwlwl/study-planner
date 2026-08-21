@@ -59,7 +59,7 @@ function corsHeaders(request: Request): Record<string, string> {
 }
 
 function json(request: Request, data: unknown, status = 200): Response {
-  return Response.json(data, {
+  return new Response(JSON.stringify(data), {
     status,
     headers: { ...corsHeaders(request), 'Content-Type': 'application/json; charset=utf-8' },
   })

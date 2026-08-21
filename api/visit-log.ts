@@ -1,4 +1,4 @@
-import { resolveGeo } from './geo-enrichment'
+import { resolveGeo, type GeoResult } from './geo-enrichment'
 
 declare const process: { env: Record<string, string | undefined> }
 
@@ -117,10 +117,20 @@ function corsHeaders(request: Request, cacheControl = 'no-store'): Record<string
 }
 
 function json(request: Request, data: unknown, status = 200, cacheControl = 'no-store'): Response {
-  return Response.json(data, {
+  return new Response(JSON.stringify(data), {
     status,
     headers: { ...corsHeaders(request, cacheControl), 'Content-Type': 'application/json; charset=utf-8' }
   })
+}
+
+// 城市级地理位置解析是尽力而为的增强：解析器任何异常都不允许阻断访问日志写入。
+async function resolveGeoOrFallback(input: Parameters<typeof resolveGeo>[0]): Promise<GeoResult> {
+  try {
+    return await resolveGeo(input)
+  } catch (error) {
+    console.warn('geo resolution failed; continuing without enrichment', error)
+    return { countryCode: null, regionCode: null, city: null, timezone: null, source: 'unresolved', resolvedAt: null }
+  }
 }
 
 function serverConfig(): { config?: ServerConfig; missing: string[]; invalidUrl?: boolean } {
@@ -320,7 +330,7 @@ async function insertVisit(request: Request, config: ServerConfig): Promise<Resp
   const userId = await verifiedUserId(request, config)
   const headers = request.headers
   const ipAddress = requestIp(headers)
-  const geo = await resolveGeo({
+  const geo = await resolveGeoOrFallback({
     headers,
     ip: ipAddress,
     supabaseUrl: config.supabaseUrl,
@@ -403,13 +413,19 @@ function configurationError(request: Request, result: { missing: string[]; inval
 
 export default {
   async fetch(request: Request): Promise<Response> {
-    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(request) })
+    try {
+      if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(request) })
 
-    const result = serverConfig()
-    if (!result.config) return configurationError(request, result)
+      const result = serverConfig()
+      if (!result.config) return configurationError(request, result)
 
-    if (request.method === 'GET') return getStatusOrCount(request, result.config)
-    if (request.method === 'POST') return insertVisit(request, result.config)
-    return json(request, { ok: false, code: 'method_not_allowed' }, 405)
+      if (request.method === 'GET') return getStatusOrCount(request, result.config)
+      if (request.method === 'POST') return insertVisit(request, result.config)
+      return json(request, { ok: false, code: 'method_not_allowed' }, 405)
+    } catch (error) {
+      // 任何未预期的异常都必须以结构化 JSON 返回，而不是抛给 Vercel 变成裸 500/超时。
+      console.error('visit-log unexpected error', error)
+      return json(request, { ok: false, version: API_VERSION, code: 'internal_error' }, 500)
+    }
   }
 }

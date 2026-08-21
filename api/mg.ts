@@ -22,7 +22,7 @@ function responseHeaders(isHtml: boolean): Headers {
 export default {
   async fetch(request: Request): Promise<Response> {
     if (request.method !== 'GET') {
-      return Response.json({ error: 'method_not_allowed' }, { status: 405, headers: responseHeaders(false) })
+      return new Response(JSON.stringify({ error: 'method_not_allowed' }), { status: 405, headers: responseHeaders(false) })
     }
 
     const incoming = new URL(request.url)
@@ -47,7 +47,7 @@ export default {
       })
     } catch (error) {
       const code = error instanceof DOMException && error.name === 'TimeoutError' ? 'mg_upstream_timeout' : 'mg_upstream_unavailable'
-      return Response.json({ error: code }, { status: 502, headers: responseHeaders(false) })
+      return new Response(JSON.stringify({ error: code }), { status: 502, headers: responseHeaders(false) })
     }
   },
 }

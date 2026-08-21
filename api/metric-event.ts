@@ -1,4 +1,4 @@
-import { resolveGeo } from './geo-enrichment'
+import { resolveGeo, type GeoResult } from './geo-enrichment'
 
 declare const process: { env: Record<string, string | undefined> }
 
@@ -110,10 +110,11 @@ async function verifiedUserId(request: Request, supabaseUrl: string, serviceKey:
 
 function response(request: Request, body: unknown, status = 200) {
   const origin = request.headers.get('origin')
-  return Response.json(body, {
+  return new Response(JSON.stringify(body), {
     status,
     headers: {
       'Cache-Control': 'no-store',
+      'Content-Type': 'application/json; charset=utf-8',
       'Access-Control-Allow-Origin': origin && sameOrigin(request) ? origin : 'null',
       'Access-Control-Allow-Headers': 'authorization, content-type',
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -122,19 +123,30 @@ function response(request: Request, body: unknown, status = 200) {
   })
 }
 
+// 城市级地理位置解析是尽力而为的增强：解析器任何异常都不允许阻断埋点写入。
+async function resolveGeoOrFallback(input: Parameters<typeof resolveGeo>[0]): Promise<GeoResult> {
+  try {
+    return await resolveGeo(input)
+  } catch (error) {
+    console.warn('geo resolution failed; continuing without enrichment', error)
+    return { countryCode: null, regionCode: null, city: null, timezone: null, source: 'unresolved', resolvedAt: null }
+  }
+}
+
 export default {
   async fetch(request: Request) {
-    if (request.method === 'OPTIONS') return new Response(null, { status: 204 })
-    if (request.method !== 'POST') return response(request, { ok: false, code: 'method_not_allowed' }, 405)
-    if (!sameOrigin(request)) return response(request, { ok: false, code: 'origin_not_allowed' }, 403)
+    try {
+      if (request.method === 'OPTIONS') return new Response(null, { status: 204 })
+      if (request.method !== 'POST') return response(request, { ok: false, code: 'method_not_allowed' }, 405)
+      if (!sameOrigin(request)) return response(request, { ok: false, code: 'origin_not_allowed' }, 403)
 
-    const rawUrl = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL
-    const serviceKey = process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY
-    if (!rawUrl || !serviceKey) return response(request, { ok: false, code: 'missing_environment' }, 503)
-    const supabaseUrl = rawUrl.replace(/\/$/, '')
+      const rawUrl = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL
+      const serviceKey = process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY
+      if (!rawUrl || !serviceKey) return response(request, { ok: false, code: 'missing_environment' }, 503)
+      const supabaseUrl = rawUrl.replace(/\/$/, '')
 
-    let payload: MetricPayload
-    try { payload = await request.json() as MetricPayload } catch { return response(request, { ok: false, code: 'invalid_json' }, 400) }
+      let payload: MetricPayload
+      try { payload = await request.json() as MetricPayload } catch { return response(request, { ok: false, code: 'invalid_json' }, 400) }
 
     const eventId = text(payload.eventId, 36)
     const sessionId = text(payload.sessionId, 36)
@@ -148,7 +160,7 @@ export default {
     const userId = await verifiedUserId(request, supabaseUrl, serviceKey)
     const headers = request.headers
     const ipAddress = requestIp(headers)
-    const geo = await resolveGeo({ headers, ip: ipAddress, supabaseUrl, serviceKey, serviceHeaders })
+    const geo = await resolveGeoOrFallback({ headers, ip: ipAddress, supabaseUrl, serviceKey, serviceHeaders })
     const record = {
       event_id: eventId,
       session_id: sessionId,
@@ -197,6 +209,11 @@ export default {
       return response(request, { ok: true }, 201)
     } catch {
       return response(request, { ok: false, code: 'storage_unreachable' }, 504)
+    }
+    } catch (error) {
+      // 任何未预期的异常都必须以结构化 JSON 返回，而不是抛给 Vercel 变成裸 500/超时。
+      console.error('metric-event unexpected error', error)
+      return response(request, { ok: false, code: 'internal_error' }, 500)
     }
   },
 }

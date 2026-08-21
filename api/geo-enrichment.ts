@@ -1,6 +1,6 @@
 type ServiceHeadersFactory = (serviceKey: string) => Record<string, string>
 
-type GeoResult = {
+export type GeoResult = {
   countryCode: string | null
   regionCode: string | null
   city: string | null

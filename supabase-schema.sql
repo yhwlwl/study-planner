@@ -325,3 +325,60 @@ comment on table public.feedback_submissions is 'User-submitted bug reports, pro
 comment on column public.feedback_submissions.visitor_id is 'Stable anonymous browser visitor identifier used to connect guest and pre-login visit history.';
 comment on column public.feedback_submissions.depth_score is 'Explainable 0-100 usage-depth score captured at feedback submission time. Derived server-side from visit history and cloud snapshot metrics.';
 comment on column public.feedback_submissions.depth_level is 'Usage-depth segment at submission time: new, casual, returning, engaged, or power. Power/engaged require multi-day usage to avoid one-session burst misclassification.';
+
+-- 城市级地理位置解析的服务端缓存（尽力而为，由 Vercel Function 使用 service_role 读写）。
+-- /api/visit-log 与 /api/metric-event 通过 RPC 复用同一份解析结果，避免重复调用第三方解析器。
+create table if not exists public.ip_geo_cache (
+  ip inet primary key,
+  country_code text,
+  region_code text,
+  city text,
+  timezone text,
+  provider text,
+  resolved_at timestamptz not null default now(),
+  expires_at timestamptz
+);
+
+revoke all on table public.ip_geo_cache from anon, authenticated;
+grant select, insert, update, delete on table public.ip_geo_cache to service_role;
+
+create or replace function public.ip_geo_cache_get(p_ip text)
+returns table (city text, country_code text, region_code text, timezone text, resolved_at timestamptz)
+language sql
+security invoker
+as $$
+  select c.city, c.country_code, c.region_code, c.timezone, c.resolved_at
+  from public.ip_geo_cache c
+  where c.ip = p_ip::inet
+    and (c.expires_at is null or c.expires_at > now())
+  limit 1;
+$$;
+
+create or replace function public.ip_geo_cache_put(
+  p_ip text,
+  p_country_code text default null,
+  p_region_code text default null,
+  p_city text default null,
+  p_timezone text default null,
+  p_provider text default null,
+  p_ttl_days integer default 30
+)
+returns void
+language sql
+security invoker
+as $$
+  insert into public.ip_geo_cache (ip, country_code, region_code, city, timezone, provider, resolved_at, expires_at)
+  values (p_ip::inet, p_country_code, p_region_code, p_city, p_timezone, p_provider, now(), now() + make_interval(days => p_ttl_days))
+  on conflict (ip) do update set
+    country_code = excluded.country_code,
+    region_code = excluded.region_code,
+    city = excluded.city,
+    timezone = excluded.timezone,
+    provider = excluded.provider,
+    resolved_at = excluded.resolved_at,
+    expires_at = excluded.expires_at;
+$$;
+
+revoke all on function public.ip_geo_cache_get(text) from anon, authenticated;
+revoke all on function public.ip_geo_cache_put(text, text, text, text, text, text, integer) from anon, authenticated;
+grant execute on function public.ip_geo_cache_get(text), public.ip_geo_cache_put(text, text, text, text, text, text, integer) to service_role;
