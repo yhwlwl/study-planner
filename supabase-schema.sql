@@ -303,7 +303,9 @@ before insert on public.feedback_submissions
 for each row execute function public.enrich_feedback_submission();
 
 revoke all on table public.feedback_submissions from anon, authenticated;
-grant insert (feedback_type, content, user_id, visitor_id) on public.feedback_submissions to anon, authenticated;
+-- 游客提交走受控 RPC（supabase/migrations/20260817200500 的 submit_guest_feedback），
+-- 因此不授予 anon 表级 INSERT（避免绕过每浏览器访问密钥）；登录用户仍直接插入并绑定 user_id。
+grant insert (feedback_type, content, user_id, visitor_id) on public.feedback_submissions to authenticated;
 -- 与 supabase/migrations（20260817195500 / 20260817202500 / 20260818143000）保持一致：
 -- 登录用户可读自己的反馈（feedback_admin 可读全部），并可把已解决/已关闭的反馈重新打开为处理中；
 -- 管理员可更新状态。guest_access_hash 永远不授予客户端。若仅重跑本文件，这些授权必须在这里存在，
@@ -321,10 +323,9 @@ grant select (
 grant update (status) on table public.feedback_submissions to authenticated;
 grant select, insert, update, delete on table public.feedback_submissions to service_role;
 
+-- 游客的 INSERT 策略已在迁移 20260817200500 中废弃（游客改走 submit_guest_feedback RPC）；
+-- 这里仅确保旧的残留策略被清掉，不再重建。
 drop policy if exists "Guests can submit feedback" on public.feedback_submissions;
-create policy "Guests can submit feedback"
-on public.feedback_submissions for insert to anon
-with check (user_id is null);
 
 drop policy if exists "Authenticated users can submit feedback" on public.feedback_submissions;
 create policy "Authenticated users can submit feedback"
