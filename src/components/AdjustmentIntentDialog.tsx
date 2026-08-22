@@ -13,6 +13,23 @@ import { NumericInput } from './NumericInput'
 
 export type AdjustmentReason = 'current-conflicts' | 'too-tiring' | 'future-replan' | 'execution-difference'
 type ActiveAction = 'center' | 'availability' | 'deadline' | 'bulk-move' | 'current-conflicts' | 'duration' | 'load' | 'replan'
+
+/**
+ * “修复当前计划问题”的任务范围：逾期任务 + 危险问题日期上的已排任务 + 全部仍未安排的
+ * 未完成任务。未安排任务若不进入该集合，重排中心将永远无法为它们找到日期。
+ */
+export function currentConflictsScope(state: AppState): string[] {
+  const today = todayISO()
+  const affectedDates = analyzePlan(state, today)
+    .filter(issue => issue.level === 'danger')
+    .flatMap(issue => issue.date ? [issue.date] : [])
+    .filter((date, index, values) => values.indexOf(date) === index)
+  return Array.from(new Set([
+    ...state.assignments.filter(item => item.status !== 'done' && item.scheduledDate && item.scheduledDate < today).map(item => item.id),
+    ...state.assignments.filter(item => item.status !== 'done' && item.scheduledDate && affectedDates.includes(item.scheduledDate)).map(item => item.id),
+    ...state.assignments.filter(item => item.status !== 'done' && !item.scheduledDate).map(item => item.id),
+  ]))
+}
 type LoadPreference = 'preserve' | 'balanced' | 'goal' | 'rest'
 type ReplanOutcome = 'preserve' | 'balanced' | 'goal' | 'rest'
 
@@ -108,6 +125,7 @@ export function AdjustmentIntentDialog({
 
   const overdueAssignments = useMemo(() => state.assignments
     .filter(item => item.status !== 'done' && item.scheduledDate && item.scheduledDate < today), [state.assignments, today])
+  const unscheduledCount = useMemo(() => state.assignments.filter(item => item.status !== 'done' && !item.scheduledDate).length, [state.assignments])
   const currentIssues = useMemo(() => {
     const hard = analyzePlan(state, today).filter(issue => issue.level === 'danger')
     const overdue = overdueAssignments
@@ -165,16 +183,16 @@ export function AdjustmentIntentDialog({
         metadata: { availabilityMode, capacityMinutes: availabilityMode === 'unavailable' ? 0 : availableMinutes, preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'] },
       }
     } else if (activeAction === 'current-conflicts') {
-      const affectedDates = currentIssues.flatMap(issue => issue.date ? [issue.date] : []).filter((date, index, values) => values.indexOf(date) === index)
-      const affectedAssignmentIds = Array.from(new Set([
-        ...overdueAssignments.map(item => item.id),
-        ...state.assignments.filter(item => item.status !== 'done' && item.scheduledDate && affectedDates.includes(item.scheduledDate)).map(item => item.id),
-      ]))
+      const affectedAssignmentIds = currentConflictsScope(state)
+      const unscheduledCount = state.assignments.filter(item => item.status !== 'done' && !item.scheduledDate).length
       const affectedGroupIds = Array.from(new Set(state.assignments.filter(item => affectedAssignmentIds.includes(item.id)).map(item => item.groupId)))
       const affectedGoalIds = state.goals.filter(goal => goal.linkedAssignmentIds.some(id => affectedAssignmentIds.includes(id)) || goal.linkedTaskGroupIds.some(id => affectedGroupIds.includes(id)) || goal.completionConditions.some(condition => affectedGroupIds.includes(condition.groupId))).map(goal => goal.id)
+      const affectedDates = currentIssues.flatMap(issue => issue.date ? [issue.date] : []).filter((date, index, values) => values.indexOf(date) === index)
       event = {
         id: uid('event'), type: 'execution-difference', action: 'repair', title: '修复当前计划问题',
-        description: `当前检测到 ${currentIssues.length} 个容量、期限或规则问题。只处理这些问题，不主动重写没有问题的未来安排。`,
+        description: unscheduledCount > 0
+          ? `当前检测到 ${currentIssues.length} 个容量、期限或规则问题，以及 ${unscheduledCount} 项仍未安排的任务。已把未安排任务一并纳入修复；安排不下的会保持未安排并说明原因。`
+          : `当前检测到 ${currentIssues.length} 个容量、期限或规则问题。只处理这些问题，不主动重写没有问题的未来安排。`,
         affectedGoalIds, affectedGroupIds, affectedAssignmentIds,
         affectedDates, createdAt: now,
         metadata: { preferredPreferences: ['preserve', 'balanced', 'goal', 'rest'], requestedOutcome: 'fix-current', sourceDate: initialDate ?? today },
@@ -243,7 +261,7 @@ export function AdjustmentIntentDialog({
         <div className="adjustment-action-grid">
           {group.items.map(item => {
             const allowedTutorialAction = !tutorialMode || item.id === (tutorialMode === 'repair' ? 'current-conflicts' : 'replan')
-            return <ActionCard key={item.id} actionId={item.id} title={item.title} description={item.id === 'current-conflicts' ? `${item.description} 当前 ${currentIssues.length} 个待处理问题。` : item.description} tone={item.tone} blocked={!allowedTutorialAction} onClick={() => {
+            return <ActionCard key={item.id} actionId={item.id} title={item.title} description={item.id === 'current-conflicts' ? `${item.description} 当前 ${currentIssues.length} 个问题${unscheduledCount ? `、${unscheduledCount} 项未安排` : ''}。` : item.description} tone={item.tone} blocked={!allowedTutorialAction} onClick={() => {
               if (!allowedTutorialAction) { onTutorialBlocked?.('教程中先完成高亮的调整动作'); return }
               if (item.id === 'deadline') { onClose(); onOpenDeadline?.(); return }
               if (item.id === 'bulk-move') { onClose(); onOpenBulkMove?.(); return }

@@ -105,6 +105,27 @@ export function ProposalDialog({
   const recommendedId = recommendedProposal(proposals, event)?.id
   const assignmentMap = useMemo(() => new Map<string, Assignment>([...baseline.assignments, ...preparedState.assignments].map(item => [item.id, item])), [baseline, preparedState])
   const goalMap = useMemo(() => new Map<string, Goal>([...baseline.goals, ...preparedState.goals].map(item => [item.id, item])), [baseline, preparedState])
+  // 重新计算后的方案只显示“相对上一个基准”的增量变化；这里补上与正式计划的累计差异，
+  // 避免用户在多次冲突处理后误以为新方案只改动了一两天。
+  const cumulativeVsBaseline = useMemo(() => {
+    if (!selected) return undefined
+    const afterById = new Map(selected.stateAfter.assignments.map(item => [item.id, item]))
+    const beforeById = new Map(baseline.assignments.map(item => [item.id, item]))
+    let moved = 0
+    let scheduledNew = 0
+    let unscheduled = 0
+    for (const [id, after] of afterById) {
+      if (after.status === 'done') continue
+      const before = beforeById.get(id)
+      if (!before) {
+        if (after.scheduledDate) scheduledNew += 1
+        else unscheduled += 1
+        continue
+      }
+      if (after.scheduledDate !== before.scheduledDate) moved += 1
+    }
+    return { moved, scheduledNew, unscheduled }
+  }, [selected, baseline])
   const directConflict = proposals.find(item => item.infeasible && item.title === policy.directPreviewLabel)
   const decisionIssues = selected?.infeasible ? selected.issues : []
   const blockingDecisionIssues = decisionIssues.filter(isBlockingDecisionIssue)
@@ -219,6 +240,7 @@ export function ProposalDialog({
         return <button key={proposal.id} aria-disabled={tutorialBlockedChoice || undefined} className={`proposal-choice ${selectedChoice ? 'selected' : ''} ${proposal.infeasible ? 'proposal-choice-infeasible' : ''} ${tutorialBlockedChoice ? 'tutorial-disabled-control' : ''}`} onClick={() => tutorialBlockedChoice ? onTutorialBlocked?.('教程中固定使用推荐方案，其他方案仍保留展示') : selectProposal(proposal.id)}>
           <div className="proposal-choice-title"><div><strong>{display.title}</strong><small>{preferenceLabels[display.preference] ?? display.preference} · 影响{display.metrics.impactLevel === 'small' ? '较小' : display.metrics.impactLevel === 'medium' ? '中等' : '较大'}</small></div><span>{proposal.id === recommendedId ? '推荐' : selectedChoice ? '已选择' : '可选'}</span></div>
           <div className="proposal-choice-metrics"><span>{display.metrics.movedTaskCount} 项移动</span><span>{display.metrics.affectedDateCount} 天变化</span><span>{display.metrics.issueCount} 个本次问题</span>{display.exceptions.length > 0 && <em>{display.exceptions.length} 项例外需逐项决定</em>}</div>
+          {cumulativeVsBaseline && (cumulativeVsBaseline.moved > 0 || cumulativeVsBaseline.scheduledNew > 0 || cumulativeVsBaseline.unscheduled > 0) && <div className="proposal-choice-cumulative">累计相对正式计划：移动 {cumulativeVsBaseline.moved} 项 · 新增已排 {cumulativeVsBaseline.scheduledNew} 项 · 仍未安排 {cumulativeVsBaseline.unscheduled} 项</div>}
           {display.issueDelta && explicitLocalOperation && <div className="proposal-existing-issue-summary"><span>计划原有 {display.issueDelta.preExistingCount} 个硬问题</span><span>本次解决 {display.issueDelta.resolvedPreExistingCount} 个</span><span>本次新增/恶化 {display.issueDelta.newOrWorsenedCount} 个</span></div>}
           <p>{display.infeasible ? display.infeasibleReason : display.description}</p>
         </button>
